@@ -79,10 +79,10 @@ Every selected option is checked against the model's catalog descriptors.
 ### Capability gate
 
 Every call first runs `tools/list` and refuses unless T3 offers every tool in `REQUIRED_TOOLS` in `bin/fm-t3-mcp.mjs` (the thread, project, and catalog tools), `t3_environment_read`, and one complete family for each `TOOL_FAMILIES` capability.
-T3 0.1.3 merged two tool families, and the gate accepts either generation.
+T3 stable 0.1.3 merged two tool families, and the gate accepts either generation based on the listed tools, without comparing server versions.
 When T3 lists both, pending questions use the merged `t3_pending_request`, but the binding read keeps `t3_thread_configuration`, because earlier T3 also lists `t3_thread_configure` as a write that requires `modelSelection`:
 
-| Capability | Current T3 (0.1.3 and later) | Earlier T3 |
+| Capability | Current tool family | Earlier tool family |
 |---|---|---|
 | Read a thread's binding | `t3_thread_configure` with only `threadId` (a read; the helper never sends `modelSelection`) | `t3_thread_configuration` |
 | Pending questions | `t3_pending_request` with `action` `list`, `read`, or `respond` | `t3_pending_request_list`, `t3_pending_request_read`, `t3_pending_request_respond` |

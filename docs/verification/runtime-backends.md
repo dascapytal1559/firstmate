@@ -2685,7 +2685,7 @@ Write order is not the cause: T3 starts a thread's Codex session with `thread/st
 
 ### Tool names in 0.1.3 and later
 
-On 2026-10-27, `tools/list` on `t3 v0.1.4-nightly.20261027.3770` offered `t3_thread_configure` and `t3_pending_request`, but not `t3_thread_configuration` or the three `t3_pending_request_*` tools, so the capability gate refused every call.
+On 2026-10-27, `tools/list` on `t3 v0.1.4-nightly.20261027.3770` offered `t3_thread_configure` and `t3_pending_request`, but not `t3_thread_configuration` or the three `t3_pending_request_*` tools.
 Stable `v0.1.3` (commit `d2c44031`) has the same tool set.
 On the new server, `t3_thread_configure` called with only `threadId` returns the thread's `modelSelection`, `runtimeMode`, and `interactionMode`, and `t3_pending_request` takes `action` `list`, `read`, or `respond`.
 `t3 v0.1.3-nightly.20261026.3740` lists both `t3_thread_configuration` and `t3_thread_configure`, but there `t3_thread_configure` without `modelSelection` fails with `Missing key ["modelSelection"]`, so the binding read keeps `t3_thread_configuration` whenever it is listed.
