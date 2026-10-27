@@ -547,7 +547,7 @@ test_resolve_selection_uses_t3_catalog() {
   pass "fm-t3-mcp resolve-selection: driver, model, and options come from T3's catalog; an effort override keeps other options"
 }
 
-# T3 Nightly 0.1.2 lists a model option's allowed values as a plain `values`
+# T3 Code v0.1.3 stable lists a model option's allowed values as a plain `values`
 # array with no `type`; a boolean option lists `[false, true]`. The default
 # fake catalog keeps the older `options: [{id}]` form so both stay covered.
 test_resolve_selection_accepts_current_catalog_values() {

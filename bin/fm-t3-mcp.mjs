@@ -806,9 +806,7 @@ function optionProblem(model, option) {
   const descriptor = (model.options ?? []).find((d) => d.id === option.id);
   if (!descriptor) return `option '${option.id}' is not one model ${model.id} offers`;
   if (descriptor.type === "boolean") return typeof option.value === "boolean" ? null : `option '${option.id}' takes true or false`;
-  const values = Array.isArray(descriptor.values)
-    ? descriptor.values.map((v) => (v !== null && typeof v === "object" ? v.id ?? v.value : v))
-    : (descriptor.options ?? []).map((c) => c.id);
+  const values = Array.isArray(descriptor.values) ? descriptor.values : (descriptor.options ?? []).map((c) => c.id);
   return values.includes(option.value) ? null : `option '${option.id}' value '${option.value}' is not one of ${values.join(", ")} for model ${model.id}`;
 }
 
