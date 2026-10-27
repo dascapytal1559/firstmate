@@ -564,6 +564,10 @@ test_resolve_selection_accepts_current_catalog_values() {
   expect_code 0 "$RC" "an effort listed in a values-array catalog is accepted: $ERR"
   assert_equals '{"instanceId":"codex","model":"gpt-6-luna","options":[{"id":"reasoningEffort","value":"high"}]}' \
     "$(field "$OUT" selection)" "the accepted effort is bound as the reasoning option"
+  mcp resolve-selection --harness codex --instance codex --model gpt-6-luna --effort medium --project "$project"
+  expect_code 0 "$RC" "the catalog's own default effort is accepted: $ERR"
+  assert_equals '{"instanceId":"codex","model":"gpt-6-luna","options":[{"id":"reasoningEffort","value":"medium"}]}' \
+    "$(field "$OUT" selection)" "the default effort is bound as the reasoning option"
   mcp resolve-selection --harness codex --instance codex --model gpt-6-luna --effort max --project "$project"
   expect_code 4 "$RC" "an effort missing from a values-array catalog is refused"
   assert_equals effort_unsupported "$(field "$OUT" error.code)" "the refusal names the unsupported effort"
@@ -573,10 +577,16 @@ test_resolve_selection_accepts_current_catalog_values() {
   expect_code 0 "$RC" "a boolean option listed as values [false, true] is accepted: $ERR"
   assert_equals '{"instanceId":"claudeAgent","model":"claude-opus-5-5","options":[{"id":"fastMode","value":true},{"id":"effort","value":"xhigh"}]}' \
     "$(field "$OUT" selection)" "the default's boolean option and the effort override are both kept"
+  FM_T3_ID="$project" t3_fake_set 'w.projects.find((p) => p.id === process.env.FM_T3_ID).defaultModelSelection.options = [{ id: "fastMode", value: false }]'
+  mcp resolve-selection --harness claude --instance claudeAgent --model default --effort high --project "$project"
+  expect_code 0 "$RC" "a false boolean option listed as values [false, true] is accepted: $ERR"
+  assert_equals '{"instanceId":"claudeAgent","model":"claude-opus-5-5","options":[{"id":"fastMode","value":false},{"id":"effort","value":"high"}]}' \
+    "$(field "$OUT" selection)" "the default's fastMode=false is kept and the effort is added"
   FM_T3_ID="$project" t3_fake_set 'w.projects.find((p) => p.id === process.env.FM_T3_ID).defaultModelSelection.options = [{ id: "fastMode", value: "yes" }]'
   mcp resolve-selection --harness claude --instance claudeAgent --model default --effort default --project "$project"
   expect_code 4 "$RC" "a boolean option value outside its values array is refused"
   assert_equals option_unsupported "$(field "$OUT" error.code)" "the refusal names the unsupported option"
+  assert_contains "$ERR" "false, true" "the refusal lists the boolean values array"
   pass "fm-t3-mcp resolve-selection: a catalog that lists option values as a values array is read like the older options list"
 }
 
