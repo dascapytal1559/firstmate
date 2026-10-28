@@ -433,6 +433,29 @@ test_telemetry_reported() {
   pass "fm-t3-mcp status: reports telemetry off only when the server process proves it, and warns otherwise"
 }
 
+test_status_reports_server_start() {
+  local tdir="$TMP_ROOT/server-start" first second url
+  command -v lsof >/dev/null 2>&1 || { echo "skip - fm-t3-mcp status serverStart: lsof absent"; return 0; }
+  t3_fake_stop
+  t3_fake_start "$tdir"
+  url=$T3_FAKE_URL
+  fresh_case server-start
+  mcp status
+  expect_code 0 "$RC" "status against a loopback server: $ERR"
+  first=$(field "$OUT" serverStart)
+  case "$first" in "$T3_FAKE_PID@"?*) ;; *) fail "serverStart names the listening process and its start time, got '$first'" ;; esac
+  mcp status
+  assert_equals "$first" "$(field "$OUT" serverStart)" "serverStart is stable while the same server runs"
+  t3_fake_restart "$tdir"
+  assert_equals "$url" "http://127.0.0.1:$(cat "$tdir/port")" "the restarted fake keeps its origin"
+  mcp status
+  expect_code 0 "$RC" "status after a restart: $ERR"
+  second=$(field "$OUT" serverStart)
+  case "$second" in "$T3_FAKE_PID@"?*) ;; *) fail "serverStart after a restart names the new process, got '$second'" ;; esac
+  assert_not_equals "$first" "$second" "a restarted server behind the same origin reads a new serverStart"
+  pass "fm-t3-mcp status: serverStart identifies the loopback server process and changes on every restart"
+}
+
 test_read_limit_matches_t3_cap() {
   local thread
   fresh_case read-limit
@@ -926,6 +949,7 @@ test_send_state_capture_interrupt_archive
 test_thread_for_root
 test_typed_failure_and_transport_errors
 test_telemetry_reported
+test_status_reports_server_start
 test_read_limit_matches_t3_cap
 test_interrupt_confirms_only_the_interrupted_run
 test_send_lost_reply_is_unconfirmed_and_retry_is_one_delivery

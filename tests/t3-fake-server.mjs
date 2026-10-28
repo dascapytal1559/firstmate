@@ -28,7 +28,9 @@
 //     "current", and a tools/call for a tool tools/list does not offer is
 //     refused, as T3 refuses it.
 //
-// Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>]
+// Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
+// --port listens on that port instead of a free one, so a test can restart the
+// server behind the same origin.
 // <case-file> holds the path of the current case directory. Every request
 // re-reads <case-dir>/world.json, writes it back after a mutation, and appends
 // one JSON line to <case-dir>/requests.jsonl, so a test can switch cases and
@@ -476,7 +478,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(0, "127.0.0.1", () => {
+server.listen(Number(args.port ?? 0), "127.0.0.1", () => {
   writeFileSync(args["port-file"], String(server.address().port));
 });
 

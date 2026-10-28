@@ -43,7 +43,10 @@
 #                       inactive-outcome startup scan runs in the deferred worker.
 #                       First, on every harness and away posture, it seeds the
 #                       outcome store's display tail copy when that is absent
-#                       (bin/fm-branch-outcome.sh seed-tail).
+#                       (bin/fm-branch-outcome.sh seed-tail). Last, in a home
+#                       signed in to T3 Code, it runs the bounded T3 restart
+#                       recovery (bin/fm-t3-restart.sh recover), whose calls
+#                       reach only the configured T3 server.
 #   4. supervision-instructions - the one emitted operating block for the
 #                       detected primary harness.
 #   5. read-once contract - the do-not-re-read contract covering every source
@@ -400,6 +403,10 @@ case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=20 ;; esac
 ENDPOINT_TIMEOUT=${FM_SESSION_START_ENDPOINT_TIMEOUT:-10}
 case "$ENDPOINT_TIMEOUT" in ''|*[!0-9]*) ENDPOINT_TIMEOUT=10 ;; esac
 [ "$ENDPOINT_TIMEOUT" -gt 0 ] 2>/dev/null || ENDPOINT_TIMEOUT=10
+# The T3 restart recovery rings each affected worker once; this bounds the
+# whole recovery, not one ring.
+T3_RESTART_TIMEOUT=${FM_SESSION_START_T3_RESTART_TIMEOUT:-60}
+case "$T3_RESTART_TIMEOUT" in ''|*[!0-9]*|0) T3_RESTART_TIMEOUT=60 ;; esac
 BACKLOG_FIELDS=blocked_by,hold_kind,hold_reason
 
 RULE='================================================================================'
@@ -821,6 +828,20 @@ else
     printf '%s\n' "$DRAIN_OUT"
   else
     printf '(no queued wakes)\n'
+  fi
+  # A home signed in to T3 Code recovers the T3 workers a server restart ended
+  # (bin/fm-t3-restart.sh owns detection and recovery); silent unless the
+  # server restarted since this home last recorded it. Other homes run nothing.
+  if [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; then
+    T3_RESTART_OUT=$(fm_run_timed "$T3_RESTART_TIMEOUT" env FM_HOME="$FM_HOME" \
+      FM_STATE_OVERRIDE="$STATE" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-t3-restart.sh" recover 2>&1) \
+      || T3_RESTART_OUT="${T3_RESTART_OUT:+$T3_RESTART_OUT
+}t3-restart: recovery stopped before it finished; rerun bin/fm-t3-restart.sh recover"
+    if [ -n "$T3_RESTART_OUT" ]; then
+      subsection "T3 RESTART"
+      printf '%s\n' "$T3_RESTART_OUT"
+    fi
   fi
 fi
 

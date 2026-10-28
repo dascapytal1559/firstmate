@@ -1392,6 +1392,16 @@ if [ -n "$LOG_VERB" ]; then
     emit_ship_status_done
   fi
   LOG_STATE=$(map_log_state "$LOG_LINE")
+  # A working or paused claim made inside a T3 session that a server restart
+  # ended describes nothing current until the crew answers its restart
+  # doorbell (status_restart_unanswered, bin/fm-t3-restart.sh).
+  case "$LOG_STATE" in
+    working|paused)
+      if status_restart_unanswered "$LOG"; then
+        emit unknown status-log "$(status_line_note "$LOG_LINE")${SEP}claim predates a T3 server restart the crew has not answered"
+      fi
+      ;;
+  esac
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi

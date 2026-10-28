@@ -20,9 +20,12 @@
 //     $FM_T3CODE_ORIGIN, else the `origin` in
 //     ~/.t3/userdata/server-runtime.json.
 //   fm-t3-mcp.mjs status
-//     Credential expiry, the capability gate, and whether a loopback server's
+//     Credential expiry, the capability gate, whether a loopback server's
 //     own process runs with telemetry off (telemetry: off|on|unknown; anything
-//     but off adds a stderr warning). Changes nothing.
+//     but off adds a stderr warning), and that process's identity
+//     (serverStart: "<pid>@<kernel start time>", null for a remote origin or
+//     an unreadable listener), which changes on every server restart.
+//     Changes nothing.
 //   fm-t3-mcp.mjs project-ensure --root <abs-path> [--title <title>]
 //     The live T3 project whose workspaceRoot is <root> by real path, created
 //     when absent. A create that fails is looked up again, so a project a
@@ -570,29 +573,39 @@ function isNotFound(err) {
 // T3CODE_TELEMETRY_ENABLED false (apps/server's AnalyticsService config).
 // Only a loopback server's own process environment can show that, read from
 // the listening process on this machine; anything else reads `unknown`.
-export function telemetryState(origin, probe = probeListenerEnv) {
-  let url;
-  try {
-    url = new URL(origin);
-  } catch {
-    return "unknown";
-  }
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return "unknown";
-  const env = probe(url.port || (url.protocol === "https:" ? "443" : "80"));
-  if (env === null) return "unknown";
-  const m = env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
+export function telemetryState(listener) {
+  if (listener === null) return "unknown";
+  const m = listener.env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
   if (!m) return "on";
   return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
 }
 
-function probeListenerEnv(port) {
+// The one process listening on a loopback origin's port on this machine: its
+// pid, its kernel start time, and its environment. `serverStart` joins the
+// first two, so a restarted server always reads a new value
+// (bin/fm-t3-restart.sh compares it); a remote origin, no single listener, or
+// an unreadable process reads null.
+export function loopbackListener(origin, probe = probeListener) {
+  let url;
   try {
-    const pids = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-      .split("\n")
-      .filter(Boolean);
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return null;
+  return probe(url.port || (url.protocol === "https:" ? "443" : "80"));
+}
+
+function probeListener(port) {
+  const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    const pids = run("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]).split("\n").filter(Boolean);
     if (pids.length !== 1) return null;
-    if (process.platform === "linux") return readFileSync(`/proc/${pids[0]}/environ`, "utf8");
-    return execFileSync("ps", ["eww", "-o", "command=", "-p", pids[0]], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const pid = pids[0];
+    const startedAt = run("ps", ["-o", "lstart=", "-p", pid]).trim().replace(/\s+/g, " ");
+    if (!startedAt) return null;
+    const env = process.platform === "linux" ? readFileSync(`/proc/${pid}/environ`, "utf8") : run("ps", ["eww", "-o", "command=", "-p", pid]);
+    return { pid: Number(pid), startedAt, env };
   } catch {
     return null;
   }
@@ -680,7 +693,8 @@ async function login(flags) {
 
 async function status(flags) {
   const { cred, gate: g } = await verifiedSession(flags);
-  const telemetry = telemetryState(cred.origin);
+  const listener = loopbackListener(cred.origin);
+  const telemetry = telemetryState(listener);
   if (telemetry !== "off") {
     process.stderr.write(`warning: T3 telemetry at ${cred.origin} is ${telemetry === "on" ? "on" : "not confirmed off"}; run the server that hosts Firstmate workers with T3CODE_TELEMETRY_ENABLED=false (docs/t3code-backend.md)\n`);
   }
@@ -694,6 +708,7 @@ async function status(flags) {
     serverVersion: g.serverVersion,
     recordedServerVersion: cred.server_version ?? null,
     telemetry,
+    serverStart: listener ? `${listener.pid}@${listener.startedAt}` : null,
     ...(cred.warning ? { credentialWarning: cred.warning } : {}),
   };
 }

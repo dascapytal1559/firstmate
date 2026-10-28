@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd job for bin/fm-t3-restart-nudge.sh; `install` fills the @...@ fields (docs/t3code-backend.md "Server restart"). -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>@LABEL@</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@SCRIPT@</string>
+		<string>run</string>
+		<string>--thread</string>
+		<string>@THREAD@</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>FM_HOME</key>
+		<string>@FM_HOME@</string>
+		<key>PATH</key>
+		<string>@PATH@</string>
+	</dict>
+	<key>StartInterval</key>
+	<integer>@INTERVAL@</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>@LOG@</string>
+	<key>StandardErrorPath</key>
+	<string>@LOG@</string>
+</dict>
+</plist>

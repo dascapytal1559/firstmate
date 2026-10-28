@@ -35,6 +35,25 @@ t3_fake_stop() {
   T3_FAKE_PID=
 }
 
+# t3_fake_restart <server-dir> [VAR=value...]: stop the server and start a new
+# process on the same port, keeping the current case, the way a real T3 server
+# restarts behind one origin.
+t3_fake_restart() {
+  local dir=$1 port
+  shift
+  port=$(cat "$dir/port")
+  t3_fake_stop
+  rm -f "$dir/port"
+  env -u T3CODE_TELEMETRY_ENABLED "$@" node "$T3_FAKE_SERVER" --case-file "$T3_FAKE_CASE_FILE" \
+    --port-file "$dir/port" --parent-pid "$$" --port "$port" >"$dir/server.out" 2>&1 &
+  T3_FAKE_PID=$!
+  for _ in $(seq 1 100); do
+    [ -s "$dir/port" ] && break
+    sleep 0.05
+  done
+  [ -s "$dir/port" ] || fail "fake T3 server did not restart: $(cat "$dir/server.out" 2>/dev/null)"
+}
+
 # t3_fake_case <dir> [world-json]: make <dir> the server's current case, with
 # a fresh world (default `{}`) and an empty request log. Sets T3_FAKE_WORLD
 # and T3_FAKE_LOG.

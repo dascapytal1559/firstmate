@@ -364,8 +364,47 @@ status_is_paused_or_captain_held() {  # <status-line>
 # activity fold's key, where a keyless line is its own phase) retracts it, as
 # does any other later event. A captain-held line counts only while it is the
 # latest event. Bounded like last_status_line: only a tail window made wholly of
-# resolved events widens the read to the whole file.
+# resolved events widens the read to the whole file. A pause the crew declared
+# before a T3 server restart it has not yet answered (status_restart_unanswered)
+# is no declared wait: the session that was waiting no longer exists.
 status_declared_wait_line() {  # <status-file>
+  local line
+  line=$(_fm_status_declared_wait_line "$1")
+  [ -n "$line" ] || return 0
+  if status_is_paused "$line" && status_restart_unanswered "$1"; then
+    return 0
+  fi
+  printf '%s\n' "$line"
+}
+
+# 0 when a T3 server restart ended this crew's session and the crew has not
+# answered since. bin/fm-t3-restart.sh owns the <state>/<id>.t3-restart marker
+# beside the status file and records in it the status file's byte size at the
+# restart (offset=<bytes>); any later status event other than a resolved line
+# is the crew's answer. Position, never an [at=] stamp, decides it.
+status_restart_unanswered() {  # <status-file>
+  local f=$1 marker offset size line verb resolve legacy_re
+  marker="${f%.status}.t3-restart"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+  offset=$(sed -n 's/^offset=\([0-9][0-9]*\)$/\1/p' "$marker" 2>/dev/null | head -n 1)
+  [ -n "$offset" ] || return 1
+  size=0
+  [ ! -f "$f" ] || size=$(wc -c < "$f" | tr -d ' ')
+  [ "$size" -ge "$offset" ] || return 1
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  legacy_re="^[[:space:]]*(${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT})"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    _fm_status_line_is_event "$line" "$legacy_re" || continue
+    status_line_verb "$line" verb
+    [ "$verb" = "$resolve" ] || return 1
+  done <<EOF
+$(tail -c "+$((offset + 1))" "$f" 2>/dev/null)
+EOF
+  return 0
+}
+
+_fm_status_declared_wait_line() {  # <status-file>
   local f=$1 last verb resolve legacy_re
   last=$(last_status_line "$f")
   if status_is_paused_or_captain_held "$last"; then

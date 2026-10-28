@@ -188,7 +188,7 @@ The `fm-` project of a torn-down secondmate home stays in T3 Code pointing at th
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
-A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line needs a steer.
+A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line needs a steer, which the [server restart](#server-restart) recovery sends.
 Thread persistence alone does not prove a live agent.
 
 `bin/backends/t3code.sh` owns one status table over the thread's V2 status, read with `t3_thread_read`:
@@ -200,6 +200,24 @@ Thread persistence alone does not prove a live agent.
 - An archived thread with no active run, or one the verified server does not have, reads missing.
 - An archived thread whose run is still draining is not proven closed, so it reads `unknown unreadable` until the run ends.
 - An unreachable server, a refused gate, or a failed read reads `unknown unreadable`, which is never treated as proof that a replacement agent is safe.
+
+<a id="server-restart"></a>
+
+### Server restart
+
+A T3 server restart ends every provider session it hosts at once, a Firstmate main's running as a T3 thread and every worker's, and T3 resumes none of them at startup.
+Each thread then reads idle, its background commands and waits are gone, and its last `working:` or `paused:` line still looks current; a send to a thread reopens its session with the same conversation.
+Claude's `SessionStart` hook does not reliably fire on such a reopen, so nothing below depends on it.
+
+- **Detection.** `bin/fm-t3-mcp.mjs status` reports the loopback server's own process identity as `serverStart` (its pid and kernel start time), which changes on every restart; a remote origin has none, so a restart there is not detected.
+- **Recovery.** In a home with `config/t3code-token`, the locked session start runs [`bin/fm-t3-restart.sh`](../bin/fm-t3-restart.sh) `recover`: when `serverStart` differs from the one the home last recorded, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens its session, and the digest lists them under `T3 RESTART`.
+  Workers with an open decision, a captain-held wait, or a terminal line are left alone, and an archived thread is reported rather than rung.
+- **Untrusted claims.** Until such a worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
+- **The main's first tool call.** When `state/.lock` names a process that is no longer running, the main's first tool call is denied once with an instruction to run `bin/fm-session-start.sh` ([`bin/fm-t3-main-pretool-check.sh`](../bin/fm-t3-main-pretool-check.sh), registered for Claude only).
+- **Waking the main.** Nothing inside a dead session can reopen the main, so [`bin/fm-t3-restart-nudge.sh`](../bin/fm-t3-restart-nudge.sh) runs outside T3 and sends the main thread one Firstmate operational message per restart once the server is back, telling it to run session start.
+  On macOS, `bin/fm-t3-restart-nudge.sh install --thread <main thread id>` renders [`examples/t3code-restart-nudge.plist`](examples/t3code-restart-nudge.plist) into `~/Library/LaunchAgents` and loads it, and `uninstall` removes it; the job checks every 30 seconds by default.
+
+The main's credential guard in the same PreToolUse hook denies a Read or Grep of `config/t3code-token`, a Grep over `config/`, and a shell command that would print the file or a glob over `config/`, so the full-access credential stays out of the main thread's transcript; it guards against a mistake, not a determined reader.
 
 Inspect a failed worker's thread error before sending a new turn through its normal steer path.
 A new turn continues the same driver and transcript; `fm-control.sh relaunch` remains refused.

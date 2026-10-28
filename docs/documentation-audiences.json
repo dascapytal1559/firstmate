@@ -377,6 +377,10 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/t3code-restart-nudge.plist",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/usage-warner",
       "audience": "operator-example"
     },
