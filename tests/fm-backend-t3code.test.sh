@@ -2724,6 +2724,299 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
 fi
 
 
+
+# --- T3 server restart -------------------------------------------------------
+
+# t3_restart_task <id> <thread-id> <kind> [status-line]: a recorded T3 worker in
+# the restart case's home, its own isolated copy, and its status log.
+t3_restart_task() {
+  local id=$1 thread=$2 kind=$3 line=${4:-}
+  if [ -d "$RS_PROJ/.git" ]; then
+    git -C "$RS_PROJ" worktree add --quiet -b "fm/$id" "$CASE_DIR/wt-$id"
+  else
+    fm_git_worktree "$RS_PROJ" "$CASE_DIR/wt-$id" "fm/$id"
+  fi
+  mkdir -p "$RS_DATA/$id"
+  write_spawn_brief "$RS_DATA" "$id"
+  fm_write_meta "$RS_STATE/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" "worktree=$CASE_DIR/wt-$id" "project=$RS_PROJ" \
+    "harness=claude" "kind=$kind" "mode=local-only" "yolo=off" \
+    "backend=t3code" "t3_thread_id=$thread" "t3_project_id=proj-1" \
+    "decisions_reviewed=1" "decision_keys="
+  [ -z "$line" ] || printf '%s\n' "$line" > "$RS_STATE/$id.status"
+}
+
+t3_restart_env() {  # <command...>
+  FM_HOME="$RS_HOME" FM_STATE_OVERRIDE="$RS_STATE" FM_DATA_OVERRIDE="$RS_DATA" FM_CONFIG_OVERRIDE="$CONFIG" "$@"
+}
+
+# t3_sent_threads: the thread ids T3 accepted a send for, sorted, one line.
+t3_sent_threads() {
+  t3_fake_calls t3_thread_send | node -e '
+const ids = require("fs").readFileSync(0, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l).threadId);
+process.stdout.write(ids.sort().join(" "));'
+}
+
+t3_crew_state() {  # <id>
+  PATH="$RS_FAKEBIN:$PATH" FM_CREW_STATE_NO_FORGE=1 t3_restart_env "$ROOT/bin/fm-crew-state.sh" "$1" 2>/dev/null
+}
+
+t3_declared_wait() {  # <status-file>
+  bash -c '. "$0/bin/fm-classify-lib.sh"; status_declared_wait_line "$1"' "$ROOT" "$1"
+}
+
+# A T3 server restart ends every session it hosts. Recovery reads the restart
+# from the server's own process identity, rings each worker that was working
+# or waiting exactly once, leaves decisions and finished work alone, and keeps
+# the earlier working or paused claims untrusted until each worker answers.
+test_t3_restart_recovery() {
+  local out wp wk wn wd wg tp=mcp:aa000001-0000-4000-8000-000000000001 tk=mcp:aa000002-0000-4000-8000-000000000002
+  local tn=mcp:aa000003-0000-4000-8000-000000000003 td=mcp:aa000004-0000-4000-8000-000000000004
+  local tg=mcp:aa000005-0000-4000-8000-000000000005 pause
+  command -v lsof >/dev/null 2>&1 || { echo "skip - t3code restart recovery: lsof absent"; return 0; }
+  t3_case restart-recovery completed
+  t3_world "$(t3_thread_json "$tp" completed false)" "$(t3_thread_json "$tk" completed false)" \
+    "$(t3_thread_json "$tn" completed false)" "$(t3_thread_json "$td" completed false)" \
+    "$(t3_thread_json "$tg" completed true)"
+  RS_HOME="$CASE_DIR/home"; RS_STATE="$RS_HOME/state"; RS_DATA="$RS_HOME/data"; RS_PROJ="$CASE_DIR/project"
+  RS_FAKEBIN="$CASE_DIR/fakebin"
+  mkdir -p "$RS_STATE" "$RS_DATA" "$RS_FAKEBIN"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$RS_FAKEBIN/no-mistakes"
+  chmod +x "$RS_FAKEBIN/no-mistakes"
+  touch "$RS_STATE/.last-watcher-beat"
+  wp=$(t3_uid t3rspaused); wk=$(t3_uid t3rswork); wn=$(t3_uid t3rsdecide); wd=$(t3_uid t3rsdone); wg=$(t3_uid t3rsgone)
+  pause="paused [at=1793171819]: waiting on a background gate wait; resumes when it prints gate-open. until 2099-01-01T00:00Z"
+  t3_restart_task "$wp" "$tp" scout "$pause"
+  t3_restart_task "$wk" "$tk" ship "working [at=1793171819]: implementing the fix"
+  t3_restart_task "$wn" "$tn" ship "needs-decision [at=1793171819]: which API shape?"
+  t3_restart_task "$wd" "$td" scout "done [at=1793171819]: report written"
+  t3_restart_task "$wg" "$tg" scout "working [at=1793171819]: reading the code"
+
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)
+  assert_equals "t3-restart: first" "$out" "nothing recorded yet reads first"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "the first recovery only records the server and prints nothing"
+  assert_present "$RS_STATE/.t3code-server-start" "the first recovery records the server identity"
+  [ -z "$(t3_sent_threads)" ] || fail "nothing is rung before any restart, got '$(t3_sent_threads)'"
+  assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "the running server reads same"
+  assert_equals "$pause" "$(t3_declared_wait "$RS_STATE/$wp.status")" "before a restart the pause is a declared wait"
+
+  t3_fake_restart "$TMP_ROOT/server"
+  assert_equals "t3-restart: restarted" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" \
+    "a new server process behind the same origin reads restarted"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_contains "$out" "the T3 server restarted" "recovery names the restart"
+  assert_contains "$out" "$wp: sent the restart steer" "the paused worker is rung"
+  assert_contains "$out" "$wk: sent the restart steer" "the working worker is rung"
+  assert_contains "$out" "$wg: its T3 thread $tg is gone or archived" "an archived worker thread is reported, not rung"
+  assert_equals "$(printf '%s\n%s\n' "$tp" "$tk" | sort | tr '\n' ' ' | sed 's/ $//')" "$(t3_sent_threads)" \
+    "exactly the working and waiting workers are rung, once each; decisions and finished work are left alone"
+  assert_absent "$RS_STATE/$wn.t3-restart" "an open decision keeps its claim"
+  assert_absent "$RS_STATE/$wd.t3-restart" "finished work keeps its claim"
+  assert_grep 'doorbell=sent' "$RS_STATE/$wp.t3-restart" "the paused worker's marker records its ring"
+  [ -n "$(find "$RS_STATE/$wp.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null)" ] || fail "the recovery steer is a durable inbox record"
+  assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "the T3 server restarted" "the steer tells the worker what happened"
+
+  # The rung workers end their turns without answering, the case the marker
+  # exists for: their threads read idle again.
+  t3_world_set 'for (const t of Object.values(w.threads)) { t.status = "completed"; t.activeRunId = null; }'
+  assert_equals "" "$(t3_declared_wait "$RS_STATE/$wp.status")" "a pause from before an unanswered restart is no declared wait"
+  out=$(t3_crew_state "$wp")
+  assert_contains "$out" "state: unknown" "an unanswered pre-restart pause is not current state: $out"
+  assert_contains "$out" "predates a T3 server restart" "crew-state names why the pause is untrusted"
+  out=$(t3_crew_state "$wk")
+  assert_contains "$out" "state: unknown" "an unanswered pre-restart working claim is not current state: $out"
+  out=$(t3_crew_state "$wn")
+  assert_contains "$out" "state: parked" "an open decision still reads parked: $out"
+
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "a handled restart is not recovered twice"
+  [ "$(t3_sent_threads | wc -w | tr -d ' ')" = 2 ] || fail "a rerun rings nobody again, got '$(t3_sent_threads)'"
+
+  printf 'resolved [key=other]: answered elsewhere\n' >> "$RS_STATE/$wp.status"
+  assert_equals "" "$(t3_declared_wait "$RS_STATE/$wp.status")" "a resolved line alone is not the worker's answer"
+  printf 'paused [at=1793172600]: re-armed the gate wait. until 2099-01-01T00:00Z\n' >> "$RS_STATE/$wp.status"
+  assert_contains "$(t3_declared_wait "$RS_STATE/$wp.status")" "re-armed the gate wait" "the worker's fresh pause is trusted again"
+  assert_contains "$(t3_crew_state "$wp")" "state: paused" "after its answer the worker's pause is current state"
+  pass "t3code restart: the server's process identity reveals a restart; working and waiting workers are rung once and untrusted until they answer"
+}
+
+# A ring that does not send leaves the restart unrecorded, so the next recovery
+# retries exactly that worker; an unreadable server is never taken for one.
+test_t3_restart_failed_ring_retries() {
+  local out wk tk=mcp:aa000011-0000-4000-8000-000000000011 sends
+  command -v lsof >/dev/null 2>&1 || { echo "skip - t3code restart retry: lsof absent"; return 0; }
+  t3_case restart-retry completed
+  t3_world "$(t3_thread_json "$tk" completed false)"
+  RS_HOME="$CASE_DIR/home"; RS_STATE="$RS_HOME/state"; RS_DATA="$RS_HOME/data"; RS_PROJ="$CASE_DIR/project"
+  mkdir -p "$RS_STATE" "$RS_DATA"
+  touch "$RS_STATE/.last-watcher-beat"
+  wk=$(t3_uid t3rsretry)
+  t3_restart_task "$wk" "$tk" ship "working [at=1793171819]: implementing the fix"
+  printf '0@Thu Jan  1 00:00:00 1970\n' > "$RS_STATE/.t3code-server-start"
+  out=$(FM_CONFIG_OVERRIDE="$(t3_down_config)" FM_HOME="$RS_HOME" FM_STATE_OVERRIDE="$RS_STATE" \
+    "$ROOT/bin/fm-t3-restart.sh" check)
+  assert_equals "t3-restart: unknown" "$out" "an unreachable server is unknown, never a restart"
+  # An inbox the steer cannot be written into is a steer that was not sent.
+  mkdir -p "$RS_STATE/$wk.inbox"
+  chmod 500 "$RS_STATE/$wk.inbox"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  chmod 700 "$RS_STATE/$wk.inbox"
+  assert_contains "$out" "$wk: the restart steer was not recorded" "a steer that was not recorded is reported: $out"
+  assert_grep '0@Thu' "$RS_STATE/.t3code-server-start" "a recovery with a failed steer leaves the old identity recorded"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_contains "$out" "$wk: sent the restart steer" "the rerun rings the worker whose ring failed: $out"
+  assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "a complete recovery records the new identity"
+  sends=$(t3_fake_calls t3_thread_send | grep -c . || true)
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  [ "$(t3_fake_calls t3_thread_send | grep -c . || true)" = "$sends" ] || fail "once recorded, the restart rings nobody again"
+  pass "t3code restart: a failed ring keeps the restart pending for exactly that worker, and an unreadable server is no restart"
+}
+
+# Only a home signed in to T3 runs any of it.
+test_t3_restart_inert_without_t3() {
+  local home="$TMP_ROOT/restart-off"
+  mkdir -p "$home/state" "$home/config"
+  assert_equals "t3-restart: off" "$(FM_HOME="$home" "$ROOT/bin/fm-t3-restart.sh" check)" "a home without the credential is off"
+  assert_equals "" "$(FM_HOME="$home" "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)" "recovery is silent there"
+  assert_absent "$home/state/.t3code-server-start" "and records nothing"
+  pass "t3code restart: a home not signed in to T3 runs nothing"
+}
+
+# t3_main_home <name>: a primary-shaped home checkout (git-dir equals
+# git-common-dir) carrying the real guard, with a T3 credential.
+t3_main_home() {
+  local home="$TMP_ROOT/main-$1"
+  mkdir -p "$home/bin" "$home/state" "$home/config"
+  printf '# Firstmate\n' > "$home/AGENTS.md"
+  cp "$ROOT/bin/fm-t3-main-pretool-check.sh" "$ROOT/bin/fm-session-lock-lib.sh" "$ROOT/bin/fm-cursor-lib.sh" "$home/bin/"
+  git init -q "$home"
+  printf '{"origin":"http://127.0.0.1:9","access_token":"tok-secret-value"}\n' > "$home/config/t3code-token"
+  chmod 600 "$home/config/t3code-token"
+  printf '%s' "$home"
+}
+
+t3_guard() {  # <home> <payload-json> -> stderr in GUARD_ERR, exit in GUARD_RC
+  GUARD_ERR=$(printf '%s' "$2" | env -u FM_HOME -u FM_CONFIG_OVERRIDE -u FM_STATE_OVERRIDE -u FM_ROOT_OVERRIDE \
+    "$1/bin/fm-t3-main-pretool-check.sh" --claude 2>&1 >/dev/null)
+  GUARD_RC=$?
+}
+
+t3_bash_payload() {  # <command>
+  node -e 'process.stdout.write(JSON.stringify({ tool_name: "Bash", tool_input: { command: process.argv[1] } }))' "$1"
+}
+
+# The main's credential seatbelt: reads that would print config/t3code-token
+# are denied, ordinary config and credential checks pass.
+test_t3_main_guard_keeps_the_token_out_of_the_transcript() {
+  local home cmd
+  home=$(t3_main_home token)
+  for cmd in 'cat config/*' 'head -40 config/*' 'cat config/t3code-token' "cat '$home/config/t3code-token'" \
+    'jq . config/t3code-token' 'grep -r origin config' 'cat < config/t3code-token' 'for f in config/*; do cat "$f"; done' \
+    'x=$(cat config/t3code-token)' 'tail -n 5 ./config/t3*'; do
+    t3_guard "$home" "$(t3_bash_payload "$cmd")"
+    expect_code 2 "$GUARD_RC" "a command that prints the credential is denied: $cmd"
+    assert_contains "$GUARD_ERR" "t3-token" "the denial names the credential: $cmd"
+    assert_not_contains "$GUARD_ERR" "tok-secret-value" "the denial never echoes the secret"
+  done
+  for cmd in 'cat config/backend' 'ls config/*' 'ls -l config/t3code-token' 'chmod 600 config/t3code-token' \
+    'bin/fm-t3-mcp.mjs status' 'grep -r origin bin' 'git status'; do
+    t3_guard "$home" "$(t3_bash_payload "$cmd")"
+    expect_code 0 "$GUARD_RC" "an ordinary command is allowed: $cmd ($GUARD_ERR)"
+  done
+  t3_guard "$home" '{"tool_name":"Read","tool_input":{"file_path":"'"$home"'/config/t3code-token"}}'
+  expect_code 2 "$GUARD_RC" "reading the credential file is denied"
+  t3_guard "$home" '{"tool_name":"Read","tool_input":{"file_path":"'"$home"'/config/backend"}}'
+  expect_code 0 "$GUARD_RC" "reading another config file is allowed"
+  t3_guard "$home" '{"tool_name":"Grep","tool_input":{"pattern":"origin","path":"'"$home"'/config"}}'
+  expect_code 2 "$GUARD_RC" "grepping the config directory is denied"
+  rm -f "$home/config/t3code-token"
+  t3_guard "$home" "$(t3_bash_payload 'cat config/*')"
+  expect_code 0 "$GUARD_RC" "a home not signed in to T3 is untouched"
+  pass "t3code main guard: commands that would print config/t3code-token are denied, ordinary reads pass"
+}
+
+# A reopened main whose lock names a process that is gone is told once, at its
+# first tool call, to run session start; the session-start call itself passes.
+test_t3_main_guard_restart_reminder() {
+  local home dead
+  home=$(t3_main_home reminder)
+  t3_guard "$home" "$(t3_bash_payload 'git status')"
+  expect_code 0 "$GUARD_RC" "no lock yet: nothing to remind"
+  sh -c 'exit 0' & dead=$!
+  wait "$dead"
+  printf '%s\n' "$dead" > "$home/state/.lock"
+  t3_guard "$home" "$(t3_bash_payload 'git status')"
+  expect_code 2 "$GUARD_RC" "a dead lock holder denies the first tool call"
+  assert_contains "$GUARD_ERR" "t3-restart" "the reminder is the restart reminder"
+  assert_contains "$GUARD_ERR" "bin/fm-session-start.sh" "the reminder names session start"
+  t3_guard "$home" "$(t3_bash_payload 'git status')"
+  expect_code 0 "$GUARD_RC" "the reminder appears once per dead holder"
+  printf '%s\n' "$dead" > "$home/state/.lock"
+  rm -f "$home/state/.t3-restart-nudged"
+  t3_guard "$home" "$(t3_bash_payload 'bin/fm-session-start.sh')"
+  expect_code 0 "$GUARD_RC" "running session start itself is allowed"
+  t3_guard "$home" "$(t3_bash_payload 'git status')"
+  expect_code 0 "$GUARD_RC" "and counts as the reminder for that holder"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  rm -f "$home/state/.t3-restart-nudged"
+  t3_guard "$home" "$(t3_bash_payload 'git status')"
+  [ "$GUARD_RC" -eq 0 ] || assert_not_contains "$GUARD_ERR" "t3-restart" "a live holder gets no restart reminder"
+  pass "t3code main guard: a dead lock holder gets one session-start reminder at the first tool call"
+}
+
+# The outside nudge sends the main exactly one operational message per restart.
+test_t3_restart_nudge_sends_once_per_restart() {
+  local out home state main=mcp:bb000001-0000-4000-8000-000000000001 text
+  command -v lsof >/dev/null 2>&1 || { echo "skip - t3code restart nudge: lsof absent"; return 0; }
+  t3_case restart-nudge completed
+  t3_world "$(t3_thread_json "$main" completed false)"
+  home="$CASE_DIR/home"; state="$home/state"
+  mkdir -p "$state"
+  nudge() { FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$CONFIG" "$ROOT/bin/fm-t3-restart-nudge.sh" run --thread "$main" 2>&1; }
+  out=$(nudge)
+  assert_equals "" "$out" "the first pass records the server and sends nothing"
+  [ -z "$(t3_sent_threads)" ] || fail "no restart, no message"
+  nudge >/dev/null
+  [ -z "$(t3_sent_threads)" ] || fail "the same server, still no message"
+  t3_fake_restart "$TMP_ROOT/server"
+  t3_world_set 'w.failTools = { t3_thread_send: { code: "orchestration_error", message: "lost" } }'
+  if nudge >/dev/null; then fail "an unconfirmed send is not reported as sent"; fi
+  assert_present "$state/.t3-restart-nudge-pending" "an unconfirmed nudge stays pending"
+  t3_world_set 'w.failTools = {}'
+  out=$(nudge)
+  assert_contains "$out" "told $main that the T3 server restarted" "the next pass delivers the nudge: $out"
+  out=$(nudge)
+  assert_equals "" "$out" "a delivered nudge is not repeated"
+  [ "$(t3_fake_calls t3_thread_send | node -e 'const ids=new Set(require("fs").readFileSync(0,"utf8").trim().split("\n").filter(Boolean).map((l)=>JSON.parse(l).clientRequestId)); process.stdout.write(String(ids.size))')" = 1 ] \
+    || fail "the retry reuses the first attempt's request id"
+  text=$(t3_fake_calls t3_thread_send | tail -n 1 | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(a.message ?? a.text ?? JSON.stringify(a))')
+  assert_contains "$text" "Firstmate operational input waiting" "the nudge is Firstmate operational input, never a captain message"
+  assert_contains "$(cat "$state"/operational-inbox/*.msg)" "bin/fm-session-start.sh" "its record tells the main to run session start"
+  pass "t3code restart nudge: one operational message per restart, retried under one request id"
+}
+
+# install renders the launchd template and uninstall removes it, with no
+# launchctl when told not to load.
+test_t3_restart_nudge_install_renders_template() {
+  local dir="$TMP_ROOT/nudge-agents" home="$TMP_ROOT/nudge-home" plist
+  [ "$(uname -s)" = Darwin ] || { echo "skip - t3code restart nudge install: macOS only"; return 0; }
+  mkdir -p "$home/state"
+  plist=$(FM_HOME="$home" "$ROOT/bin/fm-t3-restart-nudge.sh" install --thread mcp:main-1 --interval 45 \
+    --launch-agents-dir "$dir" --no-load) || fail "install --no-load should succeed: $plist"
+  assert_present "$plist" "install writes the plist"
+  if command -v plutil >/dev/null 2>&1; then
+    plutil -lint "$plist" >/dev/null || fail "the rendered plist must be valid: $(plutil -lint "$plist")"
+  fi
+  assert_grep "<string>$home</string>" "$plist" "the job runs with this home"
+  assert_grep '<string>mcp:main-1</string>' "$plist" "the job names the main thread"
+  assert_grep '<integer>45</integer>' "$plist" "the job uses the interval"
+  if grep -q '@[A-Z_]*@' "$plist"; then fail "every template field is filled"; fi
+  FM_HOME="$home" "$ROOT/bin/fm-t3-restart-nudge.sh" uninstall --launch-agents-dir "$dir" --no-load || fail "uninstall should succeed"
+  assert_absent "$plist" "uninstall removes the plist"
+  pass "t3code restart nudge: install renders the launchd template for this home and uninstall removes it"
+}
+
 test_native_restart_rearms_undelivered_stale_warning
 test_housekeeping_preserves_unknown_stale_recheck
 test_reported_unknown_stall_is_not_escalated_again_when_idle
@@ -2812,3 +3105,10 @@ test_spawn_rejected_lease_is_neither_cleaned_nor_returned
 test_teardown_keeps_tracked_claude_local_md
 test_fractional_poll_event_wait
 test_housekeeping_removes_the_iterated_stale_marker
+test_t3_restart_inert_without_t3
+test_t3_main_guard_keeps_the_token_out_of_the_transcript
+test_t3_main_guard_restart_reminder
+test_t3_restart_nudge_install_renders_template
+test_t3_restart_recovery
+test_t3_restart_failed_ring_retries
+test_t3_restart_nudge_sends_once_per_restart
