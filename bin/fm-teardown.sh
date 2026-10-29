@@ -3714,6 +3714,34 @@ if [ "$BACKEND" = herdr ]; then
   TEARDOWN_HERDR_PANE=$FM_BACKEND_HERDR_PANE
 fi
 
+# Act early, clean up late. The watcher surfaces a worker's `done` the moment
+# it lands, while the turn that wrote it may still be running for a few
+# seconds, and the T3 close below interrupts an active run. So a ship or scout
+# whose worker turn is still running waits here, up to
+# FM_TEARDOWN_TURN_WAIT_SECS, for that turn to end on its own, and refuses when
+# it has not - before the backlog close record and every destructive step, so
+# a rerun starts from intact records. --force keeps the interrupt, because it
+# already authorizes discarding what the running turn may hold. A thread that
+# cannot be read decides nothing here; the close below refuses on its own. A
+# secondmate's retirement keeps its own shutdown barrier instead
+# (docs/t3code-backend.md "Current lifecycle and safety").
+TEARDOWN_TURN_WAIT_SECS=${FM_TEARDOWN_TURN_WAIT_SECS:-30}
+case "$TEARDOWN_TURN_WAIT_SECS" in ''|*[!0-9]*) TEARDOWN_TURN_WAIT_SECS=30 ;; esac
+if [ "$BACKEND" = t3code ] && [ "$KIND" != secondmate ] && [ -n "$T" ]; then
+  fm_backend_source t3code || exit 1
+  if fm_backend_t3code_wait_turn_end "$T" "$TEARDOWN_TURN_WAIT_SECS"; then
+    :
+  elif [ "$?" -eq 1 ]; then
+    if [ "$FORCE" = --force ]; then
+      echo "warning: the worker's turn for $ID is still running (T3 run $FM_BACKEND_T3CODE_RUNNING_RUN); --force interrupts it" >&2
+    else
+      echo "error: the worker's turn for $ID is still running (T3 run $FM_BACKEND_T3CODE_RUNNING_RUN on thread $T) after waiting ${TEARDOWN_TURN_WAIT_SECS}s; nothing was changed." >&2
+      echo "error: re-run teardown once the worker is idle, or pass --force to interrupt the turn and discard whatever it still holds." >&2
+      exit 1
+    fi
+  fi
+fi
+
 BACKLOG_CLOSED=0
 BACKLOG_TRANSITION=$TEARDOWN_BACKLOG_TRANSITION
 BACKLOG_TRANSITION_FLAGS=()
@@ -3830,6 +3858,7 @@ if [ "$BACKEND" = t3code ]; then
     echo "error: could not stop and archive T3 thread $T for $ID; start T3 Code (or archive the thread there) and re-run teardown" >&2
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
   }
+  rm -f "$(fm_backend_t3code_run_ended_record "$STATE" "$T")"
 fi
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
@@ -4065,6 +4094,7 @@ teardown_retire_status "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
 rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
+  "$STATE/.surfaced-turn-$ID" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.omp-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \
   "$STATE/$ID.muse-session-current" "$STATE/$ID.cursor-session" \

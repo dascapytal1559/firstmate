@@ -3714,3 +3714,37 @@ test_dialog_name_survives_away_self_handle
 test_seen_terminal_dialog_stale_clears_like_a_plain_stale
 test_dialog_name_joins_unseen_status_escalation
 test_dialog_name_after_demand_deep_inspection_still_escalates
+
+# A terminal queued row arrives as terminal:<files> (bin/fm-watch.sh). The
+# away-mode daemon classifies it exactly like an ordinary signal, so the digest
+# names the worker's done rather than an unknown wake.
+test_terminal_queued_row_is_classified_as_the_signal() {
+  local dir state fakebin status_file out
+  dir=$(make_supercase terminal-queued-row)
+  state="$dir/state"
+  fakebin="$dir/daemon-bin"
+  mkdir -p "$fakebin"
+  status_file="$state/ship-task.status"
+  printf 'working: setup\ndone: ready in branch fm/ship\n' > "$status_file"
+  cat > "$fakebin/fm-wake-drain.sh" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = --ack-through ]; then printf '%s\n' ack >> "$dir/acked"; exit 0; fi
+printf '1\t1\tsignal\tship-task.status\t%s\n' "terminal: $status_file"
+printf 'WAKE_ACK_REQUIRED: retry --ack-through 1 --recovery-generation gen\n' >&2
+EOF
+  chmod +x "$fakebin/fm-wake-drain.sh"
+  FM_DAEMON_DIR="$fakebin" FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999 \
+    handle_durable_wakes fallback "$state" \
+    || fail "the terminal queued row was not handled"
+  out=$(cat "$state/.subsuper-escalations" 2>/dev/null || true)
+  case "$out" in
+    *"unknown wake:"*) fail "a terminal wake was labelled unknown: $out" ;;
+  esac
+  case "$out" in
+    *"done: ready in branch fm/ship"*) ;;
+    *) fail "the terminal wake was not presented as the worker's done: $out" ;;
+  esac
+  [ -s "$dir/acked" ] || fail "the handled terminal row was not acknowledged"
+  pass "a terminal: queued row is classified as the signal it is and escalated as the worker's done"
+}
+test_terminal_queued_row_is_classified_as_the_signal

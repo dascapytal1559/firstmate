@@ -228,6 +228,26 @@ test_attended_main_only_close_passes_straight_to_main() {
   pass "host: an attended decision close stays main's exactly as the plain arm delivers it"
 }
 
+# A finished worker's close is the captain's outcome: it is marked terminal:
+# by the watcher and the offer answers main-only, so the host passes it
+# straight to main with no engine turn in between
+# (docs/supervision-host.md "Attended").
+test_attended_terminal_close_passes_straight_to_main() {
+  local home
+  home=$(make_home attended-terminal attended)
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "terminal: the host never started a watcher cycle"
+  append_status "$home" 'ready in branch fm/demo' 'done'
+  wait_until_deadline 60 host_exited "$home" || fail "terminal: the done close did not reach main: $(cat "$home/state/.supervision-host.log")"
+  expect_code 0 "$(cat "$home/host.rc")" "a terminal close must exit 0"
+  assert_re '^signal: .*demo.status' "$home/host.out" "the close must carry the watcher's reason line"
+  assert_no_re '^supervision-host' "$home/host.out" "a terminal close must reach main exactly as the arm printed it"
+  [ "$(engine_calls "$home")" -eq 0 ] || fail "terminal: the engine ran for a finished worker's close"
+  assert_grep "$(printf 'signal\tdemo.status\tterminal:')" "$home/state/.wake-queue" "the done row must be marked terminal: and stay queued for main"
+  assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "the ledger must record why the close went to main"
+  pass "host: an attended done close is main-only and passes straight to main without an engine turn"
+}
+
 
 # The file is read at every wake (docs/configuration.md "Supervision host"), so
 # an off written while the host is parked sends the next attended close to main
@@ -945,4 +965,5 @@ fm_test_run \
   test_next_host_clears_a_turn_its_killed_predecessor_left \
   test_report_without_acknowledgement_hands_the_wake_to_main \
   test_return_during_a_failed_turn_still_hands_its_outcomes_to_main \
-  test_incomplete_engine_result_hands_the_wake_to_main
+  test_incomplete_engine_result_hands_the_wake_to_main \
+  test_attended_terminal_close_passes_straight_to_main

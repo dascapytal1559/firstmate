@@ -221,6 +221,26 @@ The Claude hook's detached handling successor is launched by the hook itself, wh
 The turn-end guard remains the final backstop rather than the normal continuity mechanism.
 In its `--claude` mode it cooperates with the auto-arm.
 
+## Signal coalescing and the terminal fast path
+
+A crewmate's final status write and the Stop hook of the same turn land seconds apart, and the watcher's author made them one wake rather than two (commit 9931f81e), because every actionable wake costs a full firstmate turn.
+The signal grace (`FM_SIGNAL_GRACE`) used to be the only coalescer: linger, re-scan, then classify.
+The watcher now classifies the new status span first and keeps that intent by proof instead of by waiting.
+
+- A span carrying a captain-relevant event (`done`, `failed`, `needs-decision`, `blocked`) closes the cycle the moment it is scanned, with no linger, because the turn-end that follows it carries no information the main needs.
+- At that surface the watcher records which turn wrote the event in `state/.surfaced-turn-<task>`: the T3 run that was active, or the Claude busy record's sequence on a pane backend; other harnesses have no verified turn identity and record no proof.
+- The trailing bare turn-end is absorbed, with a triage-log line naming the evidence, only when every proof condition holds: the recorded turn is the one that ended and it ended cleanly, no status bytes were appended since, no steer reached the worker since, and the worker's current state agrees with the surfaced verb.
+  Any condition unproven, including a harness without turn identity, surfaces the turn-end exactly as a bare turn-end surfaced before, through the swallowed-finish guard.
+  An absorb advances only the turn-end file's seen signature and never touches the file, whose modification time remains the busy-turn clock.
+- A span with no captain-relevant event keeps the linger and re-scan unchanged, where coalescing a `working:` note with its turn-end still saves a turn; under `state/.afk` the daemon owns triage and the watcher neither classifies ahead nor absorbs.
+- The turn the proof names is watched to its end: a T3 run that ends `failed`, `interrupted`, `cancelled`, or `rolled_back` after a surfaced record, or a Claude `StopFailure` on a pane backend, wakes main once with `check: worker turn ended <status> after <verb>: <task>`, carrying T3's error message when it is readable.
+  Nothing reported this before; a clean end settles the proof silently.
+- The queued row of a span whose first captain-relevant event is `done` or `failed` carries the payload `terminal:` beside the existing `needs-decision:` marking, and the branch dispatcher keeps both on main while attended, so a finished worker reaches the captain's session without a supervision-branch or host engine turn in between ([`supervision-host.md`](supervision-host.md#attended), [`pi-supervision-branch.md`](pi-supervision-branch.md#decision-owned-rows)).
+- The cycle's terminal wait on a home with no push-capable backend watches the state directory for a status or turn-end change (`bin/fm-state-watch.mjs`) and the T3 wait races the same change, so a worker's append ends the wait within milliseconds and the poll interval is the backstop rather than the latency ([`t3code-backend.md`](t3code-backend.md#push-events-and-polling-fallback)).
+
+`bin/fm-watch.sh`'s header and `signal_turnend_absorb_proven` own the exact proof record and conditions; `tests/fm-watch-triage.test.sh` and `tests/fm-backend-t3code.test.sh` pin the cases.
+Cleanup is the one step that does not act early: `bin/fm-teardown.sh` waits for a still-running worker turn before closing a T3 thread and refuses, without `--force`, when it does not end in time.
+
 ## Recovery episode acknowledgement
 
 A recovery episode is one generation of the `state/.watcher-down` marker.

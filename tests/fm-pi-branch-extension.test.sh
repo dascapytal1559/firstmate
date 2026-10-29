@@ -4790,7 +4790,7 @@ fs.readFileSync = function(path, ...args) {
 };
 syncBuiltinESMExports();
 
-const { activateEligibleRowsOwner, scopeForUnreadWake, writeEligibleRowsSnapshot, releaseEligibleRowsSnapshot, BRANCH_ELIGIBLE_ROWS_FILE } =
+const { activateEligibleRowsOwner, scopeForUnreadWake, branchOfferForWake, writeEligibleRowsSnapshot, releaseEligibleRowsSnapshot, BRANCH_ELIGIBLE_ROWS_FILE } =
   await import(pathToFileURL(process.env.LIB).href);
 const state = `${process.env.FM_HOME}/state`;
 const project = `${process.env.FM_HOME}/projects/approved`;
@@ -4848,6 +4848,42 @@ writeFileSync(`${state}/.wake-queue`, "1\t1\tsignal\ttask-a.status\tneeds-decisi
 const needsDecisionOnly = scopeForUnreadWake(state, false);
 if (needsDecisionOnly.eligible || needsDecisionOnly.eligibleSeqs.length !== 0 || needsDecisionOnly.corrupted) {
   throw new Error(`a needs-decision-only queue must be ordinary main-only absence: ${JSON.stringify(needsDecisionOnly)}`);
+}
+
+// A terminal signal row (a surfaced done or failed, marked `terminal:` by the
+// watcher) is main-only while attended for the same reason: excluded from
+// eligibleSeqs, named in terminalKeys, never a veto, never corruption. Its
+// own triggering close, whose batch names the task, is refused to the
+// attended branch, while the away posture claims the row like any other.
+writeFileSync(
+  `${state}/.wake-queue`,
+  [
+    "1\t1\tsignal\ttask-a.status\tterminal: task-a.status task-a.turn-ended",
+    "1\t2\tstale\tfm-window\tstale: later routine reminder",
+  ].join("\n"),
+);
+const terminalMixed = scopeForUnreadWake(state, false);
+if (!terminalMixed.eligible || terminalMixed.eligibleSeqs.join(",") !== "2") {
+  throw new Error(`a terminal row must be excluded without erasing a later stale row: ${JSON.stringify(terminalMixed)}`);
+}
+if (terminalMixed.terminalKeys.join(",") !== "task-a.status" || terminalMixed.needsDecisionKeys.length !== 0) {
+  throw new Error(`terminalKeys must name the excluded terminal row and nothing else: ${JSON.stringify(terminalMixed)}`);
+}
+if (terminalMixed.corrupted) throw new Error(`a terminal row must not read as corrupted: ${JSON.stringify(terminalMixed)}`);
+if (branchOfferForWake(state, `signal: ${state}/task-a.status ${state}/task-a.turn-ended`, false).eligible) {
+  throw new Error("a terminal trigger was offered to the attended branch");
+}
+if (branchOfferForWake(state, `signal: ${state}/task-a.status`, false, true).eligible) {
+  throw new Error("a terminal trigger was offered to the attended host");
+}
+const terminalAway = scopeForUnreadWake(state, false, true);
+if (terminalAway.eligibleSeqs.join(",") !== "1,2" || !branchOfferForWake(state, `signal: ${state}/task-a.status`, true).eligible) {
+  throw new Error(`away, a terminal row is claimed like any other task-local row: ${JSON.stringify(terminalAway)}`);
+}
+writeFileSync(`${state}/.wake-queue`, "1\t1\tsignal\ttask-a.status\tterminal: task-a.status");
+const terminalOnly = scopeForUnreadWake(state, false);
+if (terminalOnly.eligible || terminalOnly.eligibleSeqs.length !== 0 || terminalOnly.corrupted) {
+  throw new Error(`a terminal-only queue must be ordinary main-only absence: ${JSON.stringify(terminalOnly)}`);
 }
 
 // A captain-held task's bounded stale recheck is itself a decision wake. It is

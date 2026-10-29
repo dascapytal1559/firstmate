@@ -254,6 +254,48 @@ fm_backend_t3code_thread_state() {  # <thread-id>
   fm_backend_t3code_mcp state --thread "$1"
 }
 
+# fm_backend_t3code_run_state: the thread's run facts the supervisor binds a
+# worker's surfaced status to, as one TAB-separated line:
+#   <activeRunId>\t<latestRunId>\t<latestRunStatus>\t<latestRunError>\t<runs>
+# where <runs> is the newest runs as `id:status` pairs joined by `,` (newest
+# first) and an absent value is empty. Fails when the thread is unreadable or
+# the verified server does not have it, so a caller never binds to a guess.
+fm_backend_t3code_run_state() {  # <thread-id>
+  local out
+  out=$(fm_backend_t3code_thread_state "$1" 2>/dev/null) || return 1
+  # shellcheck disable=SC2016  # ${...} belongs to the Node snippet.
+  printf '%s' "$out" | node -e '
+let d;
+try { d = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch { process.exit(1); }
+if (!d || d.ok !== true || d.exists !== true) process.exit(1);
+const clean = (v) => (v === undefined || v === null ? "" : String(v).replace(/[\t\r\n]/g, " "));
+const runs = (Array.isArray(d.runs) ? d.runs : []).map((r) => `${clean(r?.runId)}:${clean(r?.status)}`).join(",");
+process.stdout.write([clean(d.activeRunId), clean(d.latestRunId), clean(d.latestRunStatus), clean(d.latestRunError), runs].join("\t"));
+' 2>/dev/null
+}
+
+# fm_backend_t3code_wait_turn_end: 0 when the thread has no active run, or
+# its active run reaches a terminal status within <secs>; 1 when that run is
+# still active afterwards (FM_BACKEND_T3CODE_RUNNING_RUN names it); 2 when the
+# thread cannot be read, which decides nothing. Teardown uses this so a close
+# never interrupts a turn that is about to end on its own
+# (docs/t3code-backend.md "Current lifecycle and safety").
+fm_backend_t3code_wait_turn_end() {  # <thread-id> <secs>
+  local thread=$1 secs=$2 out active ms
+  FM_BACKEND_T3CODE_RUNNING_RUN=
+  out=$(fm_backend_t3code_thread_state "$thread" 2>/dev/null) || return 2
+  [ "$(printf '%s' "$out" | fm_backend_t3code_json_get exists 2>/dev/null)" = true ] || return 0
+  active=$(printf '%s' "$out" | fm_backend_t3code_json_get activeRunId 2>/dev/null) || return 0
+  [ -n "$active" ] || return 0
+  ms=$(awk -v s="$secs" 'BEGIN { v = int(s * 1000); if (v < 1) v = 1; printf "%d", v }')
+  out=$(fm_backend_t3code_mcp wait --thread "$thread" --run "$active" --timeout-ms "$ms" 2>/dev/null) || return 2
+  if [ "$(printf '%s' "$out" | fm_backend_t3code_json_get timedOut 2>/dev/null)" = true ]; then
+    FM_BACKEND_T3CODE_RUNNING_RUN=$active
+    return 1
+  fi
+  return 0
+}
+
 # fm_backend_t3code_probe: one word naming the thread's row in the status
 # table, from its V2 thread status: blocked (any pending runtime request: a
 # question or a permission approval waits on a human), idle, starting
@@ -465,13 +507,34 @@ fm_backend_t3code_answer_request() {  # <thread-id> <request-id> <answers-json-f
 # recorded T3 worker: a new or changed pending request is the actionable
 # `blocked` edge, escalated once per request signature; a run reaching a
 # terminal status ends the wait early so the poll loop reconciles that turn at
-# once; and with no active run the wait sleeps its budget rather than
-# re-arming, so idle threads never spin. The poll loop remains the backstop.
+# once, and that run's terminal status is kept in the thread's run-ended
+# record (fm_backend_t3code_run_ended_record) rather than discarded, so the
+# watcher can tell a run that failed or was interrupted after a worker's
+# `done` from one that completed; the same call races a change to a status or
+# turn-end file in the state directory (`watch --state-dir`), so a worker's
+# own append ends the wait within milliseconds instead of at T3's run end.
+# With no active run the wait holds on the state directory for its budget,
+# so idle threads never spin. The poll loop remains the backstop.
 
 FM_BACKEND_T3CODE_ESCALATED_PREFIX=.t3code-escalated-
+FM_BACKEND_T3CODE_RUN_ENDED_PREFIX=.t3code-run-ended-
 
 fm_backend_t3code_escalation_marker() {  # <state_dir> <thread-id>
   printf '%s/%s%s' "$1" "$FM_BACKEND_T3CODE_ESCALATED_PREFIX" "$(printf '%s' "$2" | tr ':/.' '___')"
+}
+
+# One record per thread, replaced on every run the event wait saw end:
+#   <runId>\t<status>\t<epoch>
+# Teardown removes it with the task's other volatile state.
+fm_backend_t3code_run_ended_record() {  # <state_dir> <thread-id>
+  printf '%s/%s%s' "$1" "$FM_BACKEND_T3CODE_RUN_ENDED_PREFIX" "$(printf '%s' "$2" | tr ':/.' '___')"
+}
+
+fm_backend_t3code_run_ended_write() {  # <state_dir> <thread-id> <run-id> <status>
+  local record tmp
+  record=$(fm_backend_t3code_run_ended_record "$1" "$2")
+  tmp="$record.tmp.${BASHPID:-$$}"
+  { printf '%s\t%s\t%s\n' "$3" "$4" "$(date +%s)" > "$tmp" && mv -f "$tmp" "$record"; } || { rm -f "$tmp"; return 1; }
 }
 
 fm_backend_t3code_events_capable() {  # <session>
@@ -480,12 +543,14 @@ fm_backend_t3code_events_capable() {  # <session>
 
 # fm_backend_t3code_wait_transition: 0 with a normalized `blocked` record
 # (pane_id = thread id, workspace_id = request signature) on a fresh pending
-# request; 1 when a run ended, the budget passed, or nothing was running (the
-# budget is slept); 2 when the server could not be read.
+# request; 1 when a run ended (its terminal status written to the thread's
+# run-ended record first), a status or turn-end file changed, the budget
+# passed, or nothing was running (the budget is slept); 2 when the server
+# could not be read.
 fm_backend_t3code_wait_transition() {  # <session> <timeout_secs> <state_dir> <thread...>
   local timeout=$2 state=$3 thread marker out
   shift 3
-  local -a args=(watch --timeout-ms "$(awk -v s="$timeout" 'BEGIN { printf "%d", s * 1000 }')")
+  local -a args=(watch --timeout-ms "$(awk -v s="$timeout" 'BEGIN { printf "%d", s * 1000 }')" --state-dir "$state")
   for thread in "$@"; do
     args+=(--thread "$thread")
     marker=$(fm_backend_t3code_escalation_marker "$state" "$thread")
@@ -497,16 +562,18 @@ fm_backend_t3code_wait_transition() {  # <session> <timeout_secs> <state_dir> <t
 const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
 for (const id of d.cleared ?? []) console.log(`cleared\t${id}`);
 if (d.event === "blocked") console.log(`blocked\t${d.threadId}\t${d.signature}`);
+else if (d.event === "run-ended") console.log(`run-ended\t${d.threadId}\t${d.runId}\t${d.status}`);
 else console.log(`event\t${d.event}`);
 ') || return 2
-  local kind a b
-  while IFS=$'\t' read -r kind a b; do
+  local kind a b c
+  while IFS=$'\t' read -r kind a b c; do
     case "$kind" in
       cleared) rm -f "$(fm_backend_t3code_escalation_marker "$state" "$a")" ;;
       blocked)
         fm_transition_record "$a" "$b" "" blocked t3code
         return 0
         ;;
+      run-ended) fm_backend_t3code_run_ended_write "$state" "$a" "$b" "$c" || true ;;
       event) [ "$a" != none ] || sleep "$timeout" ;;
     esac
   done <<< "$out"

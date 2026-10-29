@@ -933,6 +933,70 @@ test_both_generations_pick_the_working_tools() {
   pass "fm-t3-mcp gate: with both generations offered, the configuration read stays on the dedicated tool and pending requests use the merged tool"
 }
 
+test_state_reports_runs_and_the_failed_run_error() {
+  fresh_case state-runs
+  t3_fake_set 'w.threads = { "thread-r": { threadId: "thread-r", projectId: "p", status: "failed", activeRunId: null, archived: false, worktreePath: null,
+    items: [{ type: "user_message", status: "completed", text: "go" }, { type: "error", status: "completed", text: "usage limit reached; resets at 12:00Z" }],
+    runs: [{ runId: "run-2", ordinal: 2, status: "failed", completedAt: "2026-10-29T10:00:00.000Z" }, { runId: "run-1", ordinal: 1, status: "completed", completedAt: "2026-10-29T09:00:00.000Z" }] } }'
+  mcp state --thread thread-r
+  expect_code 0 "$RC" "state: $ERR"
+  assert_equals run-2 "$(field "$OUT" latestRunId)" "state names the latest run"
+  assert_equals failed "$(field "$OUT" latestRunStatus)" "state reports the latest run's status"
+  assert_equals 'usage limit reached; resets at 12:00Z' "$(field "$OUT" latestRunError)" "a failed latest run carries its error item's message"
+  assert_equals run-2 "$(field "$OUT" runs.0.runId)" "the runs list starts with the newest"
+  assert_equals completed "$(field "$OUT" runs.1.status)" "the runs list carries each run's status"
+  t3_fake_set 'w.threads["thread-r"].runs[0].status = "completed"; w.threads["thread-r"].status = "completed"'
+  mcp state --thread thread-r
+  assert_equals completed "$(field "$OUT" latestRunStatus)" "a completed latest run reads completed"
+  assert_equals "" "$(field "$OUT" latestRunError)" "a completed latest run carries no error, whatever older items say"
+  pass "fm-t3-mcp state: latest run id and status, the recent runs, and a failed run's error message"
+}
+
+test_watch_state_dir_races_the_run_wait() {
+  local dir started elapsed bg_pid
+  fresh_case watch-state-dir
+  dir="$TMP_ROOT/cases/watch-state-dir/state"
+  mkdir -p "$dir"
+  t3_fake_set 'w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+    runs: [{ runId: "run-w", ordinal: 1, status: "running" }] } }'
+  ( sleep 0.5; printf 'done: ready\n' >> "$dir/task.status" ) &
+  bg_pid=$!
+  started=$(date +%s)
+  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$RC" "watch with a state dir: $ERR"
+  assert_equals state-changed "$(field "$OUT" event)" "a status append ends the wait while the run still runs"
+  assert_equals task.status "$(field "$OUT" name)" "the changed entry is named"
+  [ "$elapsed" -lt 10 ] || fail "the status append must end the wait promptly, took ${elapsed}s"
+  ( sleep 0.3; t3_fake_set 'w.threads["thread-w"].runs[0].status = "failed"; w.threads["thread-w"].activeRunId = null; w.threads["thread-w"].status = "failed"' ) &
+  bg_pid=$!
+  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
+  wait "$bg_pid"
+  assert_equals run-ended "$(field "$OUT" event)" "a run's end still ends the wait"
+  assert_equals failed "$(field "$OUT" status)" "the ended run's terminal status is carried"
+  : > "$T3_FAKE_LOG"
+  ( sleep 0.3; printf 'v2' > "$dir/.seen-task_status" ) &
+  bg_pid=$!
+  mcp watch --thread thread-w --timeout-ms 1200 --state-dir "$dir"
+  wait "$bg_pid"
+  assert_equals timeout "$(field "$OUT" event)" "with no active run the watch holds for its budget, ignoring this home's own bookkeeping, instead of answering none"
+  [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "an idle watch must still not call t3_thread_wait"
+  ( sleep 0.3; touch "$dir/task.turn-ended" ) &
+  bg_pid=$!
+  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
+  wait "$bg_pid"
+  assert_equals state-changed "$(field "$OUT" event)" "a turn-end touch ends the wait"
+  assert_equals task.turn-ended "$(field "$OUT" name)" "the touched turn-end is named"
+  t3_fake_set 'w.threads["thread-w"].runtimeRequests = [{ id: "req-1", kind: "user_input", status: "pending", questions: [] }]'
+  mcp watch --thread thread-w --timeout-ms 200 --state-dir "$dir"
+  assert_equals blocked "$(field "$OUT" event)" "a pending request still wins before any wait"
+  mcp watch --thread thread-w --timeout-ms 400 --state-dir "$TMP_ROOT/cases/watch-state-dir/absent" --escalated "thread-w=$(field "$OUT" signature)"
+  expect_code 0 "$RC" "an unwatchable state dir must not fail the watch: $ERR"
+  assert_equals timeout "$(field "$OUT" event)" "an unwatchable state dir waits out the budget instead of answering at once"
+  pass "fm-t3-mcp watch --state-dir: a status or turn-end change ends the wait, a run end and a pending request still win, and an idle thread holds for the budget"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
@@ -970,3 +1034,5 @@ test_jsonrpc_server_error_is_not_proven_refusal
 test_orchestration_error_is_not_proven_refusal
 test_long_wait_rearms_in_slices
 test_capture_clamps_lines_and_closes_session
+test_state_reports_runs_and_the_failed_run_error
+test_watch_state_dir_races_the_run_wait

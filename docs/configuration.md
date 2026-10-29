@@ -2191,6 +2191,7 @@ The dashboard owns account creation, identity linking, bot installation, and tok
 The locked session-start bootstrap step turns the token into local generated state.
 It writes `state/x-watch.check.sh`, a byte-static identity shim for `bin/fm-x-poll.sh`, and `config/x-mode.env`, which exports `FM_CHECK_INTERVAL=30` for watcher processes in that home.
 Independent home-local watcher overrides belong in `config/watch.env` as exported shell assignments; `bin/fm-watch-arm.sh` loads it before `config/x-mode.env`, so Relay retains its required cadence and bootstrap never removes non-Relay tuning. Only watchers started through that arm read it: the Codex checkpoint route (`bin/fm-watch-checkpoint.sh` with no `config/supervision-host`) and the away-mode daemon (`bin/fm-supervise-daemon.sh`) start `bin/fm-watch.sh` directly and use the watcher defaults.
+`FM_POLL` bounds the cycle's terminal wait rather than setting a worker's handoff latency: the wait ends on a status or turn-end change in the state directory, and on T3 on a run's end, so a shorter poll buys little, and `FM_SIGNAL_GRACE` applies only to a signal batch with no captain-relevant event ([`watcher-continuity.md`](watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path)).
 
 The watcher accepts the shim only when its bytes match the expected generated content, then invokes the trusted repository poll script directly instead of executing state-file source.
 This section owns the Relay cadence contract:
@@ -3075,7 +3076,9 @@ FM_WATCH_CYCLE_LOG_KEEP_LINES=1000   # newest complete lifecycle rows considered
 FM_WATCH_EXTENSION_LOG_KEEP_LINES=0   # opt-in Pi extension diagnostic log (state/.watch-extension.log); unset, empty, non-numeric, zero, or negative disables logging, a positive value keeps that many newest rows; logging never changes supervision behavior
 FM_WATCHER_STALE_GRACE=300   # defaults to FM_GUARD_GRACE if set, else the poll-derived grace (docs/turnend-guard.md "Guard grace and the poll cadence"); seconds before a fresh arm refuses a live holder's stale beacon (attached arms: FM_WATCHER_STALL_BOUND)
 FM_WATCHER_STALL_BOUND=       # live-holder stall bound; default and arm/re-arm behavior: docs/turnend-guard.md "Guard grace and the poll cadence"
-FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals into one wake
+FM_SIGNAL_GRACE=30      # seconds to coalesce a no-verb status signal (a working: note) with its turn-end into one wake; a captain-relevant span (done, failed, needs-decision, blocked) closes the cycle at once and its trailing turn-end is absorbed on proof instead (docs/watcher-continuity.md "Signal coalescing and the terminal fast path")
+FM_STATE_EVENT_WAIT=1   # 0 makes the poll-only terminal wait a plain sleep of FM_POLL instead of a watch on the state directory for status and turn-end changes (bin/fm-state-watch.mjs); the T3 wait's state-directory race is unaffected
+FM_TEARDOWN_TURN_WAIT_SECS=30   # seconds bin/fm-teardown.sh waits for a ship or scout's still-running T3 turn to end before refusing (without --force) rather than interrupting it; docs/t3code-backend.md "Current lifecycle and safety"
 FM_WATCHER_CLEANUP_LOCK_BOUND=   # optional watcher EXIT marker-lock wait; default and validation: docs/watcher-continuity.md
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches

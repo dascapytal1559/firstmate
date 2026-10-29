@@ -1996,8 +1996,9 @@ test_ordinary_blocked_signal_payload_remains_branch_eligible() {
   pass "an ordinary blocked event remains branch-eligible"
 }
 
-# A routine (non-needs-decision) captain-relevant event must keep its ordinary
-# payload: only a genuine needs-decision gets the exclusion marker.
+# A captain-relevant event that merely mentions a decision in its note is not a
+# decision: only a genuine needs-decision gets that exclusion marker. A done is
+# a terminal event, so its row carries the terminal: marker instead.
 test_routine_signal_payload_not_marked_needs_decision() {
   local dir state fakebin out status_file pid
   dir=$(make_case routine-signal-payload); state="$dir/state"; fakebin="$dir/fakebin"
@@ -2008,10 +2009,10 @@ test_routine_signal_payload_not_marked_needs_decision() {
   pid=$!
   wait_for_exit "$pid" 100 || fail "watcher did not exit for an actionable done signal"
   grep -F "$(printf 'signal\ttask.status\tneeds-decision:')" "$state/.wake-queue" >/dev/null \
-    && fail "a routine done signal was incorrectly payload-marked needs-decision: $(cat "$state/.wake-queue")"
-  grep -F "$(printf 'signal\ttask.status\tsignal:')" "$state/.wake-queue" >/dev/null \
-    || fail "a routine signal lost its ordinary payload: $(cat "$state/.wake-queue")"
-  pass "a routine event containing a needs-decision phrase keeps its ordinary payload, unmarked"
+    && fail "a done signal was incorrectly payload-marked needs-decision: $(cat "$state/.wake-queue")"
+  grep -F "$(printf 'signal\ttask.status\tterminal:')" "$state/.wake-queue" >/dev/null \
+    || fail "a done signal lost its terminal payload: $(cat "$state/.wake-queue")"
+  pass "a done whose note mentions a decision is marked terminal:, never needs-decision:"
 }
 
 # The reported bug, end to end through a real watcher: a crew reports something
@@ -4874,6 +4875,312 @@ if [ -n "${FM_TEST_ONLY:-}" ]; then
   exit 0
 fi
 
+# --- classify first, absorb on proof (docs/watcher-continuity.md "Signal
+# coalescing and the terminal fast path") --------------------------------------
+# A captain-relevant span closes the cycle the moment it is scanned, without the
+# signal grace, and the watcher records which turn wrote it. The turn-end that
+# follows is absorbed only on the turn-end scout's proof; every unproven shape
+# surfaces exactly as a bare turn-end always did.
+
+# A ship task on tmux whose busy record was opened by the Claude hook (one
+# turn is one open and one close), rendering a quiet pane the stale backbone
+# has already classified, so only the signals under test can wake the watcher.
+# The armed incarnation the Stop hook must present is the task's busy-gen
+# sidecar (state/<task>.busy-gen), read by the caller.
+claude_turn_fixture() {  # <case-name> <task> -> prints the case dir
+  local name=$1 task=$2 dir state window key text
+  dir=$(make_case "$name"); state="$dir/state"
+  window="test:fm-$task"
+  printf 'window=%s\nkind=ship\nharness=claude\n' "$window" > "$state/$task.meta"
+  text='> waiting at the prompt'
+  printf '%s' "$text" > "$dir/pane.txt"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf '%s' "$(hash_text "$text")" > "$state/.hash-$key"
+  printf '2\n' > "$state/.count-$key"
+  printf '%s' "$(hash_text "$text")" > "$state/.stale-$key"
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" "$task" busy --gen "$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$task")" \
+    --source claude-hook --event user-prompt-submit >/dev/null
+  printf '%s\n' "$dir"
+}
+
+# One watcher round over the fixture's recorded window; prints nothing, sets
+# CLAUDE_TURN_PID.
+claude_turn_watch() {  # <dir> <task> <out> [env...]
+  local dir=$1 task=$2 out=$3
+  shift 3
+  watch_bg "$dir/state" "$dir/fakebin" "$out" env FM_FAKE_TMUX_WINDOW="test:fm-$task" \
+    FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" "$@"
+  CLAUDE_TURN_PID=$!
+}
+
+# Surface the task's captain-relevant append through the fast path, prove it
+# printed and queued, acknowledge it, and clear the output for the next round.
+claude_turn_surface() {  # <dir> <task> <out>
+  local dir=$1 task=$2 out=$3
+  claude_turn_watch "$dir" "$task" "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "watcher did not surface $task's status: $(cat "$out")"
+  grep -F "signal: $dir/state/$task.status" "$out" >/dev/null \
+    || fail "watcher did not print $task's status signal: $(cat "$out")"
+  ack_stopped_cycle "$dir/state" || fail "could not acknowledge $task's surfaced status"
+  : > "$out"
+}
+
+# The Stop hook of a turn: close the busy record at the next sequence and touch
+# the turn-end notification, exactly as bin/fm-spawn.sh wires it.
+claude_turn_stop() {  # <state> <task> <gen> [event]
+  local state=$1 task=$2 gen=$3 event=${4:-stop}
+  if [ "$event" = stop ]; then
+    "$ROOT/bin/fm-busy-event.sh" apply "$state" "$task" idle --gen "$gen" \
+      --source claude-hook --event stop --turn-ended >/dev/null
+  else
+    "$ROOT/bin/fm-busy-event.sh" apply "$state" "$task" idle --gen "$gen" \
+      --source claude-hook --event "$event" >/dev/null
+  fi
+}
+
+proof_field() {  # <proof-record> <key>
+  sed -n "s/^$2=//p" "$1" | head -n 1
+}
+
+test_done_signal_closes_the_cycle_without_the_linger() {
+  local dir state fakebin out pid started elapsed
+  dir=$(make_case done-no-linger); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  printf 'done [at=%s]: ready in branch fm/task\n' "$(date +%s)" > "$state/task.status"
+  started=$(date +%s)
+  watch_bg "$state" "$fakebin" "$out" env FM_SIGNAL_GRACE=30
+  pid=$!
+  wait_for_exit "$pid" 150 || fail "a done append did not close the cycle inside the 30s grace: $(cat "$out")"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 25 ] || fail "a done append waited for the signal grace (${elapsed}s)"
+  grep -F "signal: $state/task.status" "$out" >/dev/null || fail "the done did not print its signal reason: $(cat "$out")"
+  grep -F "$(printf 'signal\ttask.status\tterminal:')" "$state/.wake-queue" >/dev/null \
+    || fail "a done signal row was not payload-marked terminal: $(cat "$state/.wake-queue")"
+  pass "a captain-relevant done closes the cycle at once, without the signal grace, and its row is marked terminal:"
+}
+
+test_working_signal_still_lingers_for_the_grace() {
+  local dir state fakebin out pid started elapsed
+  dir=$(make_case working-still-lingers); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  printf 'working [at=%s]: compiling step 2\n' "$(date +%s)" > "$state/task.status"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+  watch_bg "$state" "$fakebin" "$out" env FM_SIGNAL_GRACE=4
+  pid=$!
+  wait_for_watcher_lock "$pid" "$state" || fail "the watcher never took its lock"
+  started=$(date +%s)
+  wait_for_exit "$pid" 250 || fail "a working: append whose crew is not provably working did not surface: $(cat "$out")"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -ge 3 ] || fail "a no-verb working: append skipped the signal grace (${elapsed}s)"
+  grep -F "signal: $state/task.status" "$out" >/dev/null || fail "the working: append did not print its signal reason: $(cat "$out")"
+  grep -F "$(printf 'signal\ttask.status\tsignal:')" "$state/.wake-queue" >/dev/null \
+    || fail "a no-verb row must keep the ordinary payload: $(cat "$state/.wake-queue")"
+  unset FM_FAKE_CREW_STATE
+  pass "a no-verb working: append still lingers for the signal grace before it surfaces"
+}
+
+test_done_then_clean_turn_end_absorbed_on_proof() {
+  local dir state out gen proof before
+  dir=$(claude_turn_fixture done-turn-end-proof shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  proof="$state/.surfaced-turn-shipdone"
+  [ -f "$proof" ] || fail "surfacing a done did not record the turn that wrote it"
+  [ "$(proof_field "$proof" proof)" = claude-busy ] || fail "the proof did not bind the Claude busy record: $(cat "$proof")"
+  [ "$(proof_field "$proof" turn)" = 2 ] || fail "the proof did not record the open turn's sequence: $(cat "$proof")"
+  [ "$(proof_field "$proof" turn_state)" = busy ] || fail "the proof did not record the turn as open: $(cat "$proof")"
+  [ "$(proof_field "$proof" verb)" = 'done' ] || fail "the proof did not record the surfaced verb: $(cat "$proof")"
+  [ "$(proof_field "$proof" settled)" = 0 ] || fail "a fresh proof must still be watching its turn: $(cat "$proof")"
+  # The same turn ends cleanly: the Stop hook touches the turn-end and closes the
+  # busy record at the next sequence.
+  claude_turn_stop "$state" shipdone "$gen"
+  before=$(file_mtime "$state/shipdone.turn-ended")
+  claude_turn_watch "$dir" shipdone "$out"
+  if ! wait_for_absorbed "$state" "$CLAUDE_TURN_PID" "absorbed turn-end on proof"; then
+    reap "$CLAUDE_TURN_PID"; fail "the same turn's clean turn-end was not absorbed on proof: $(cat "$out")"$'\n'"$(cat "$state/.watch-triage.log" 2>/dev/null)"
+  fi
+  grep -F "shipdone: surfaced done, Claude Stop closed busy seq 3, no status bytes or steer since, current state done" "$state/.watch-triage.log" >/dev/null \
+    || fail "the triage line did not name the proof: $(cat "$state/.watch-triage.log")"
+  [ ! -s "$out" ] || fail "a proven turn-end printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a proven turn-end queued a wake: $(cat "$state/.wake-queue")"
+  [ -s "$state/.seen-shipdone_turn-ended" ] || fail "the absorb did not advance the turn-end's seen signature"
+  [ "$(file_mtime "$state/shipdone.turn-ended")" = "$before" ] || fail "the absorb touched the turn-end file (the busy-turn clock)"
+  [ "$(proof_field "$proof" settled)" = 1 ] || fail "a cleanly ended turn did not settle its proof: $(cat "$proof")"
+  reap "$CLAUDE_TURN_PID"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then the same turn's clean turn-end: one wake, the turn-end absorbed on proof with its evidence logged and the file untouched"
+}
+
+test_done_then_steer_then_turn_end_surfaces() {
+  local dir state out gen
+  dir=$(claude_turn_fixture done-steer-turn-end shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  # A steer lands after the surface (the parksim seq 1285 shape): whatever turn
+  # ended after it is a different event, even with no new status line.
+  sleep 1
+  mkdir -p "$state/shipdone.inbox/handled"
+  printf 'also add the tunnel follow-up\n' > "$state/shipdone.inbox/001.msg"
+  claude_turn_stop "$state" shipdone "$gen"
+  claude_turn_watch "$dir" shipdone "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a turn-end after a steer was absorbed: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  grep -F "signal: $state/shipdone.turn-ended" "$out" >/dev/null || fail "the post-steer turn-end did not surface as a signal: $(cat "$out")"
+  ! grep -F "absorbed turn-end on proof" "$state/.watch-triage.log" >/dev/null 2>&1 || fail "a turn-end after a steer was logged as proven"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then a steer, then a turn-end: the turn-end surfaces (a steer breaks the proof)"
+}
+
+test_done_then_appended_working_then_turn_end_surfaces() {
+  local dir state out gen
+  dir=$(claude_turn_fixture done-working-turn-end shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  printf 'working [at=%s]: tidying the branch\n' "$(date +%s)" >> "$state/shipdone.status"
+  claude_turn_stop "$state" shipdone "$gen"
+  claude_turn_watch "$dir" shipdone "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a status append plus turn-end was absorbed: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  if ! grep -F "$state/shipdone.status" "$out" >/dev/null || ! grep -F "$state/shipdone.turn-ended" "$out" >/dev/null; then
+    fail "the appended status and its turn-end did not surface together: $(cat "$out")"
+  fi
+  ! grep -F "absorbed turn-end on proof" "$state/.watch-triage.log" >/dev/null 2>&1 || fail "a batch holding a status append was logged as a proven turn-end"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then an appended working: line, then a turn-end: the batch surfaces through the provably-working check, never the proof"
+}
+
+test_done_then_failed_is_a_second_captain_wake() {
+  local dir state out
+  dir=$(claude_turn_fixture done-then-failed shipdone); state="$dir/state"; out="$dir/watch.out"
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  printf 'failed [at=%s]: the follow-up broke the tests\n' "$(date +%s)" >> "$state/shipdone.status"
+  claude_turn_watch "$dir" shipdone "$out" FM_SIGNAL_GRACE=30
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a failed after a done did not wake at once: $(cat "$out")"
+  grep -F "signal: $state/shipdone.status" "$out" >/dev/null || fail "the failed did not print its signal reason: $(cat "$out")"
+  grep -F "$(printf 'signal\tshipdone.status\tterminal:')" "$state/.wake-queue" >/dev/null \
+    || fail "a failed signal row was not payload-marked terminal: $(cat "$state/.wake-queue")"
+  [ "$(proof_field "$state/.surfaced-turn-shipdone" verb)" = failed ] || fail "the proof did not move to the newest surfaced record"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then failed: a second captain-relevant wake, at once, marked terminal:"
+}
+
+test_done_with_unlanded_head_then_turn_end_surfaces() {
+  local dir state out gen
+  dir=$(claude_turn_fixture done-unlanded-head shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: blocked · source: status-log · done names a head that is not on the shared branch'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  claude_turn_stop "$state" shipdone "$gen"
+  claude_turn_watch "$dir" shipdone "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a turn-end was absorbed while the current state disagreed with the done: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  grep -F "signal: $state/shipdone.turn-ended" "$out" >/dev/null || fail "the turn-end did not surface: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "done whose named head is not landed, then a turn-end: the turn-end surfaces (current state must agree)"
+}
+
+test_done_then_a_steered_turn_breaks_the_sequence_chain() {
+  local dir state out gen
+  dir=$(claude_turn_fixture done-seq-chain shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  # The captain typed into the worker's pane: a second turn opened and closed
+  # with no steering-inbox record, so only the busy sequence can tell.
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" shipdone busy --gen "$gen" --source claude-hook --event user-prompt-submit >/dev/null
+  claude_turn_stop "$state" shipdone "$gen"
+  claude_turn_watch "$dir" shipdone "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a turn-end two sequences past the surfaced turn was absorbed: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  grep -F "signal: $state/shipdone.turn-ended" "$out" >/dev/null || fail "the later turn's turn-end did not surface: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then a second turn opened by hand: its turn-end surfaces (the sequence chain is broken)"
+}
+
+test_done_then_stop_failure_reports_the_bad_ending_once() {
+  local dir state out gen proof
+  dir=$(claude_turn_fixture done-stop-failure shipdone); state="$dir/state"; out="$dir/watch.out"; gen=$(cat "$dir/state/shipdone.busy-gen")
+  export FM_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/shipdone'
+  printf 'done [at=%s]: ready in branch fm/shipdone\n' "$(date +%s)" > "$state/shipdone.status"
+  claude_turn_surface "$dir" shipdone "$out"
+  # The turn ends on an API error: Claude fires StopFailure, touches nothing.
+  claude_turn_stop "$state" shipdone "$gen" stop-failure
+  claude_turn_watch "$dir" shipdone "$out"
+  wait_for_exit "$CLAUDE_TURN_PID" 150 || fail "a StopFailure after a surfaced done was not reported: $(cat "$state/.watch-triage.log" 2>/dev/null)"
+  grep -F "check: worker turn ended failed after done: shipdone (Claude StopFailure)" "$out" >/dev/null \
+    || fail "the bad ending was not reported with its cause: $(cat "$out")"
+  grep -F "$(printf 'check\tturn-ended-failed-shipdone\tcheck: worker turn ended failed after done: shipdone')" "$state/.wake-queue" >/dev/null \
+    || fail "the bad ending was not durably queued as a check: $(cat "$state/.wake-queue")"
+  proof="$state/.surfaced-turn-shipdone"
+  if [ "$(proof_field "$proof" settled)" != 1 ] || [ "$(proof_field "$proof" run_status)" != failed ]; then
+    fail "the bad ending did not settle its proof: $(cat "$proof")"
+  fi
+  ack_stopped_cycle "$state" || fail "could not acknowledge the bad-ending wake"
+  : > "$out"
+  claude_turn_watch "$dir" shipdone "$out"
+  if ! wait_poll_cycle "$state" "$CLAUDE_TURN_PID"; then
+    reap "$CLAUDE_TURN_PID"; fail "a settled bad ending was reported again: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "a settled bad ending queued a second wake: $(cat "$state/.wake-queue")"
+  reap "$CLAUDE_TURN_PID"
+  unset FM_FAKE_CREW_STATE
+  pass "done, then Claude's StopFailure: one check wake names the task, the verb, and the cause, and it is never repeated"
+}
+
+test_state_watch_returns_on_an_append_and_on_timeout() {
+  local dir state out rc started elapsed bg_pid
+  dir=$(make_case state-watch-helper); state="$dir/state"
+  ( sleep 0.4; printf 'working: x\n' >> "$state/x.status" ) &
+  bg_pid=$!
+  started=$(date +%s)
+  out=$(node "$ROOT/bin/fm-state-watch.mjs" --dir "$state" --timeout-ms 10000); rc=$?
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$rc" "the state watch must exit cleanly on a change: $out"
+  case "$out" in
+    *'"event":"state-changed"'*'"name":"x.status"'*) ;;
+    *) fail "a status append must end the watch as state-changed, got '$out'" ;;
+  esac
+  [ "$elapsed" -lt 8 ] || fail "a status append did not end the watch promptly (${elapsed}s)"
+  ( sleep 0.3; printf 'v2' > "$state/.seen-x_status"; printf 'beat' > "$state/.last-watcher-beat" ) &
+  bg_pid=$!
+  out=$(node "$ROOT/bin/fm-state-watch.mjs" --dir "$state" --timeout-ms 1500); rc=$?
+  wait "$bg_pid"
+  expect_code 0 "$rc" "the state watch must exit cleanly on timeout: $out"
+  case "$out" in
+    *'"event":"timeout"'*) ;;
+    *) fail "this home's own bookkeeping must not end the watch, got '$out'" ;;
+  esac
+  ( sleep 0.3; touch "$state/x.turn-ended" ) &
+  bg_pid=$!
+  out=$(node "$ROOT/bin/fm-state-watch.mjs" --dir "$state" --timeout-ms 10000); rc=$?
+  wait "$bg_pid"
+  case "$out" in
+    *'"event":"state-changed"'*'"name":"x.turn-ended"'*) ;;
+    *) fail "a turn-end touch must end the watch as state-changed, got '$out'" ;;
+  esac
+  out=$(node "$ROOT/bin/fm-state-watch.mjs" --dir "$dir/absent" --timeout-ms 200 2>/dev/null); rc=$?
+  expect_code 1 "$rc" "an unwatchable directory must fail so the caller sleeps instead: $out"
+  pass "fm-state-watch: a status append or turn-end touch ends the wait, bookkeeping and the timeout do not, and an unwatchable directory fails"
+}
+
+test_poll_only_wait_wakes_on_a_status_append() {
+  local dir state fakebin out pid i=0 started elapsed
+  dir=$(make_case poll-only-event-wait); state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"
+  watch_bg "$state" "$fakebin" "$out" env FM_POLL=8
+  pid=$!
+  wait_for_watcher_lock "$pid" "$state" || fail "the watcher never took its lock"
+  while [ ! -e "$state/.last-watcher-beat" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  # Let the first cycle reach its terminal wait before the append lands.
+  sleep 1.5
+  started=$(date +%s)
+  printf 'done [at=%s]: ready in branch fm/task\n' "$(date +%s)" > "$state/task.status"
+  wait_for_exit "$pid" 100 || fail "a done appended during the poll wait did not wake the watcher: $(cat "$out")"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 6 ] || fail "a status append waited for the poll interval instead of the state watch (${elapsed}s)"
+  grep -F "signal: $state/task.status" "$out" >/dev/null || fail "the appended done did not surface: $(cat "$out")"
+  pass "a poll-only home's terminal wait ends on the worker's own status append, not on the poll interval"
+}
+
 fm_test_run \
   test_status_span_actionable_classifier \
   test_status_span_survives_a_later_routine_append \
@@ -4993,4 +5300,15 @@ fm_test_run \
   test_exit_picker_wedge_keeps_climbing \
   test_quoted_exit_picker_stays_ordinary_stale \
   test_secondmate_exit_picker_stays_quiet \
-  test_closed_exit_picker_drops_saved_dialog_name
+  test_closed_exit_picker_drops_saved_dialog_name \
+  test_done_signal_closes_the_cycle_without_the_linger \
+  test_working_signal_still_lingers_for_the_grace \
+  test_done_then_clean_turn_end_absorbed_on_proof \
+  test_done_then_steer_then_turn_end_surfaces \
+  test_done_then_appended_working_then_turn_end_surfaces \
+  test_done_then_failed_is_a_second_captain_wake \
+  test_done_with_unlanded_head_then_turn_end_surfaces \
+  test_done_then_a_steered_turn_breaks_the_sequence_chain \
+  test_done_then_stop_failure_reports_the_bad_ending_once \
+  test_state_watch_returns_on_an_append_and_on_timeout \
+  test_poll_only_wait_wakes_on_a_status_append

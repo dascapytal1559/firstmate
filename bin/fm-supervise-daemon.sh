@@ -1736,9 +1736,10 @@ is_wake_reason() {  # <reason>
 
 # --- dispatch one wake reason to self-handle or escalate --------------------
 # Side effects: logging, marker records, escalation buffer appends.
-# A decision-owned queued row arrives as needs-decision:<files> rather than
-# signal:<files> (bin/fm-watch.sh). Classify it as a signal so the capture file
-# is populated, suppression markers commit, and the digest names the decision
+# A decision-owned queued row arrives as needs-decision:<files> and a terminal
+# (done or failed) one as terminal:<files> rather than signal:<files>
+# (bin/fm-watch.sh). Classify both as a signal so the capture file is
+# populated, suppression markers commit, and the digest names the event
 # instead of "unknown wake:".
 handle_wake() {  # <reason> <state>
   local reason=$1 state=$2 decision action distilled task last stale_detail dialog_name=''
@@ -1751,10 +1752,11 @@ handle_wake() {  # <reason> <state>
     return
   fi
   case "$reason" in
-    signal:*|needs-decision:*)
+    signal:*|needs-decision:*|terminal:*)
               kind=signal
               case "$reason" in
                 needs-decision:*) arg="${reason#needs-decision: }" ;;
+                terminal:*) arg="${reason#terminal: }" ;;
                 *) arg="${reason#signal: }" ;;
               esac
               decision=$(FM_STATUS_SPAN_ENDPOINT_FILE="$capture" classify_signal "$arg" "$state") ;;

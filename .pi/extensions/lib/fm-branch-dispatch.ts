@@ -131,6 +131,14 @@ export interface UnreadWakeScope {
    */
   needsDecisionKeys: string[];
   /**
+   * The exact "key" field of every terminal signal row this scan excluded: a
+   * row bin/fm-watch.sh marked `terminal:` because its surfaced span's first
+   * captain-relevant event is a done or failed. A finished worker is a captain
+   * outcome in every attended posture, so it stays main's exactly like a
+   * decision row; away, the branch takes it like any other task-local row.
+   */
+  terminalKeys: string[];
+  /**
    * The check-kind rows included in eligibleSeqs. Non-empty only in the away
    * posture, where the branch takes main's rows too; a check row names no
    * task, so a prompt that claims one is not scoped by task.
@@ -153,6 +161,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  terminalKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -165,6 +174,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  terminalKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -188,7 +198,10 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // for a task with an open needs-decision or a current captain-held declaration
 // gets the identical treatment: excluded from eligibleSeqs, never a scan veto,
 // and forced to main on its own triggering close (fm-primary-pi-watch.ts's
-// offerWakeToBranch). Heartbeat handling remains independent.
+// offerWakeToBranch). So does a signal row marked "terminal:" (a surfaced
+// done or failed): the finished worker is the captain's outcome to read and
+// land, and routing it through a branch turn only delays that hand-back
+// (docs/supervision-host.md "Attended"). Heartbeat handling remains independent.
 //
 // That applies to a heartbeat review too, and it is the whole point: a
 // heartbeat used to be deferred to main merely because some unrelated check
@@ -416,6 +429,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
   const eligibleSeqs: string[] = [];
   const eligibleTasks = new Set<string>();
   const needsDecisionKeys: string[] = [];
+  const terminalKeys: string[] = [];
   const checkSeqs: string[] = [];
   const heartbeatSeqs: string[] = [];
   const staleDecisionOwnership = new Map<string, boolean>();
@@ -464,6 +478,12 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         // takes the decision row like any other task-local row; the guarded
         // scripts decide what it may do about it (bin/fm-lease-lib.sh).
         needsDecisionKeys.push(key);
+        if (!afk) continue;
+      } else if (/^terminal:/.test(payload)) {
+        // Main-owned while attended for the same reason: a worker's done or
+        // failed is the captain outcome itself. Away, claimed like any other
+        // task-local row.
+        terminalKeys.push(key);
         if (!afk) continue;
       }
       task = key.replace(/\.(?:status|turn-ended)$/, "");
@@ -567,6 +587,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    terminalKeys,
     checkSeqs,
     heartbeatSeqs,
     taskByWakeKey: Object.fromEntries(taskByKey),
@@ -601,9 +622,11 @@ export interface BranchOfferVerdict {
 //
 // A signal close containing a needs-decision status file, or a stale close for
 // a captain-held task, gets the identical main-only treatment as a check-kind
-// trigger. The cross-reference deliberately includes every unread decision
-// row: until that row is read, a later signal or stale trigger for the same
-// task stays on main. Other tasks and heartbeat handling remain independent.
+// trigger, and so does a signal close containing a terminal (done or failed)
+// status file. The cross-reference deliberately includes every unread decision
+// or terminal row: until that row is read, a later signal or stale trigger for
+// the same task stays on main. Other tasks and heartbeat handling remain
+// independent.
 //
 // The away posture collapses that partition: every actionable row is
 // branch-eligible and the trigger class no longer forces anything to main
@@ -625,7 +648,9 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
   const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
   const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
-  const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
+  const terminalTasks = new Set(scope.terminalKeys.map(taskIdentity));
+  const isTerminalTrigger = triggerKeys.some((key) => terminalTasks.has(taskIdentity(key)));
+  const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && !isTerminalTrigger && (
     afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible
   );
   const eligible = afk ? scope.eligible : attendedEligible;

@@ -313,6 +313,10 @@
       "audience": "public-product"
     },
     {
+      "path": "devlog/index.md",
+      "audience": "public-product"
+    },
+    {
       "path": "docs/agent-control.md",
       "audience": "maintainer-architecture"
     },

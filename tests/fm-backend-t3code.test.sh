@@ -169,6 +169,18 @@ process.stdout.write(String(i + 1));
 }
 
 
+# t3_end_all_runs: every active run in the fake world completes, so a fixture
+# whose worker turn is over can be torn down without the turn guard waiting
+# (bin/fm-teardown.sh waits for a still-running turn and refuses otherwise).
+t3_end_all_runs() {
+  t3_fake_set 'const active = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+for (const t of Object.values(w.threads || {})) {
+  for (const r of t.runs || []) if (active.has(r.status)) { r.status = "completed"; r.completedAt = new Date().toISOString(); }
+  if (active.has(t.status)) t.status = "completed";
+  t.activeRunId = null;
+}'
+}
+
 t3_run() {  # <bash snippet run after sourcing fm-backend.sh with t3code loaded> [positional args...]
   local snippet=$1
   shift
@@ -1325,6 +1337,8 @@ CHECK
   printf 'report\n' > "$data/$id/report.md"
   printf 'decisions_reviewed=1\ndecision_keys=\n' >> "$state/$id.meta"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
+  # The launch turn is over before cleanup; a running turn is its own case.
+  t3_end_all_runs
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
     FM_ROOT_OVERRIDE="$neutral" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 ); rc=$?
@@ -2120,8 +2134,8 @@ test_uncertain_launch_message_keeps_task_record() {
 test_scout_teardown_stops_and_archives_before_slot_return() {
   local proj wt data state id out rc neutral fb thread=mcp:2c8f0d4e-7b1a-4f3c-9e2d-abcdef012345
   id=$(t3_uid t3teardownz1)
-  t3_case teardown running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown completed
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
@@ -2144,14 +2158,14 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
   assert_absent "$wt/.codex/config.toml" "teardown must remove the codex env config before the slot is reused"
   assert_absent "$wt/CLAUDE.local.md" "teardown must remove the channel statement before the slot is reused"
-  [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] || fail "teardown must interrupt then archive exactly once, got '$(t3_dispatch_types)'"
+  [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "teardown must archive an idle thread exactly once, without an interrupt, got '$(t3_dispatch_types)'"
   local archive_line return_line
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
   return_line=$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')
   [ "$return_line" -gt 0 ] || fail "teardown must return the slot through treehouse"
   [ "$archive_line" -lt "$return_line" ] || fail "the thread must be archived before the slot is returned (archive line $archive_line, return line $return_line)"
   assert_absent "$state/$id.meta" "teardown should remove task metadata"
-  pass "fm-teardown.sh backend=t3code: interrupts and archives the thread with a proven close, then returns the slot"
+  pass "fm-teardown.sh backend=t3code: archives the idle thread with a proven close, then returns the slot"
 }
 
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete() {
@@ -2645,8 +2659,8 @@ test_spawn_rejected_lease_is_neither_cleaned_nor_returned() {
 test_teardown_keeps_tracked_claude_local_md() {
   local proj wt data state id out rc neutral fb thread=mcp:5a9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
   id=$(t3_uid t3teardownz2)
-  t3_case teardown-tracked-claude-local running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown-tracked-claude-local completed
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   printf 'project instructions\n' > "$wt/CLAUDE.local.md"
@@ -3017,6 +3031,306 @@ test_t3_restart_nudge_install_renders_template() {
   pass "t3code restart nudge: install renders the launchd template for this home and uninstall removes it"
 }
 
+# --- surfaced-turn proofs on the T3 backend (docs/watcher-continuity.md
+# "Signal coalescing and the terminal fast path") ------------------------------
+
+t3_turn_mtime() {  # <file>
+  if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
+}
+
+# A T3 ship task for the surfaced-turn cases: a running thread with run-1
+# active, its task record, a fake current-state reader answering
+# FM_T3_FAKE_CREW_STATE, and the stale backbone already classified at the
+# thread's current rendering, so only the signals under test can wake the
+# watcher. Sets T3_TURN_STATE, T3_TURN_FB, T3_TURN_KEY.
+t3_turn_case() {  # <case-name> <thread-id>
+  local name=$1 thread=$2
+  t3_case "$name" running
+  t3_world "$(t3_thread_json "$thread" running false)"
+  T3_TURN_STATE="$CASE_DIR/state"; T3_TURN_FB="$CASE_DIR/fakebin"; T3_TURN_KEY=${thread//:/_}
+  mkdir -p "$T3_TURN_STATE" "$T3_TURN_FB" "$CASE_DIR/data"
+  fm_git_init_commit "$REPO"
+  fm_write_meta "$T3_TURN_STATE/worker.meta" "window=fm-worker" "backend=t3code" \
+    "t3_thread_id=$thread" "worktree=$REPO" "project=$REPO" "harness=claude" "kind=ship"
+  cat > "$T3_TURN_FB/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_T3_FAKE_CREW_STATE:-state: unknown · source: none · fake default}"
+SH
+  chmod +x "$T3_TURN_FB/fm-crew-state.sh"
+  t3_turn_quiet_stale "$thread"
+}
+
+# Classify the thread's current rendering as already-seen stale, as
+# test_t3_stale_watcher does, so the backbone stays quiet across a round.
+t3_turn_quiet_stale() {  # <thread-id>
+  local hash
+  hash=$(t3_run 'fm_backend_capture t3code "$1" 40' "$1")
+  hash=$(printf '%s' "$hash" | { if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | cut -d' ' -f1; fi; })
+  printf '%s' "$hash" > "$T3_TURN_STATE/.hash-$T3_TURN_KEY"
+  printf '2\n' > "$T3_TURN_STATE/.count-$T3_TURN_KEY"
+  printf '%s' "$hash" > "$T3_TURN_STATE/.stale-$T3_TURN_KEY"
+}
+
+t3_turn_watch() {  # <out> <signal-grace> -> WATCH_PID
+  PATH="$T3_TURN_FB:$PATH" FM_CREW_STATE_BIN="$T3_TURN_FB/fm-crew-state.sh" \
+    FM_CONFIG_OVERRIDE="$CONFIG" FM_HOME="$CASE_DIR" FM_STATE_OVERRIDE="$T3_TURN_STATE" FM_DATA_OVERRIDE="$CASE_DIR/data" \
+    FM_POLL=1 FM_SIGNAL_GRACE="$2" FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_STALE_ESCALATE_SECS=999 \
+    "$ROOT/bin/fm-watch.sh" > "$1" 2>&1 &
+  WATCH_PID=$!
+}
+
+t3_turn_wait_exit() {  # <seconds> -> 0 once the watcher exited
+  local i=0 limit=$(( $1 * 10 ))
+  while [ "$i" -lt "$limit" ]; do
+    kill -0 "$WATCH_PID" 2>/dev/null || { wait "$WATCH_PID" 2>/dev/null || true; WATCH_PID=; return 0; }
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+t3_turn_stop() {
+  [ -n "$WATCH_PID" ] || return 0
+  kill "$WATCH_PID" 2>/dev/null || true
+  wait "$WATCH_PID" 2>/dev/null || true
+  WATCH_PID=
+}
+
+# Wait until the live watcher's beacon advances <n> times after this call.
+t3_turn_wait_cycles() {  # <n>
+  local want=$1 seen=0 last now i=0
+  last=$(t3_turn_mtime "$T3_TURN_STATE/.last-watcher-beat")
+  while [ "$i" -lt 600 ]; do
+    kill -0 "$WATCH_PID" 2>/dev/null || return 1
+    now=$(t3_turn_mtime "$T3_TURN_STATE/.last-watcher-beat")
+    if [ -n "$now" ] && [ "$now" != "$last" ]; then
+      seen=$((seen + 1)); last=$now
+      [ "$seen" -lt "$want" ] || return 0
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+t3_turn_ack() {
+  local err seq gen
+  err="$CASE_DIR/ack.err"
+  FM_STATE_OVERRIDE="$T3_TURN_STATE" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>"$err" || return 1
+  seq=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+  gen=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  [ -n "$seq" ] && [ -n "$gen" ] || return 1
+  FM_STATE_OVERRIDE="$T3_TURN_STATE" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$seq" --recovery-generation "$gen" >/dev/null
+}
+
+# Round one of every case below: the worker's done surfaces at once, its row
+# is marked terminal:, and the proof binds the active run.
+t3_turn_surface_done() {  # <thread-id> <out>
+  local thread=$1 out=$2 proof="$T3_TURN_STATE/.surfaced-turn-worker"
+  printf 'done [at=%s]: ready in branch fm/worker\n' "$(date +%s)" > "$T3_TURN_STATE/worker.status"
+  t3_turn_watch "$out" 20
+  t3_turn_wait_exit 15 || { t3_turn_stop; fail "the done did not close the cycle inside the signal grace: $(cat "$out")"; }
+  assert_grep "signal: $T3_TURN_STATE/worker.status" "$out" "the done surfaced as a signal"
+  assert_grep "$(printf 'signal\tworker.status\tterminal:')" "$T3_TURN_STATE/.wake-queue" "the done row is marked terminal:"
+  assert_present "$proof" "surfacing the done recorded the turn that wrote it"
+  grep -qx 'proof=t3-run' "$proof" || fail "the proof binds the T3 run"
+  grep -qx 'turn=run-1' "$proof" || fail "the proof names the active run"
+  grep -qx 'turn_state=active' "$proof" || fail "the proof records the run as active"
+  t3_turn_ack || fail "could not acknowledge the surfaced done"
+  : > "$out"
+}
+
+t3_turn_end_run() {  # <thread-id> <status> [error-text]
+  FM_T3_T="$1" FM_T3_STATUS="$2" FM_T3_ERROR="${3:-}" t3_world_set '
+const t = w.threads[process.env.FM_T3_T];
+t.runs[0].status = process.env.FM_T3_STATUS;
+t.runs[0].completedAt = new Date().toISOString();
+t.activeRunId = null;
+t.status = process.env.FM_T3_STATUS;
+if (process.env.FM_T3_ERROR) t.items.push({ type: "error", status: "completed", text: process.env.FM_T3_ERROR });'
+}
+
+test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change() {
+  local state rec rc record started elapsed bg_pid
+  t3_case push-run-ended running
+  state="$CASE_DIR/state"; mkdir -p "$state"
+  ( sleep 0.5; t3_world_set 'const t = w.threads["thread-live"]; t.runs[0].status = "failed"; t.runs[0].completedAt = new Date().toISOString(); t.activeRunId = null; t.status = "failed"' ) &
+  bg_pid=$!
+  rec=$(t3_run '. "$0/bin/fm-transition-lib.sh"; fm_backend_t3code_wait_transition sess 10 "$1" thread-live' "$state" 2>&1); rc=$?
+  wait "$bg_pid"
+  expect_code 1 "$rc" "a run's end is not an actionable edge, got '$rec'"
+  record="$state/.t3code-run-ended-thread-live"
+  assert_present "$record" "the ended run's terminal status must be kept, not discarded"
+  [ "$(cut -f1,2 "$record")" = "$(printf 'run-1\tfailed')" ] || fail "the run-ended record must name the run and its status, got '$(cat "$record")'"
+  t3_world_set 'const t = w.threads["thread-live"]; t.runs[0].status = "running"; t.runs[0].completedAt = null; t.activeRunId = "run-1"; t.status = "running"'
+  ( sleep 0.5; printf 'working: still at it\n' >> "$state/worker.status" ) &
+  bg_pid=$!
+  started=$(date +%s)
+  rec=$(t3_run '. "$0/bin/fm-transition-lib.sh"; fm_backend_t3code_wait_transition sess 10 "$1" thread-live' "$state" 2>&1); rc=$?
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 1 "$rc" "a status append ends the wait as a clean return, got '$rec'"
+  [ "$elapsed" -lt 8 ] || fail "a status append did not end the T3 event wait before its budget (${elapsed}s)"
+  [ "$(cut -f1,2 "$record")" = "$(printf 'run-1\tfailed')" ] || fail "a state change must not rewrite the run-ended record, got '$(cat "$record")'"
+  pass "t3code push wait: an ended run's status is kept in the thread's run-ended record, and a status append ends the wait at once"
+}
+
+test_t3_done_then_same_run_completed_turn_end_absorbed() {
+  local thread=mcp:7a1b2c3d-0e1f-4a5b-9c6d-0a1b2c3d4e5f out proof before i=0
+  t3_turn_case turn-absorb "$thread"
+  out="$CASE_DIR/watch.out"; proof="$T3_TURN_STATE/.surfaced-turn-worker"
+  export FM_T3_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/worker'
+  t3_turn_surface_done "$thread" "$out"
+  # The same run completes and the worker's Stop hook touches the turn-end.
+  t3_turn_end_run "$thread" completed
+  touch "$T3_TURN_STATE/worker.turn-ended"
+  before=$(t3_turn_mtime "$T3_TURN_STATE/worker.turn-ended")
+  t3_turn_quiet_stale "$thread"
+  t3_turn_watch "$out" 1
+  while [ "$i" -lt 200 ]; do
+    grep -q 'absorbed turn-end on proof' "$T3_TURN_STATE/.watch-triage.log" 2>/dev/null && break
+    kill -0 "$WATCH_PID" 2>/dev/null || break
+    sleep 0.1; i=$((i + 1))
+  done
+  kill -0 "$WATCH_PID" 2>/dev/null || fail "the same run's clean turn-end woke firstmate: $(cat "$out")"$'\n'"$(cat "$T3_TURN_STATE/.watch-triage.log" 2>/dev/null)"
+  assert_grep 'worker: surfaced done, T3 run run-1 completed, no status bytes or steer since, current state done' \
+    "$T3_TURN_STATE/.watch-triage.log" "the triage line names the T3 proof"
+  [ ! -s "$T3_TURN_STATE/.wake-queue" ] || fail "a proven turn-end queued a wake: $(cat "$T3_TURN_STATE/.wake-queue")"
+  [ "$(t3_turn_mtime "$T3_TURN_STATE/worker.turn-ended")" = "$before" ] || fail "the absorb touched the turn-end file"
+  grep -qx 'settled=1' "$proof" || fail "a completed run settles its proof"
+  t3_turn_stop
+  unset FM_T3_FAKE_CREW_STATE
+  pass "t3code: done, then the same run completes and its turn-end lands: one wake, the turn-end absorbed on the T3 run proof"
+}
+
+test_t3_done_then_run_failed_reports_the_bad_ending_once() {
+  local thread=mcp:8b2c3d4e-1f2a-4b6c-8d7e-1b2c3d4e5f6a out proof
+  t3_turn_case turn-failed "$thread"
+  out="$CASE_DIR/watch.out"; proof="$T3_TURN_STATE/.surfaced-turn-worker"
+  export FM_T3_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/worker'
+  t3_turn_surface_done "$thread" "$out"
+  # The run ends failed in T3's record while no event wait was armed, and no
+  # Stop hook touches anything: nothing used to report this.
+  t3_turn_end_run "$thread" failed 'usage limit reached; resets at 12:00Z'
+  t3_turn_quiet_stale "$thread"
+  t3_turn_watch "$out" 1
+  t3_turn_wait_exit 20 || { t3_turn_stop; fail "a run that failed after a surfaced done was not reported: $(cat "$out")"; }
+  assert_grep 'check: worker turn ended failed after done: worker (usage limit reached; resets at 12:00Z)' "$out" \
+    "the bad ending names the task, the verb, the status, and T3's error message"
+  assert_grep "$(printf 'check\tturn-ended-failed-worker\tcheck: worker turn ended failed after done: worker')" "$T3_TURN_STATE/.wake-queue" \
+    "the bad ending is durably queued as a check"
+  grep -qx 'settled=1' "$proof" || fail "the bad ending settles its proof"
+  grep -qx 'run_status=failed' "$proof" || fail "the proof records how the run ended"
+  t3_turn_ack || fail "could not acknowledge the bad-ending wake"
+  : > "$out"
+  t3_turn_watch "$out" 1
+  t3_turn_wait_cycles 2 || { t3_turn_stop; fail "a settled bad ending was reported again: $(cat "$out")"; }
+  [ ! -s "$T3_TURN_STATE/.wake-queue" ] || fail "a settled bad ending queued a second wake: $(cat "$T3_TURN_STATE/.wake-queue")"
+  t3_turn_stop
+  unset FM_T3_FAKE_CREW_STATE
+  pass "t3code: done, then the run ends failed: one check wake with the class T3 exposes, never repeated"
+}
+
+test_t3_done_then_run_interrupted_during_the_event_wait_reports() {
+  local thread=mcp:9c3d4e5f-2a3b-4c7d-9e8f-2c3d4e5f6a7b out proof
+  t3_turn_case turn-interrupted "$thread"
+  out="$CASE_DIR/watch.out"; proof="$T3_TURN_STATE/.surfaced-turn-worker"
+  export FM_T3_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/worker'
+  t3_turn_surface_done "$thread" "$out"
+  # The successor cycle is waiting on the still-active run when it is interrupted.
+  t3_turn_watch "$out" 1
+  t3_turn_wait_cycles 1 || { t3_turn_stop; fail "the successor watcher never completed a cycle: $(cat "$out")"; }
+  sleep 1
+  t3_turn_end_run "$thread" interrupted
+  t3_turn_wait_exit 20 || { t3_turn_stop; fail "a run interrupted after a surfaced done was not reported: $(cat "$out")"; }
+  assert_grep 'check: worker turn ended interrupted after done: worker' "$out" "the interrupted run is reported after the done"
+  grep -qx 'run_status=interrupted' "$proof" || fail "the proof records the interruption"
+  unset FM_T3_FAKE_CREW_STATE
+  pass "t3code: done, then the run is interrupted while the event wait watches it: one check wake names it"
+}
+
+test_t3_done_then_a_different_run_completes_surfaces_the_turn_end() {
+  local thread=mcp:0d4e5f6a-3b4c-4d8e-af9a-3d4e5f6a7b8c out
+  t3_turn_case turn-other-run "$thread"
+  out="$CASE_DIR/watch.out"
+  export FM_T3_FAKE_CREW_STATE='state: done · source: status-log · ready in branch fm/worker'
+  t3_turn_surface_done "$thread" "$out"
+  # run-1 completed, then the captain typed in the thread: run-2 ran and
+  # completed, and only its turn-end arrives.
+  t3_turn_end_run "$thread" completed
+  FM_T3_T="$thread" t3_world_set 'const t = w.threads[process.env.FM_T3_T]; t.runs.unshift({ runId: "run-2", ordinal: 2, status: "completed", requestedAt: new Date().toISOString(), startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }); t.latestRunId = "run-2"'
+  touch "$T3_TURN_STATE/worker.turn-ended"
+  t3_turn_quiet_stale "$thread"
+  t3_turn_watch "$out" 1
+  t3_turn_wait_exit 20 || { t3_turn_stop; fail "a turn-end from a different run was absorbed: $(cat "$T3_TURN_STATE/.watch-triage.log" 2>/dev/null)"; }
+  assert_grep "signal: $T3_TURN_STATE/worker.turn-ended" "$out" "the other run's turn-end surfaces"
+  ! grep -q 'absorbed turn-end on proof' "$T3_TURN_STATE/.watch-triage.log" 2>/dev/null || fail "a different run's turn-end was logged as proven"
+  unset FM_T3_FAKE_CREW_STATE
+  pass "t3code: done, then a different run completes: its turn-end surfaces (the recorded run must be the one that ended)"
+}
+
+# A scout task whose T3 thread is in <status>, ready for teardown. Sets
+# TD_WT, TD_STATE, TD_DATA, TD_FB, TD_NEUTRAL.
+t3_teardown_scout_case() {  # <case-name> <id> <thread-id> <status>
+  local name=$1 id=$2 thread=$3 status=$4 proj
+  t3_case "$name" "$status"
+  t3_world "$(t3_thread_json "$thread" "$status" false)"
+  proj="$CASE_DIR/project"; TD_WT="$CASE_DIR/wt"; TD_DATA="$CASE_DIR/data"; TD_STATE="$CASE_DIR/state"
+  fm_git_worktree "$proj" "$TD_WT" "fm/$id"
+  mkdir -p "$TD_DATA/$id" "$TD_STATE" "$CASE_DIR/home/state"
+  printf 'report\n' > "$TD_DATA/$id/report.md"
+  touch "$TD_STATE/.last-watcher-beat"
+  fm_write_meta "$TD_STATE/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" "worktree=$TD_WT" "project=$proj" \
+    "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
+    "backend=t3code" "t3_thread_id=$thread" "t3_project_id=proj-1" \
+    "decisions_reviewed=1" "decision_keys="
+  TD_FB=$(make_treehouse_fakebin "$CASE_DIR")
+  TD_NEUTRAL=$(neutral_fm_root "$CASE_DIR/neutral")
+}
+
+run_t3_teardown() {  # <id> [teardown args...] -> combined output
+  PATH="$TD_FB:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$TD_WT" \
+    FM_ROOT_OVERRIDE="$TD_NEUTRAL" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$TD_STATE" FM_DATA_OVERRIDE="$TD_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-teardown.sh" "$@" 2>&1
+}
+
+test_teardown_waits_for_a_running_turn_then_refuses_or_proceeds() {
+  local id out rc bg_pid thread=mcp:1e5f6a7b-4c5d-4e9f-8a0b-4e5f6a7b8c9d
+  id=$(t3_uid t3teardownz3)
+  t3_teardown_scout_case teardown-running-turn "$id" "$thread" running
+  out=$(FM_TEARDOWN_TURN_WAIT_SECS=1 run_t3_teardown "$id"); rc=$?
+  expect_code 1 "$rc" "a still-running worker turn must refuse the cleanup"$'\n'"$out"
+  assert_contains "$out" "still running" "the refusal says the turn is still running"
+  assert_contains "$out" "run-1" "the refusal names the run"
+  assert_contains "$out" "nothing was changed" "the refusal says nothing changed"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused cleanup must neither interrupt nor archive, got '$(t3_dispatch_types)'"
+  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "a refused cleanup must not return the slot"
+  assert_present "$TD_STATE/$id.meta" "a refused cleanup keeps the task record"
+  # The turn ends on its own inside the wait: cleanup proceeds and archives
+  # without interrupting anything.
+  ( sleep 0.7; FM_T3_T="$thread" t3_world_set 'const t = w.threads[process.env.FM_T3_T]; t.runs[0].status = "completed"; t.runs[0].completedAt = new Date().toISOString(); t.activeRunId = null; t.status = "completed"' ) &
+  bg_pid=$!
+  out=$(FM_TEARDOWN_TURN_WAIT_SECS=10 run_t3_teardown "$id"); rc=$?
+  wait "$bg_pid"
+  expect_code 0 "$rc" "cleanup must proceed once the turn ends inside the wait"$'\n'"$out"
+  [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "a turn that ended on its own is archived without an interrupt, got '$(t3_dispatch_types)'"
+  assert_absent "$TD_STATE/$id.meta" "cleanup removes the task record once it proceeds"
+  pass "fm-teardown.sh backend=t3code: a running worker turn is waited for, refused when it does not end, and never interrupted when it does"
+}
+
+test_teardown_force_interrupts_a_running_turn() {
+  local id out rc thread=mcp:2f6a7b8c-5d6e-4f0a-9b1c-5f6a7b8c9d0e
+  id=$(t3_uid t3teardownz4)
+  t3_teardown_scout_case teardown-running-turn-force "$id" "$thread" running
+  out=$(FM_TEARDOWN_TURN_WAIT_SECS=1 run_t3_teardown "$id" --force); rc=$?
+  expect_code 0 "$rc" "--force must keep the interrupt for a running turn"$'\n'"$out"
+  assert_contains "$out" "--force interrupts it" "the forced cleanup says it interrupts the turn"
+  [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] || fail "--force must interrupt then archive, got '$(t3_dispatch_types)'"
+  assert_absent "$TD_STATE/$id.meta" "the forced cleanup completes"
+  pass "fm-teardown.sh backend=t3code: --force interrupts a still-running turn as before"
+}
+
 test_native_restart_rearms_undelivered_stale_warning
 test_housekeeping_preserves_unknown_stale_recheck
 test_reported_unknown_stall_is_not_escalated_again_when_idle
@@ -3112,3 +3426,10 @@ test_t3_restart_nudge_install_renders_template
 test_t3_restart_recovery
 test_t3_restart_failed_ring_retries
 test_t3_restart_nudge_sends_once_per_restart
+test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change
+test_t3_done_then_same_run_completed_turn_end_absorbed
+test_t3_done_then_run_failed_reports_the_bad_ending_once
+test_t3_done_then_run_interrupted_during_the_event_wait_reports
+test_t3_done_then_a_different_run_completes_surfaces_the_turn_end
+test_teardown_waits_for_a_running_turn_then_refuses_or_proceeds
+test_teardown_force_interrupts_a_running_turn

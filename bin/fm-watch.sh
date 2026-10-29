@@ -20,7 +20,21 @@
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
 #                          span has a captain-relevant event OR a no-verb signal lacks
-#                          positive execution evidence, unless afk is active
+#                          positive execution evidence, unless afk is active.
+#                          A span carrying a captain-relevant event (done,
+#                          failed, needs-decision, blocked) closes the cycle the
+#                          moment it is scanned, without the SIGNAL_GRACE linger,
+#                          and records a per-task proof of the turn that wrote
+#                          it (state/.surfaced-turn-<task>); the bare turn-end
+#                          that follows is absorbed only when that proof holds
+#                          end to end (signal_turnend_absorb_proven: same turn,
+#                          ended cleanly, no status bytes and no steer since,
+#                          current state agrees), otherwise it surfaces as any
+#                          bare turn-end does. The queued row payload is
+#                          `terminal:<files>` for a span whose first event is
+#                          done or failed and `needs-decision:<files>` for a
+#                          decision-owned one, which keeps both on main while
+#                          attended (docs/pi-supervision-branch.md).
 #   stale: <window>        a provably-working stale is ALWAYS absorbed (with a wedge
 #                          timer) regardless of what the status log says - an active
 #                          run-step or busy pane outranks even a captain-relevant log
@@ -117,6 +131,12 @@
 #                          steering-inbox recovery; bin/fm-task-inbox-lib.sh owns
 #                          delivery-attempt, busy-deferral, and unavailable-endpoint policy
 #   check: <script>: <out> authenticated check output, always actionable
+#   check: worker turn ended <status> after <verb>: <task> [(<detail>)]
+#                          the turn that wrote a surfaced done, failed,
+#                          needs-decision, or blocked ended failed, interrupted,
+#                          or cancelled per T3's run record, or with Claude's
+#                          StopFailure on a pane backend; reported once per
+#                          surfaced record (surfaced_turn_reconcile)
 #   check: process-event result captured: <keys>
 #                          a durably captured process-to-event result is queued
 #                          and has not been surfaced yet; reported once per
@@ -732,7 +752,7 @@ signal_turnend_panes_churned() {  # <file> ...
     base=${f##*/}
     case "$base" in
       *.status)     return 1 ;;
-      *.turn-ended) task=${base%.turn-ended}; kind=turn-ended ;;
+      *.turn-ended) task=${base%.turn-ended}; kind='turn-ended' ;;
       *)            return 1 ;;
     esac
     [ -n "$task" ] || return 1
@@ -3040,12 +3060,19 @@ fm_wait_tmp_cleanup() {
 # paths) with exactly the files whose newly classified span carries one of the
 # decision-owned classes defined by the status-span contract, so the caller can
 # route those - and only those - signal rows as main-only
-# (docs/pi-supervision-branch.md). Stale and heartbeat rows retain their existing
-# eligibility rules.
+# (docs/pi-supervision-branch.md), FM_SIGNAL_TERMINAL_FILES with the files whose
+# span's first actionable event is a `done` or `failed` (routed main-only the
+# same way, as a finished worker is a captain outcome), and
+# FM_SIGNAL_CAPTAIN_VERBS with one "<file>\t<verb>" line per file whose span
+# carried a captain-relevant event, the verb being that first event's, so the
+# surface path can record the proof of the turn that wrote it. Stale and
+# heartbeat rows retain their existing eligibility rules.
 signal_files_actionable() {  # <status-file> ...
-  local f task record rest endpoint ident needs_decision rc found=1
+  local f task record rest endpoint ident needs_decision rc found=1 events first verb
   FM_SIGNAL_SURFACE_ENDPOINTS=''
   FM_SIGNAL_NEEDS_DECISION_FILES=''
+  FM_SIGNAL_TERMINAL_FILES=''
+  FM_SIGNAL_CAPTAIN_VERBS=''
   for f in "$@"; do
     case "$f" in *.status) ;; *) continue ;; esac
     [ -e "$f" ] || [ -L "$f" ] || continue
@@ -3067,6 +3094,16 @@ signal_files_actionable() {  # <status-file> ...
     FM_SIGNAL_SURFACE_ENDPOINTS="${FM_SIGNAL_SURFACE_ENDPOINTS}${f}"$'\t'"${endpoint}"$'\t'"${ident}"$'\n'
     if [ "$needs_decision" -eq 1 ]; then
       FM_SIGNAL_NEEDS_DECISION_FILES="${FM_SIGNAL_NEEDS_DECISION_FILES} ${f}"
+    fi
+    if [ "$rc" -eq 0 ]; then
+      events=''
+      case "$rest" in *$'\t'*) events=${rest#*$'\t'} ;; esac
+      first=${events%% ; *}
+      verb=$(status_line_verb "$first")
+      case "$verb" in
+        done|failed) [ "$needs_decision" -eq 1 ] || FM_SIGNAL_TERMINAL_FILES="${FM_SIGNAL_TERMINAL_FILES} ${f}" ;;
+      esac
+      FM_SIGNAL_CAPTAIN_VERBS="${FM_SIGNAL_CAPTAIN_VERBS}${f}"$'\t'"${verb}"$'\n'
     fi
     if [ "$rc" -eq 0 ] || [ "$needs_decision" -eq 1 ]; then
       found=0
@@ -3133,13 +3170,351 @@ heartbeat_scan_finds_actionable() {
   return "$found"
 }
 
+# signal_batch_files: the distinct files of a scan_signals batch, as the
+# space-led list the triage below keys everything on.
+signal_batch_files() {  # <scan-lines>
+  local sf sig f files=""
+  while IFS=$(printf '\t') read -r sf sig f; do
+    [ -n "$sf" ] || continue
+    case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
+  done <<EOF
+$1
+EOF
+  printf '%s' "$files"
+}
+
+# --- surfaced-turn proofs ----------------------------------------------------
+#
+# One logical event, one wake (commit 9931f81e): a crewmate's final status
+# write and the Stop hook of the same turn land seconds apart. The triage
+# below no longer waits SIGNAL_GRACE to see both; it closes on the status at
+# once and instead records, at surface time, the identity of the turn that
+# wrote it, so the trailing turn-end can be absorbed on PROOF rather than on
+# timing. The record is state/.surfaced-turn-<task>, one line per field:
+#   v1
+#   ident=<status file identity>   end=<classified end offset>
+#   verb=<done|failed|needs-decision|blocked>   at=<epoch>
+#   since=<status file mtime at surface, the steer anchor>
+#   backend=<backend>   proof=<t3-run|claude-busy|none>
+#   turn=<T3 run id | Claude busy-record seq>   turn_state=<active|ended|busy|idle>
+#   run_status=<terminal status once known>   settled=<0|1>
+# proof=t3-run binds the T3 run that was active (else latest) at surface time;
+# proof=claude-busy binds the Claude hook busy record's sequence (one turn is
+# one open and one close, so a steer breaks the chain); any other harness has
+# no verified turn identity and proves nothing. A secondmate writes no proof:
+# its status stream is a routed-reply channel, not a task's turn log.
+# Written best effort after the surface: a proof that cannot be written only
+# costs the extra wake today's linger would have spent.
+SURFACED_TURN_PREFIX=.surfaced-turn-
+
+surfaced_turn_path() {  # <task>
+  printf '%s/%s%s' "$STATE" "$SURFACED_TURN_PREFIX" "$1"
+}
+
+surfaced_turn_field() {  # <record> <key>
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1
+}
+
+surfaced_turn_verb_of() {  # <status-file> -> the verb signal_files_actionable recorded
+  local f v
+  while IFS=$(printf '\t') read -r f v; do
+    [ "$f" = "$1" ] && { printf '%s' "$v"; return 0; }
+  done <<EOF
+$FM_SIGNAL_CAPTAIN_VERBS
+EOF
+  return 1
+}
+
+surfaced_turn_record() {  # <status-file> <end-offset> <identity> <verb>
+  local f=$1 end=$2 ident=$3 verb=$4 task meta kind backend harness target since
+  local proof=none turn='' turn_state='' run_status='' settled=0 run active rest latest latest_status rec r_state r_source r_event r_seq record tmp
+  case "$verb" in done|failed|needs-decision|blocked) ;; *) return 0 ;; esac
+  task=${f##*/}; task=${task%.status}
+  meta="$STATE/$task.meta"
+  [ -f "$meta" ] || return 0
+  # The steer anchor is the status file's own write time, not this record's:
+  # a steer that lands between the worker's append and this write is already
+  # a new instruction for the turn that ended, and the record is rewritten
+  # when it settles, so its mtime proves nothing.
+  since=$(stat_mtime "$f")
+  case "$since" in ''|*[!0-9]*) since=0 ;; esac
+  kind=$(fm_meta_get "$meta" kind)
+  [ "${kind:-ship}" != secondmate ] || return 0
+  backend=$(fm_backend_of_meta "$meta")
+  harness=$(fm_meta_get "$meta" harness)
+  target=$(fm_backend_target_of_meta "$meta")
+  case "$backend" in
+    t3code)
+      if [ -n "$target" ] && fm_backend_source t3code 2>/dev/null \
+        && run=$(fm_backend_t3code_run_state "$target" 2>/dev/null); then
+        active=${run%%$'\t'*}; rest=${run#*$'\t'}; latest=${rest%%$'\t'*}
+        rest=${rest#*$'\t'}; latest_status=${rest%%$'\t'*}
+        if [ -n "$active" ]; then
+          proof=t3-run; turn=$active; turn_state=active
+        elif [ -n "$latest" ]; then
+          proof=t3-run; turn=$latest; turn_state=ended; run_status=$latest_status
+        fi
+      fi
+      ;;
+    *)
+      case "$harness" in
+        claude*)
+          if rec=$(fm_busy_record_read "$STATE" "$task" 2>/dev/null); then
+            read -r r_state r_source r_event r_seq <<< "$rec"
+            case "$r_state:$r_source:$r_event" in
+              busy:claude-hook:*|busy:fm-spawn:*) proof=claude-busy; turn=$r_seq; turn_state=busy ;;
+              idle:claude-hook:stop) proof=claude-busy; turn=$r_seq; turn_state=idle; settled=1 ;;
+            esac
+          fi
+          ;;
+      esac
+      ;;
+  esac
+  record=$(surfaced_turn_path "$task")
+  tmp="$record.tmp.${BASHPID:-$$}"
+  if {
+    printf 'v1\n'
+    printf 'ident=%s\nend=%s\nverb=%s\nat=%s\nsince=%s\nbackend=%s\nproof=%s\nturn=%s\nturn_state=%s\nrun_status=%s\nsettled=%s\n' \
+      "$ident" "$end" "$verb" "$(date +%s)" "$since" "$backend" "$proof" "$turn" "$turn_state" "$run_status" "$settled"
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$record" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# Close a proof's bad-ending watch: settled=1 and the status the turn ended
+# with. Atomic replace; a rewrite that fails leaves the record unsettled, so
+# the next cycle decides again.
+surfaced_turn_settle() {  # <task> <status>
+  local record tmp
+  record=$(surfaced_turn_path "$1")
+  [ -f "$record" ] || return 0
+  tmp="$record.tmp.${BASHPID:-$$}"
+  if sed -e "s/^settled=.*/settled=1/" -e "s/^run_status=.*/run_status=$2/" "$record" > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$record" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
+# signal_turnend_absorb_proven <file>...: 0 when the batch is bare turn-ends
+# only and EVERY one is the second half of an already surfaced pair, proven
+# per task (the turn-end scout's rules, docs/watcher-continuity.md "Signal
+# coalescing and the terminal fast path"):
+#   1. a proof record from the fast path names a done, failed,
+#      needs-decision, or blocked surface;
+#   2. no status bytes were appended since (same file identity, same size);
+#   3. the turn that ended is the turn that wrote it, and it ended cleanly: on
+#      T3 the thread has no active run, its latest run is the recorded one
+#      and reads completed; on a Claude pane the busy record reads idle from
+#      the Stop hook at exactly the next sequence (or the recorded one when
+#      the turn had already closed at surface time); every other harness has
+#      no turn identity and never passes;
+#   4. no steer reached the worker since the surfaced append: no
+#      steering-inbox record, handled or not, written at or after the status
+#      file's modification time recorded at surface (whole seconds, inclusive,
+#      so a same-second steer surfaces);
+#   5. the worker's current state agrees with the surfaced verb (done, failed,
+#      or parked/blocked for a decision), read through FM_CREW_STATE_BIN
+#      exactly as the lone-turn-end path reads it.
+# Any miss returns 1 with no side effect, and the batch takes today's path.
+# FM_SIGNAL_TURNEND_ABSORB_WHY names the evidence of a pass for the triage
+# log. Reached only for a non-afk batch with no captain-relevant span. NOT a
+# pure read on a pass: up to one T3 read and one current-state read per task.
+signal_turnend_absorb_proven() {  # <file> ...
+  local f base task record verb ident end proof turn turn_state sf cur_ident cur_size inbox target since msg msg_mtime
+  local run active rest latest latest_status rec r_state r_source r_event r_seq state_line state_word why
+  FM_SIGNAL_TURNEND_ABSORB_WHY=''
+  [ "$#" -gt 0 ] || return 1
+  for f in "$@"; do
+    base=${f##*/}
+    case "$base" in *.turn-ended) task=${base%.turn-ended} ;; *) return 1 ;; esac
+    [ -n "$task" ] || return 1
+    record=$(surfaced_turn_path "$task")
+    [ -f "$record" ] && [ "$(head -n 1 "$record" 2>/dev/null)" = v1 ] || return 1
+    verb=$(surfaced_turn_field "$record" verb)
+    case "$verb" in done|failed|needs-decision|blocked) ;; *) return 1 ;; esac
+    ident=$(surfaced_turn_field "$record" ident)
+    end=$(surfaced_turn_field "$record" end)
+    proof=$(surfaced_turn_field "$record" proof)
+    turn=$(surfaced_turn_field "$record" turn)
+    turn_state=$(surfaced_turn_field "$record" turn_state)
+    [ -n "$ident" ] && [ -n "$turn" ] || return 1
+    case "$end" in ''|*[!0-9]*) return 1 ;; esac
+    sf="$STATE/$task.status"
+    cur_ident=$(_fm_open_decisions_file_ident "$sf" 2>/dev/null) || return 1
+    cur_size=$(_fm_status_file_size "$sf" 2>/dev/null) || return 1
+    cur_size=${cur_size//[[:space:]]/}
+    [ "$cur_ident" = "$ident" ] && [ "$cur_size" = "$end" ] || return 1
+    since=$(surfaced_turn_field "$record" since)
+    case "$since" in ''|*[!0-9]*) return 1 ;; esac
+    inbox=$(fm_task_inbox_dir "$STATE" "$task")
+    if [ -d "$inbox" ]; then
+      for msg in "$inbox"/*.msg "$inbox"/handled/*.msg; do
+        [ -f "$msg" ] || continue
+        msg_mtime=$(stat_mtime "$msg")
+        case "$msg_mtime" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$msg_mtime" -lt "$since" ] || return 1
+      done
+    fi
+    case "$proof" in
+      t3-run)
+        target=$(fm_backend_target_of_meta "$STATE/$task.meta")
+        [ -n "$target" ] || return 1
+        fm_backend_source t3code 2>/dev/null || return 1
+        run=$(fm_backend_t3code_run_state "$target" 2>/dev/null) || return 1
+        active=${run%%$'\t'*}; rest=${run#*$'\t'}; latest=${rest%%$'\t'*}
+        rest=${rest#*$'\t'}; latest_status=${rest%%$'\t'*}
+        [ -z "$active" ] && [ "$latest" = "$turn" ] && [ "$latest_status" = completed ] || return 1
+        why="T3 run $turn completed"
+        ;;
+      claude-busy)
+        case "$turn" in ''|*[!0-9]*) return 1 ;; esac
+        rec=$(fm_busy_record_read "$STATE" "$task" 2>/dev/null) || return 1
+        read -r r_state r_source r_event r_seq <<< "$rec"
+        [ "$r_state" = idle ] && [ "$r_source" = claude-hook ] && [ "$r_event" = stop ] || return 1
+        case "$turn_state" in
+          busy) [ "$r_seq" = "$((turn + 1))" ] || return 1 ;;
+          idle) [ "$r_seq" = "$turn" ] || return 1 ;;
+          *) return 1 ;;
+        esac
+        why="Claude Stop closed busy seq $r_seq"
+        ;;
+      *) return 1 ;;
+    esac
+    state_line=$("$FM_CREW_STATE_BIN" "$task" 2>/dev/null) || state_line=''
+    case "$state_line" in state:*) ;; *) return 1 ;; esac
+    state_word=${state_line#state: }; state_word=${state_word%% *}
+    case "$verb:$state_word" in
+      done:done|failed:failed|needs-decision:parked|needs-decision:blocked|blocked:blocked|blocked:parked) ;;
+      *) return 1 ;;
+    esac
+    FM_SIGNAL_TURNEND_ABSORB_WHY="${FM_SIGNAL_TURNEND_ABSORB_WHY}${FM_SIGNAL_TURNEND_ABSORB_WHY:+; }$task: surfaced $verb, $why, no status bytes or steer since, current state $state_word"
+  done
+  for f in "$@"; do
+    base=${f##*/}
+    surfaced_turn_settle "${base%.turn-ended}" completed || true
+  done
+  return 0
+}
+
+# surfaced_turn_reconcile: the positive report for a bad ending. For every
+# unsettled proof, learn how its turn ended: on T3 from the run-ended record
+# the event wait kept, else from one thread read (a run still active decides
+# nothing yet); on a Claude pane from the busy record. A clean end settles the
+# proof quietly; failed, interrupted, cancelled, or rolled_back, or Claude's
+# StopFailure, settles it and wakes main once with a check reason naming the
+# task, the surfaced verb, the status, and T3's error message when one is
+# readable. Runs once per cycle before the signal scan; a task whose record
+# is gone drops its proof. Nothing here ever interrupts or restarts a worker.
+surfaced_turn_reconcile() {
+  local record task proof turn turn_state verb target ended run active rest latest latest_status latest_error runs pair status detail
+  local rec r_state r_source r_event r_seq
+  for record in "$STATE/$SURFACED_TURN_PREFIX"*; do
+    [ -f "$record" ] || continue
+    case "$record" in *.tmp.*) continue ;; esac
+    task=${record##*/}; task=${task#"$SURFACED_TURN_PREFIX"}
+    [ -n "$task" ] || continue
+    if [ ! -f "$STATE/$task.meta" ]; then
+      rm -f "$record"
+      continue
+    fi
+    [ "$(surfaced_turn_field "$record" settled)" = 0 ] || continue
+    proof=$(surfaced_turn_field "$record" proof)
+    turn=$(surfaced_turn_field "$record" turn)
+    turn_state=$(surfaced_turn_field "$record" turn_state)
+    verb=$(surfaced_turn_field "$record" verb)
+    [ -n "$turn" ] || continue
+    status=''; detail=''
+    case "$proof" in
+      t3-run)
+        target=$(fm_backend_target_of_meta "$STATE/$task.meta")
+        [ -n "$target" ] || continue
+        fm_backend_source t3code 2>/dev/null || continue
+        ended=$(fm_backend_t3code_run_ended_record "$STATE" "$target")
+        if [ -f "$ended" ]; then
+          IFS=$(printf '\t') read -r run latest_status _ < "$ended" || true
+          [ "$run" = "$turn" ] && status=$latest_status
+        fi
+        if [ -z "$status" ] || [ "$status" = failed ]; then
+          run=$(fm_backend_t3code_run_state "$target" 2>/dev/null) || continue
+          active=${run%%$'\t'*}; rest=${run#*$'\t'}; latest=${rest%%$'\t'*}
+          rest=${rest#*$'\t'}; latest_status=${rest%%$'\t'*}
+          rest=${rest#*$'\t'}; latest_error=${rest%%$'\t'*}
+          runs=${rest#*$'\t'}
+          if [ -z "$status" ]; then
+            [ "$active" != "$turn" ] || continue
+            if [ "$latest" = "$turn" ]; then
+              status=$latest_status
+            else
+              for pair in ${runs//,/ }; do
+                [ "${pair%%:*}" = "$turn" ] && { status=${pair#*:}; break; }
+              done
+            fi
+          fi
+          [ "$status" != failed ] || [ -z "$latest_error" ] || [ "$latest" != "$turn" ] || detail=$latest_error
+        fi
+        ;;
+      claude-busy)
+        rec=$(fm_busy_record_read "$STATE" "$task" 2>/dev/null) || continue
+        read -r r_state r_source r_event r_seq <<< "$rec"
+        [ "$r_source" = claude-hook ] || continue
+        case "$r_seq" in ''|*[!0-9]*) continue ;; esac
+        case "$turn" in ''|*[!0-9]*) continue ;; esac
+        [ "$r_seq" -gt "$turn" ] || continue
+        case "$r_event" in
+          stop) status=completed ;;
+          stop-failure) status=failed; detail="Claude StopFailure" ;;
+          session-end) status='session-end' ;;
+          *) continue ;;
+        esac
+        ;;
+      *) continue ;;
+    esac
+    case "$status" in
+      completed|session-end) surfaced_turn_settle "$task" "$status" || true ;;
+      failed|interrupted|cancelled|rolled_back)
+        surfaced_turn_settle "$task" "$status" || true
+        detail=$(printf '%s' "$detail" | tr '\t\r\n' '   ' | cut -c1-200)
+        reason="check: worker turn ended $status after $verb: $task${detail:+ ($detail)}"
+        fm_wake_append check "turn-ended-$status-$task" "$reason" || exit 1
+        wake "$reason"
+        ;;
+    esac
+  done
+  return 0
+}
+
+# state_wait_or_sleep <secs>: the poll-only terminal wait. With node present,
+# a bounded watch on this home's state directory returns as soon as a
+# worker's status or turn-end file changes (bin/fm-state-watch.mjs owns the
+# filter and debounce), so the poll interval bounds the wait instead of being
+# the latency; without node, with FM_STATE_EVENT_WAIT=0, or when the watch
+# itself fails, the budget is slept exactly as before. Waited, never $(...),
+# for the same stop-signal reason as the push wait below.
+state_wait_or_sleep() {  # <secs>
+  local secs=$1 ms
+  if [ "${FM_STATE_EVENT_WAIT:-1}" = 1 ] && [ -f "$SCRIPT_DIR/fm-state-watch.mjs" ] \
+    && command -v node >/dev/null 2>&1; then
+    ms=$(awk -v s="$secs" 'BEGIN { v = int(s * 1000); if (v < 1) v = 1; printf "%d", v }')
+    if watcher_waited node "$SCRIPT_DIR/fm-state-watch.mjs" --dir "$STATE" --timeout-ms "$ms"; then
+      return 0
+    fi
+  fi
+  sleep "$secs"
+}
+
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
 # with push-capable windows (herdr, rex), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
 # `blocked` wakes the supervisor sub-second instead of after the stale-pane
-# wedge timer. For every other home - no push-capable window, backend not
-# capable, or the event path proven unreliable this process - it sleeps POLL,
-# byte-for-byte today's behavior. The poll loop above still runs every cycle, so
+# wedge timer; on T3 that wait also races the state directory, so a status
+# append ends it too. For every other home - no push-capable window, backend
+# not capable, or the event path proven unreliable this process - it waits on
+# the state directory for POLL (state_wait_or_sleep), sleeping POLL where that
+# is unavailable. The poll loop above still runs every cycle, so
 # this only ever SHORTENS latency; it can never drop an escalation (the poll
 # loop is the permanent fail-closed backstop). This preserves the single live
 # supervision cycle: the reader is a short-lived subprocess of THIS watcher, not
@@ -3178,7 +3553,7 @@ event_wait_or_sleep() {
   fi
 
   if [ "${#windows[@]}" -eq 0 ]; then
-    sleep "$POLL"
+    state_wait_or_sleep "$POLL"
     return
   fi
 
@@ -3194,7 +3569,7 @@ event_wait_or_sleep() {
     _event_cap_fails=0
   fi
   if [ "$_event_cap_ok" != 1 ]; then
-    sleep "$POLL"
+    state_wait_or_sleep "$POLL"
     return
   fi
 
@@ -3218,7 +3593,7 @@ event_wait_or_sleep() {
       # pure polling for the rest of this watcher process.
       _event_cap_fails=$((_event_cap_fails + 1))
       [ "$_event_cap_fails" -ge "$EVENT_CAP_FAIL_MAX" ] && _event_cap_ok=0
-      sleep "$POLL"
+      state_wait_or_sleep "$POLL"
       ;;
     *)
       # 1: a clean full-budget wait with no actionable edge - the reader already
@@ -3602,6 +3977,11 @@ while :; do
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
 
+  # A surfaced done, failed, or decision whose turn then ended badly is
+  # reported here, before the signal scan, from the run facts the event wait
+  # kept (surfaced_turn_reconcile); a clean end settles its proof silently.
+  surfaced_turn_reconcile
+
   # Endpoint liveness runs before queue observation: a positively dead or
   # missing secondmate endpoint is relaunched here on a bounded cadence, which
   # is also what unsticks that mate's foreign wake queue. The tick's single
@@ -3783,28 +4163,46 @@ EOF
     fi
   fi
 
-  # On the first changed signal, linger one grace period and re-scan before
-  # classifying: a crewmate's final status write and the same turn's turn-end
-  # hook land seconds apart, and reporting them as separate actionable wakes
-  # costs a full firstmate turn each. The re-scan also picks up a newer
-  # signature for an already-pending file (last write wins below).
+  # One logical event, one wake (commit 9931f81e): a crewmate's final status
+  # write and the same turn's turn-end hook land seconds apart, and reporting
+  # them as separate actionable wakes costs a full firstmate turn each. The
+  # grace used to be the only coalescer: linger, re-scan, classify. The span
+  # is now classified FIRST. A batch that already carries a captain-relevant
+  # event (done, failed, needs-decision, blocked) closes the cycle at once: the
+  # second half of its pair carries no information the main needs and is
+  # absorbed on proof when it arrives (signal_turnend_absorb_proven), with the
+  # turn that wrote the event recorded below (surfaced_turn_record) so that
+  # proof exists. A batch with no such event keeps the linger and re-scan
+  # exactly as before, where coalescing a working: note with its turn-end
+  # still saves a turn, and the re-scan also picks up a newer signature for an
+  # already-pending file (last write wins below). The away daemon owns triage
+  # while state/.afk exists and this watcher must then neither classify ahead
+  # nor absorb, so under it the linger stays as it was.
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
-    sleep "$SIGNAL_GRACE"
-    pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    files=$(signal_batch_files "$pending")
+    FM_SIGNAL_SURFACE_ENDPOINTS=''
+    FM_SIGNAL_NEEDS_DECISION_FILES=''
+    FM_SIGNAL_TERMINAL_FILES=''
+    FM_SIGNAL_CAPTAIN_VERBS=''
+    signal_actionable=1
+    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
+    if ! afk_present && signal_files_actionable $files; then
+      signal_actionable=0
+    else
+      sleep "$SIGNAL_GRACE"
+      pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+      files=$(signal_batch_files "$pending")
+      # shellcheck disable=SC2086  # same space-separated status-path list
+      signal_files_actionable $files
+      signal_actionable=$?
+    fi
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
     # home_summary_refresh_detached for why publication stays off the beacon's
     # path. Publication failure stays side-band.
     home_summary_refresh_detached
-    files=""
-    while IFS=$(printf '\t') read -r sf sig f; do
-      [ -n "$sf" ] || continue
-      case " $files " in *" $f "*) ;; *) files="$files $f" ;; esac
-    done <<EOF
-$pending
-EOF
     reason="signal:$files"
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
@@ -3816,41 +4214,46 @@ EOF
     #     (even via an interactive menu that wrote no done: status), waiting on a
     #     decision, or wedged. Absorbing such a turn-end is exactly the
     #     swallowed-finish this change guards against.
-    # Positive evidence is either an authoritative provably-working verdict or, in a
-    # home that opts in with config/turnend-churn-absorb and for a BARE turn-end
-    # alone, a pane that rendered something since the previous poll
-    # (signal_turnend_panes_churned) - the only proof available to a harness whose
-    # busy state has no verified semantic source, bounded so it cannot defer that
-    # task's turn-ends forever. Absorb stays evidence-driven: with neither proof the
-    # wake surfaces exactly as before.
+    # Positive evidence is the proof that a bare turn-end is the second half of
+    # a pair this watcher already surfaced (signal_turnend_absorb_proven), an
+    # authoritative provably-working verdict, or, in a home that opts in with
+    # config/turnend-churn-absorb and for a BARE turn-end alone, a pane that
+    # rendered something since the previous poll (signal_turnend_panes_churned)
+    # - the only proof available to a harness whose busy state has no verified
+    # semantic source, bounded so it cannot defer that task's turn-ends forever.
+    # Absorb stays evidence-driven: with no proof the wake surfaces exactly as
+    # before.
     # Actionable -> enqueue, advance .seen-* markers, exit. Benign (a no-verb wake
-    # whose crew is still executing) in always-on mode -> advance the markers so it
-    # will not re-fire, log, and keep blocking without enqueuing. Both evidence
-    # checks are costly (a bounded no-mistakes call, then a pane capture), so the ||
-    # ordering evaluates them ONLY for a non-afk signal with no captain-relevant
-    # status span, and the capture only once the authoritative verdict comes up short.
-    FM_SIGNAL_SURFACE_ENDPOINTS=''
-    FM_SIGNAL_NEEDS_DECISION_FILES=''
-    # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
-    signal_files_actionable $files
-    signal_actionable=$?
+    # whose crew is still executing, or a proven trailing turn-end) in always-on
+    # mode -> advance the markers so it will not re-fire, log, and keep blocking
+    # without enqueuing. Every evidence check is costly (a bounded T3 or
+    # no-mistakes call, then a pane capture), so the || ordering evaluates them
+    # ONLY for a non-afk signal with no captain-relevant status span, cheapest
+    # proof first, and the capture only once the authoritative verdict comes up short.
     # A decision-owned file's queued row payload is marked "needs-decision:"
-    # instead of the ordinary "signal:" below (other files in the same batch
-    # keep the ordinary payload). The wake reason line itself, and every
-    # harness-arm consumer that pattern-matches it, stays byte-identical -
-    # only the per-row payload changes. Two readers branch on that payload:
-    # docs/pi-supervision-branch.md's Pi-only branch dispatcher, to keep a
-    # decision-owned row off the supervision branch (fm-branch-dispatch.ts,
-    # fm-primary-pi-watch.ts), and the away daemon, whose handle_durable_wakes
-    # passes it to handle_wake (see the comment above handle_wake in
-    # bin/fm-supervise-daemon.sh).
+    # and a file whose span's first captain-relevant event is done or failed
+    # is marked "terminal:", instead of the ordinary "signal:" below (other
+    # files in the same batch keep the ordinary payload). The wake reason line
+    # itself, and every harness-arm consumer that pattern-matches it, stays
+    # byte-identical - only the per-row payload changes. Two readers branch on
+    # that payload: docs/pi-supervision-branch.md's branch dispatcher, to keep a
+    # decision-owned or terminal row off the supervision branch and so straight
+    # to main while attended (fm-branch-dispatch.ts, fm-primary-pi-watch.ts,
+    # and the supervision host's offer), and the away daemon, whose
+    # handle_durable_wakes passes it to handle_wake (see the comment above
+    # handle_wake in bin/fm-supervise-daemon.sh).
+    FM_SIGNAL_TURNEND_ABSORB_WHY=''
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
-      || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
+      || { ! signal_turnend_absorb_proven $files && ! signal_crew_provably_working $files \
+           && ! signal_turnend_panes_churned $files; }; then
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         file_reason="$reason"
-        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision:$files" ;; esac
+        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in
+          *" $f "*) file_reason="needs-decision:$files" ;;
+          *) case " $FM_SIGNAL_TERMINAL_FILES " in *" $f "*) file_reason="terminal:$files" ;; esac ;;
+        esac
         fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
       done <<EOF
 $pending
@@ -3876,6 +4279,12 @@ EOF
         [ -n "$f" ] || continue
         fm_wake_status_seen_commit "$STATE" "$f" "$surface_end" "$surface_ident" || true
         mark_surfaced "$f" "$surface_end" "$surface_ident"
+        # The proof the trailing turn-end is absorbed against, for a span that
+        # carried a captain-relevant event; the lingering afk path writes one
+        # too, harmlessly, since nothing absorbs under afk.
+        if surface_verb=$(surfaced_turn_verb_of "$f"); then
+          surfaced_turn_record "$f" "$surface_end" "$surface_ident" "$surface_verb"
+        fi
       done <<EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
@@ -3904,7 +4313,11 @@ $pending
 EOF
         wake "$reason"
       fi
-      triage_log "absorbed benign $reason"
+      if [ -n "$FM_SIGNAL_TURNEND_ABSORB_WHY" ]; then
+        triage_log "absorbed turn-end on proof $reason: $FM_SIGNAL_TURNEND_ABSORB_WHY"
+      else
+        triage_log "absorbed benign $reason"
+      fi
     fi
   fi
 

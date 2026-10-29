@@ -107,7 +107,8 @@ Only an away record is away: no record, or the record daemon-backed quiet mode w
 ### Attended
 
 The host asks the Pi branch's offer rule (`branchOfferForWake`, through `bin/fm-branch-dispatch.mjs offer`) whether the branch may take the close.
-So a close reaches main off Pi exactly when it would on Pi: a check trigger, a decision-owned signal or stale trigger, and a scan that is unsafe or holds nothing for the branch stay main's.
+So a close reaches main off Pi exactly when it would on Pi: a check trigger, a decision-owned signal or stale trigger, a terminal signal trigger (a surfaced `done` or `failed`, whose row the watcher marks `terminal:`), and a scan that is unsafe or holds nothing for the branch stay main's.
+A finished worker is the captain's outcome to read and land, so routing it through an engine turn that always handed it back only delayed it; the host keeps the routine, stale, and no-verb closes ([`watcher-continuity.md`](watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path)).
 On that main-only pass-through the host starts the successor watcher cycle and leaves it running, then prints the close unchanged.
 That successor, like one a turn hands back at its start (see [Away](#away)), runs in a process group of its own, so the harness tearing down the hook's group after the rewake does not stop it.
 The host confirms no handling handoff and republishes the watcher's recovery marker as downtime, even when an earlier engine turn left it reading handling, because the re-arm owner delivers a close to main only while that marker reads downtime.

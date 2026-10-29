@@ -113,6 +113,7 @@ A decision-owned event surfaced by `bin/fm-watch.sh`'s signal path gets the same
 - A `captain-held` declaration surfaced through the no-verb fallback.
 - A pending-reply second-mate escalation.
 
+`signal_files_actionable` marks the payload `terminal:` instead for a span whose first captain-relevant event is a `done` or `failed`: a finished worker is the captain's outcome in every attended posture, so the row stays main's exactly like a decision row, and away the branch takes it like any other task-local row ([`watcher-continuity.md`](watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path)).
 `scopeForUnreadWake` excludes every marked row from what the branch may claim, as well as second-mate signals classified by the span rule below.
 
 A second mate's status log is one shared channel carrying many independently keyed decisions, so its signal row is judged by the lines presented since the last drain rather than by the whole log.
@@ -704,7 +705,7 @@ Other tests remain where they were:
 
 - Needs-decision, no-verb captain-held, and pending-reply second-mate escalation signal rows are marked `needs-decision:`.
 - A needs-decision whose key transition was rejected by the reserved-key vocabulary (`fm-classify-lib.sh`'s `reconciliation-required:` wrapper) is still marked.
-- Ordinary blocked or captain-relevant signals stay unmarked.
+- Done and failed signal rows are marked `terminal:`; ordinary blocked signals stay unmarked.
 
 ### Live guards
 
