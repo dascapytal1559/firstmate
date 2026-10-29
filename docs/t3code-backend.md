@@ -128,9 +128,10 @@ A `claude` task checks the leased worktree and refuses a tracked, existing, or s
 
 ## Current lifecycle and safety
 
-Spawn matches the project (the home, for a secondmate) by real path against T3's live projects, creating one titled `fm-<directory name>` with `t3_project_create` when absent, and leases the worktree for a worker.
-It then launches an idle thread with `t3_thread_launch` (the workspace strategy and branch, `full-access` runtime mode, the model selection) and reads the thread and its configuration back through the [capability gate](#capability-gate)'s configuration tool; a thread T3 bound to another workspace, runtime mode, instance, model, or option value is archived and the spawn refuses.
+Spawn matches the project (the home, for a secondmate) by real path against T3's live projects, creating one with `t3_project_create`, titled with the directory name, when absent (an existing project keeps its own title), and leases the worktree for a worker.
+It then launches an idle thread with `t3_thread_launch` (the title, the workspace strategy and branch, `full-access` runtime mode, the model selection) and reads the thread and its configuration back through the [capability gate](#capability-gate)'s configuration tool; a thread T3 bound to another workspace, runtime mode, instance, model, or option value is archived and the spawn refuses.
 It installs the harness hooks, records metadata, installs the [per-directory harness environment](#per-directory-harness-environment), and sends the encoded brief (the charter, for a secondmate) as the thread's first message with `t3_thread_send`.
+A worker's thread title, its crew card label in T3, is its backlog item's title cut to 96 characters, so keep item titles short; it falls back to `fm-<id>`, which a secondmate always uses, and nothing keys on it.
 Exact call payloads are owned by `bin/fm-t3-mcp.mjs` and `bin/backends/t3code.sh`.
 
 `fm-peek.sh` renders the newest items of the thread's activity view as `[type/status] text` lines followed by a `t3code: status=<status> run=<active run>` line.
@@ -184,7 +185,7 @@ An identical brief resend follows the [ordinary-send retention window above](#cu
 Before returning a retained slot by hand, prove both the archive with no active run and the end of its provider and worktree-owned processes, as teardown does above.
 The kill is idempotent, so an already archived thread, or one the verified server no longer has, is the end state, and an unreachable or gate-refused server refuses the teardown rather than returning a slot a live thread still points at.
 Archiving keeps the transcript visible in T3 Code; this backend never deletes a thread.
-The `fm-` project of a torn-down secondmate home stays in T3 Code pointing at the removed directory until the operator deletes it there, because deleting a nonempty project takes the archived thread's transcript with it.
+The T3 project of a torn-down secondmate home stays in T3 Code pointing at the removed directory until the operator deletes it there, because deleting a nonempty project takes the archived thread's transcript with it.
 
 ## Restart and liveness behavior
 

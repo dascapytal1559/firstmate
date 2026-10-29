@@ -344,8 +344,8 @@ test_project_ensure_matches_realpath_or_creates() {
   [ "$(t3_dispatch_types)" = t3_project_create ] || fail "an unmatched project must call t3_project_create"
   create=$(t3_log_line_of 'r.tool === "t3_project_create"')
   [ "$(t3_request "$create" 'r.arguments.workspaceRoot')" = "$(cd "$CASE_DIR/other" && pwd -P)" ] || fail "t3_project_create must carry the realpath workspaceRoot"
-  [ "$(t3_request "$create" 'r.arguments.title')" = fm-other ] || fail "the project title should be the fm- prefixed directory name, got '$(t3_request "$create" 'r.arguments.title')'"
-  pass "fm_backend_t3code_project_ensure: matches by realpath, otherwise creates with the fm- title"
+  [ "$(t3_request "$create" 'r.arguments.title')" = other ] || fail "the project title should be the bare directory name, got '$(t3_request "$create" 'r.arguments.title')'"
+  pass "fm_backend_t3code_project_ensure: matches by realpath, otherwise creates titled with the directory name"
 }
 
 test_model_selection_table() {
@@ -1552,7 +1552,7 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   [ "$(t3_request "$create" 'r.arguments.workspaceStrategy.type')" = existing_worktree ] || fail "the launch must bind an existing worktree"
   [ "$(t3_request "$create" 'r.arguments.workspaceStrategy.worktreePath')" = "$wt" ] || fail "the launch must point at the leased worktree"
   [ "$(t3_request "$create" 'r.arguments.workspaceStrategy.branch')" = "fm/$id" ] || fail "the launch must carry the slot's branch"
-  [ "$(t3_request "$create" 'r.arguments.title')" = "fm-$id" ] || fail "the launch title should be the window alias"
+  [ "$(t3_request "$create" 'r.arguments.title')" = "fm-$id" ] || fail "with no backlog item to read, the launch title falls back to the window alias"
   [ "$(t3_request "$create" 'r.arguments.runtimeMode')" = full-access ] || fail "the launch must run full-access"
   [ "$(t3_request "$create" 'r.arguments.modelSelection')" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5","options":[{"id":"effort","value":"high"}]}' ] \
     || fail "the launch must carry --model/--effort as the model selection"
@@ -1583,6 +1583,77 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   [ "$(t3_log_line_of 'r.tool === "t3_thread_launch"')" -gt "$(t3_log_line_of 'r.tool === "treehouse"')" ] \
     || fail "the thread launch must follow the lease"
   pass "fm-spawn.sh --backend t3code: leases the slot, launches the thread on it, records metadata, sends the launch brief"
+}
+
+# t3_markdown_backlog <data-dir> [id title]...: a pinned markdown backlog in
+# <data-dir>, addressed from its parent as fm-spawn.sh addresses a home's.
+t3_markdown_backlog() {
+  local data=$1
+  shift
+  mkdir -p "$data"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' "path = \"${data##*/}/backlog.md\"" > "${data%/*}/.tasks.toml"
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$data/backlog.md"
+  while [ "$#" -ge 2 ]; do
+    tasks-axi add "$1" "$2" --kind ship --file "$data/backlog.md" >/dev/null || return 1
+    shift 2
+  done
+}
+
+test_backlog_row_title_reader() {
+  local data out rc
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skipped backlog title reader case (tasks-axi is not installed)"; return 0; }
+  t3_case backlog-title
+  data="$CASE_DIR/data"
+  t3_markdown_backlog "$data" quoted 'Fix the "quoted" café:  card labels' || fail "could not seed the backlog"
+  title_of() { HOME="$SPAWN_HOME" bash -c '. "$1/bin/fm-tasks-axi-lib.sh"; . "$1/bin/fm-backlog-transition-lib.sh"; shift; fm_backlog_row_title "$@"' _ "$ROOT" "$@"; }
+  out=$(title_of "$data" quoted); rc=$?
+  expect_code 0 "$rc" "a row's title should read back"
+  [ "$out" = 'Fix the "quoted" café: card labels' ] || fail "the title should decode quotes and keep multibyte text, on one line, got '$out'"
+  out=$(title_of "$data" quoted 12)
+  [ "$out" = 'Fix the "qu…' ] || fail "a title longer than the cap should end in an ellipsis at the cap, got '$out'"
+  out=$(title_of "$data" quoted 200)
+  [ "$out" = 'Fix the "quoted" café: card labels' ] || fail "a title within the cap should be untouched, got '$out'"
+  out=$(title_of "$data" absent 2>&1); rc=$?
+  expect_code 1 "$rc" "a missing row has no title"
+  [ -z "$out" ] || fail "a missing row should print nothing, got '$out'"
+  out=$(title_of "$CASE_DIR/no-data" quoted 2>&1); rc=$?
+  expect_code 1 "$rc" "a missing backlog has no title"
+  [ -z "$out" ] || fail "a missing backlog should print nothing, got '$out'"
+  pass "fm_backlog_row_title: decodes one line, caps with an ellipsis, and prints nothing when the row or backlog is absent"
+}
+
+test_spawn_titles_thread_from_backlog_item() {
+  local proj wt data state id out fb create title expected
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skipped backlog-titled spawn case (tasks-axi is not installed)"; return 0; }
+  id=$(t3_uid t3titled1)
+  t3_case spawn-titled
+  proj="$CASE_DIR/spawn-project"
+  wt="$CASE_DIR/spawn-wt"
+  data="$CASE_DIR/data"
+  state="$CASE_DIR/state"
+  title='Show the backlog item'"'"'s own words on the T3 crew card instead of the machine-readable "fm-" task id everywhere'
+  expected='Show the backlog item'"'"'s own words on the T3 crew card instead of the machine-readable "fm-" tas…'
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  t3_markdown_backlog "$data" "$id" "$title" || fail "could not seed the backlog"
+  mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
+  write_spawn_brief "$data" "$id"
+  touch "$state/.last-watcher-beat"
+  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
+  fb=$(make_treehouse_fakebin "$CASE_DIR")
+  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode local-only --yolo off --model claude-sonnet-5 --backend t3code 2>&1 )
+  expect_code 0 $? "fm-spawn.sh --backend t3code should succeed with a backlog item"$'\n'"$out"
+  create=$(t3_log_line_of 'r.tool === "t3_thread_launch"')
+  [ "$(t3_request "$create" 'r.arguments.title')" = "$expected" ] \
+    || fail "the launch title should be the backlog item's title capped at 96 characters, got '$(t3_request "$create" 'r.arguments.title')'"
+  assert_contains "$out" "window=fm-$id" "the spawn summary keeps the window alias"
+  assert_grep "window=fm-$id" "$state/$id.meta" "the record keeps the window alias, not the display title"
+  assert_no_grep "$expected" "$state/$id.meta" "the display title must not enter the task record"
+  [ "$(cd "$CASE_DIR" && tasks-axi show "$id" --file "$data/backlog.md" | sed -n 's/^  state: //p')" = in_flight ] \
+    || fail "the spawn should still move the item In flight"
+  pass "fm-spawn.sh --backend t3code: the thread is titled with the backlog item's title, and the record keeps window=fm-<id>"
 }
 
 test_spawn_codex_scout_writes_toml_env_with_traceparent() {
@@ -1744,7 +1815,7 @@ test_spawn_secondmate_runs_thread_in_home_with_env() {
   [ "$(t3_dispatch_types)" = "t3_project_create t3_thread_launch t3_thread_send" ] \
     || fail "a secondmate spawn must create the home's project, then launch the thread, then send the charter, got '$(t3_dispatch_types)'"
   create=$(t3_log_line_of 'r.tool === "t3_project_create"')
-  [ "$(t3_request "$create" 'r.arguments.title')" = fm-sm-home ] || fail "the home's T3 project must carry the fm- prefixed title, got '$(t3_request "$create" 'r.arguments.title')'"
+  [ "$(t3_request "$create" 'r.arguments.title')" = sm-home ] || fail "the home's T3 project must carry its directory name as the title, got '$(t3_request "$create" 'r.arguments.title')'"
   [ "$(t3_request "$create" 'r.arguments.workspaceRoot')" = "$(cd "$home" && pwd -P)" ] || fail "the home's T3 project workspaceRoot must be the home"
   project=$(bash -c '. "$1"; fm_meta_get "$2" t3_project_id' _ "$ROOT/bin/fm-backend.sh" "$CASE_DIR/home/state/$id.meta")
   thread=$(bash -c '. "$1"; fm_meta_get "$2" t3_thread_id' _ "$ROOT/bin/fm-backend.sh" "$CASE_DIR/home/state/$id.meta")
@@ -3377,6 +3448,8 @@ test_control_lib_tables
 test_control_exit_refused_before_any_call
 test_control_relaunch_refused_before_any_dispatch
 test_spawn_leases_slot_creates_thread_and_starts_launch_turn
+test_backlog_row_title_reader
+test_spawn_titles_thread_from_backlog_item
 test_claude_pr_tool_clause_version_boundary
 test_spawn_codex_preserves_tracked_codex_config
 test_tracked_codex_overlay_recovery

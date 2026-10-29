@@ -47,3 +47,33 @@ What was built, in his fork:
 
 The evidence is the regression suites, run under Bash 3.2 on the day of landing: the watcher, T3 backend, T3 client, branch dispatcher, away daemon, and supervision host suites, with new cases for every shape the scout listed.
 The live measurement against the running home was deliberately left to Firstmate after landing, so no number from a real finish is claimed here yet.
+
+## 2. Crew cards read like the work, not like the record (29 October 2026)
+
+![A mockup of T3's sidebar crew cards: today each card reads fm-life-archive over fm-life-archive-calendar-month; after, the folder name over the backlog item's own title](media/crew-card-titles-mockup.png)
+
+The ask, looking at the crew cards in T3's sidebar:
+
+> I would like to get to a point, aesthetically speaking, where the first line is just the project that it's working on and then the second line is just the description without the machine readable names.
+>
+> (29 October 2026)
+
+A scout traced both lines: the first is the T3 project's title, which Firstmate set to `fm-<folder>`, and the second is the thread's title, which was the task id.
+The `fm-` prefix was doing real work in T3, though: the sidebar used it to tell Firstmate's crew apart from his own threads.
+So the scout proposed three steps: teach his T3 fork to recognise crew by the client that launched them, give new projects and threads human titles, and retitle the existing projects.
+His call:
+
+> Um we can just do one and two of the recommended plan.
+
+This entry is step two, the Firstmate half:
+
+- A new T3 project is titled with the folder name, so its card reads `life-archive` and its monogram `LA`.
+  Projects already in T3 keep the titles they have; retitling them was step three, which he left out, so today's `fm-life-archive` card stays as it is.
+- A worker's thread is titled with its backlog item's title, cut to 96 characters with an ellipsis.
+  When there is no item to read, it falls back to the old `fm-<id>`, and a second mate always keeps its `fm-<id>` title.
+- The task id did not go anywhere: Firstmate's own record, cleanup, steering, and restart recovery still key on `fm-<id>` and the thread id, never on the title, so a title is only ever a label.
+- A side effect worth knowing: the item title is now what he reads on the card, so short titles read best and the detail belongs in the item's notes.
+
+This lands after the fork side is installed, because until the fork recognises crew by their launching client, a card without the `fm-` title would fall out of the crew tree.
+The picture above is the scout's mockup, not a screenshot: no worker has launched with these titles yet.
+The evidence is the T3 backend suite with new cases for the backlog title (quotes and accented text decoded, the 96-character cut, the fallback) and for a spawn whose thread carries that title while its record still reads `window=fm-<id>`.

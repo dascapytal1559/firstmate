@@ -476,6 +476,43 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   return 0
 }
 
+# Print one row's title as a display label, such as a T3 crew card's: decoded
+# from `tasks-axi show --full`, whitespace collapsed onto one line, and, given
+# a positive <max-chars>, cut to that many characters ending in an ellipsis.
+# Returns 1 with no output when the backlog, the row, or a title cannot be read,
+# so the caller keeps its own label. Display only: nothing may key on it.
+fm_backlog_row_title() {  # <data-dir> <id> [max-chars]
+  local data out
+  data=$(fm_backlog_data_absolute "$1") || return 1
+  fm_backlog_source_present "$data" "$1" >/dev/null 2>&1 || return 1
+  out=$(fm_backlog_row_show "$data" "$2" --full 2>/dev/null) || return 1
+  printf '%s\n' "$out" | perl -MJSON::PP -MEncode=decode -e '
+    use strict;
+    use warnings;
+    binmode STDOUT, ":encoding(UTF-8)";
+    my $max = shift;
+    my ($task, $title) = (0, "");
+    while (my $line = <STDIN>) {
+      chomp $line;
+      if ($line !~ /^  /) { $task = $line eq "task:"; next; }
+      next unless $task && $line =~ /^  title: (.*)\z/;
+      my $raw = $1;
+      $title = $raw =~ /^"/ ? eval { JSON::PP->new->utf8->allow_nonref->decode($raw) } : decode("UTF-8", $raw);
+      last;
+    }
+    $title = "" unless defined $title && !ref $title;
+    $title =~ s/\s+/ /g;
+    $title =~ s/^ | \z//g;
+    exit 1 if $title eq "";
+    if ($max =~ /^[0-9]+\z/ && $max > 0 && length($title) > $max) {
+      $title = substr($title, 0, $max - 1);
+      $title =~ s/ \z//;
+      $title .= "\x{2026}";
+    }
+    print $title;
+  ' "${3:-0}"
+}
+
 # Run one tasks-axi mutation against <home>'s backlog, capturing its first
 # output line in FM_BACKLOG_TRANSITION_ERROR on failure. The home boundary is
 # authorized through fm_backlog_source_present first; fm_backlog_tasks_axi owns

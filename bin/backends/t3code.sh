@@ -91,9 +91,9 @@ fm_backend_t3code_server_start() {
 fm_backend_t3code_project_ensure() {  # <project-path> -> project id
   local project=$1 real
   real=$(cd "$project" 2>/dev/null && pwd -P) || { echo "error: project path $project is not a directory" >&2; return 1; }
-  # The fm- prefix keeps firstmate's projects apart from the owner's own T3
-  # project names; matching stays by real path, so the title never binds.
-  fm_backend_t3code_mcp project-ensure --root "$real" --title "fm-$(basename "$real")" | fm_backend_t3code_json_get projectId
+  # A new project is titled with its directory name; matching stays by real
+  # path, so the title never binds and an existing project keeps its own.
+  fm_backend_t3code_mcp project-ensure --root "$real" --title "$(basename "$real")" | fm_backend_t3code_json_get projectId
 }
 
 fm_backend_t3code_instance_id() {  # <harness>

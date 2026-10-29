@@ -4959,8 +4959,12 @@ EOF
         fi
         exit 1
       }
+      # The thread title is the crew card's label in T3, so it reads as the
+      # backlog item's title, falling back to the window alias. It is display
+      # only: the record, selectors, and recovery key on W and the thread id.
+      T3CODE_TITLE=$(fm_backlog_row_title "$DATA" "$ID" 96) || T3CODE_TITLE=$W
       T3CODE_CREATE_UNCERTAIN=1
-      T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$W" \
+      T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$T3CODE_TITLE" \
         "$(git -C "$WT" branch --show-current 2>/dev/null || true)" "$WT" "$T3CODE_MODEL_SELECTION") || {
           [ "$?" -eq 1 ] || T3CODE_CREATE_UNCERTAIN=0
           exit 1
