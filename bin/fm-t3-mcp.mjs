@@ -117,19 +117,32 @@
 //     different run). T3 ends the run asynchronously after the request.
 //   fm-t3-mcp.mjs requests --thread <id>
 //     The thread's pending runtime requests: questions (each user-input
-//     request id with its questions, from T3's pending-request list/read) and
-//     approvals, the count of pending requests those tools cannot see or
-//     answer (permission approvals, answered only in T3 Code itself). The
-//     signature names the question ids, the approval count, and the activity
-//     item id of each approval T3 shows among the thread's last 100 items.
+//     request id with its questions, from T3's pending-request list/read);
+//     approvalResponses, whether orchestrator_capabilities advertises that
+//     feature; approvalRequests, the permission approvals T3's pending-request
+//     list names when it does, each {requestId, kind, detail (the command or
+//     file), reason, override (provider_check, ask_rule, or null)}; and
+//     approvals, the count of the remaining pending requests those tools
+//     cannot see or answer (every permission approval on a T3 without
+//     approvalResponses). The signature
+//     names the question ids, that count, the activity item id of each such
+//     request T3 shows among the thread's last 100 items, and the request id
+//     of each answerable approval.
 //   fm-t3-mcp.mjs respond --thread <id> --request <request-id> --answers-file <file>
 //     T3's pending-request respond with the JSON object in <file>, keyed by
-//     question id. It cannot approve a permission request.
+//     question id. It answers questions only; approve answers an approval.
+//   fm-t3-mcp.mjs approve --thread <id> --request <request-id> --decision allow|deny [--feedback-file <file>]
+//     Answer one pending permission approval through T3's pending-request
+//     respond, as T3 Code's own buttons do. Refuses (exit 4) unless
+//     orchestrator_capabilities advertises approvalResponses and the request
+//     reads back as an approval; --feedback-file holds the text the agent
+//     sees, accepted only with deny. Prints the decision and the approval's
+//     normalized entry as read just before the answer.
 //   fm-t3-mcp.mjs watch --thread <id>... --timeout-ms <n> [--escalated <id>=<signature>]... [--state-dir <dir>]
 //     The T3 event wait for the watcher. It first reads every thread: one
 //     whose pending requests changed from its --escalated signature reports
 //     event:blocked with that signature (as requests computes it), its
-//     question ids, and its approval count; a thread given --escalated with
+//     question ids, its approval count, and its approvalRequests; a thread given --escalated with
 //     nothing pending is listed in cleared. Otherwise it waits on the exact
 //     active run of every thread at once and reports event:run-ended, with
 //     that run's threadId, runId, and terminal status, for the first that
@@ -262,6 +275,13 @@ const STATE_ERROR_TAIL_ITEMS = 20;
 // holds until the approval is answered (docs/verification/runtime-backends.md).
 const APPROVAL_ITEM = "approval_request";
 const APPROVAL_WAITING = "waiting";
+// T3 derives that item's id from its runtime request id.
+const APPROVAL_ITEM_ID_PREFIX = "turn-item:runtime-request:";
+// The decisions approve sends; T3's approval respond takes exactly these.
+const APPROVAL_DECISIONS = ["allow", "deny"];
+// The orchestrator_capabilities feature that lets the pending-request tools
+// list, read, and answer permission approvals.
+const APPROVAL_FEATURE = "approvalResponses";
 // The pairing code must cover every scope T3 grants a full-access mcp-client:
 // T3 0.1.0 adds settings:write and source-control:write to the read and
 // operate scopes of the 0.0.46 nightlies, and refuses a code that lacks one.
@@ -638,6 +658,16 @@ function threadConfiguration(session, threadId) {
 function pendingRequest(session, action, args) {
   if (session.toolFamilies?.pendingRequests === "earlier") return session.call(`t3_pending_request_${action}`, args);
   return session.call("t3_pending_request", { action, ...args });
+}
+
+// Whether this server answers permission approvals through the
+// pending-request tools, read once per session.
+async function approvalResponses(session) {
+  if (session.approvalResponses === undefined) {
+    const caps = await session.call("orchestrator_capabilities", {});
+    session.approvalResponses = caps?.features?.[APPROVAL_FEATURE] === true;
+  }
+  return session.approvalResponses;
 }
 
 async function verifiedSession(flags) {
@@ -1019,12 +1049,12 @@ async function resolveSelection(flags) {
   }
   if ((provider.constraints ?? []).length) throw new Refusal("instance_unavailable", `T3 instance '${instanceId}' cannot run threads: ${provider.constraints.join(" ")}`);
   // T3 records full-access on the thread but runs a driver that does not
-  // declare it at a lower mode, where a worker parks on approvals /mcp cannot
-  // answer. An instance that declares no modes supports every mode.
+  // declare it at a lower mode, where a worker parks on an approval for every
+  // guarded action. An instance that declares no modes supports every mode.
   if (Array.isArray(provider.runtimeModes) && !provider.runtimeModes.includes("full-access")) {
     throw new Refusal(
       "full_access_unsupported",
-      `T3 instance '${instanceId}' runs only ${provider.runtimeModes.join(", ") || "no runtime modes"}, not full-access, so a ${harness} worker there would park on approvals Firstmate cannot answer`,
+      `T3 instance '${instanceId}' runs only ${provider.runtimeModes.join(", ") || "no runtime modes"}, not full-access, so a ${harness} worker there would park on an approval for every guarded action`,
     );
   }
   let base = { instanceId, model: wantModel };
@@ -1408,29 +1438,49 @@ function threadOf(out) {
   return out?.thread ?? out ?? {};
 }
 
+// One approval entry of T3's pending-request list or read, normalized to
+// what a supervisor decides on: detail is the command or file it asks for.
+function approvalEntry(e) {
+  const files = Array.isArray(e.files) ? e.files.map((f) => (typeof f === "string" ? f : f?.path)).filter(Boolean).join(", ") : "";
+  const detail = [e.command, e.prompt, e.detail, e.filePath, e.path, files].find((v) => typeof v === "string" && v.trim()) ?? null;
+  return { requestId: e.requestId, kind: e.kind ?? null, detail, reason: e.reason ?? null, override: e.override ?? null };
+}
+
 // The pending runtime requests on one thread: the questions T3's
-// pending-request tools can read and answer, and the remainder of
-// pendingRequestCount, which are approvals those tools cannot see. Each
-// approval is identified by the id of its waiting approval_request item among
-// the thread's last READ_LIMIT_MAX activity items, so an approval answered and
-// replaced by another between two reads is a new set; a pending request T3
-// shows no such item for is counted only.
+// pending-request tools can read and answer, the approvals they list and
+// answer on a server with approvalResponses (approvalRequests), and the
+// remainder of pendingRequestCount, which those tools cannot see. Each
+// unseen request is identified by the id of its waiting approval_request item
+// among the thread's last READ_LIMIT_MAX activity items, so an approval
+// answered and replaced by another between two reads is a new set; a pending
+// request T3 shows no such item for is counted only.
 async function pendingOf(session, threadId, t) {
   const count = t.pendingRequestCount ?? 0;
-  if (!count) return { questions: [], approvals: 0, approvalIds: [] };
+  if (!count) return { questions: [], approvals: 0, approvalIds: [], approvalRequests: [] };
   const listed = await pendingRequest(session, "list", { threadId });
-  const ids = [...new Set(listed?.requestIds ?? [])].sort();
-  const approvals = Math.max(0, count - ids.length);
-  if (!approvals) return { questions: ids, approvals, approvalIds: [] };
+  const entries = (Array.isArray(listed?.requests) ? listed.requests : []).filter((e) => e && typeof e.requestId === "string");
+  const listedApprovals = entries.filter((e) => e.type === "approval");
+  const approvalIdSet = new Set(listedApprovals.map((e) => e.requestId));
+  const ids = [...new Set([...(listed?.requestIds ?? []), ...entries.map((e) => e.requestId)])].filter((id) => !approvalIdSet.has(id)).sort();
+  const approvalRequests = (await approvalResponses(session))
+    ? listedApprovals.map(approvalEntry).sort((a, b) => (a.requestId < b.requestId ? -1 : a.requestId > b.requestId ? 1 : 0))
+    : [];
+  const answerable = new Set(approvalRequests.map((a) => a.requestId));
+  const approvals = Math.max(0, count - ids.length - approvalRequests.length);
+  if (!approvals) return { questions: ids, approvals, approvalIds: [], approvalRequests };
   const { items } = await readTail(session, threadId, t.itemCount ?? 0, READ_LIMIT_MAX);
-  const open = items.filter((it) => it?.type === APPROVAL_ITEM && it.status === APPROVAL_WAITING).map((it) => it.itemId);
-  return { questions: ids, approvals, approvalIds: open.slice(-approvals) };
+  const open = items
+    .filter((it) => it?.type === APPROVAL_ITEM && it.status === APPROVAL_WAITING && !answerable.has(it.requestId ?? String(it.itemId).replace(APPROVAL_ITEM_ID_PREFIX, "")))
+    .map((it) => it.itemId);
+  return { questions: ids, approvals, approvalIds: open.slice(-approvals), approvalRequests };
 }
 
 // The signature the watcher stores once it has escalated a thread's pending
 // requests, so the same requests never wake it twice:
-// q:<question ids>;a:<approval count>[:<approval item ids>].
-const pendingSignature = (p) => `q:${p.questions.join(",")};a:${p.approvals}${p.approvalIds.length ? `:${p.approvalIds.join(",")}` : ""}`;
+// q:<question ids>;a:<unseen count>[:<approval item ids>][;r:<approval request ids>].
+const pendingSignature = (p) =>
+  `q:${p.questions.join(",")};a:${p.approvals}${p.approvalIds.length ? `:${p.approvalIds.join(",")}` : ""}` +
+  (p.approvalRequests.length ? `;r:${p.approvalRequests.map((a) => a.requestId).join(",")}` : "");
 
 async function requests(flags) {
   const threadId = need(flags, "thread");
@@ -1442,7 +1492,16 @@ async function requests(flags) {
     const q = await pendingRequest(session, "read", { threadId, requestId });
     questions.push({ requestId, questions: q?.questions ?? [] });
   }
-  return { ok: true, threadId, pendingRequestCount: t.pendingRequestCount ?? 0, questions, approvals: pending.approvals, signature: pendingSignature(pending) };
+  return {
+    ok: true,
+    threadId,
+    pendingRequestCount: t.pendingRequestCount ?? 0,
+    questions,
+    approvalResponses: await approvalResponses(session),
+    approvalRequests: pending.approvalRequests,
+    approvals: pending.approvals,
+    signature: pendingSignature(pending),
+  };
 }
 
 async function respond(flags) {
@@ -1459,6 +1518,38 @@ async function respond(flags) {
   const { session } = await verifiedSession(flags);
   await pendingRequest(session, "respond", { threadId, requestId, answers });
   return { ok: true, threadId, requestId };
+}
+
+// approve: answer one pending permission approval (see the header).
+async function approve(flags) {
+  const threadId = need(flags, "thread");
+  const requestId = need(flags, "request");
+  const decision = need(flags, "decision");
+  if (!APPROVAL_DECISIONS.includes(decision)) usage(`--decision must be one of ${APPROVAL_DECISIONS.join(", ")}`);
+  let feedback;
+  if (flags["feedback-file"] !== undefined) {
+    if (decision !== "deny") usage("--feedback-file holds the text the agent sees on a deny; it is accepted only with --decision deny");
+    try {
+      feedback = readFileSync(flags["feedback-file"], "utf8");
+    } catch {
+      usage(`--feedback-file ${flags["feedback-file"]} cannot be read`);
+    }
+  }
+  const { session } = await verifiedSession(flags);
+  if (!(await approvalResponses(session))) {
+    throw new Refusal(
+      "approval_responses_unsupported",
+      `T3 at ${session.origin} does not advertise ${APPROVAL_FEATURE}, so a permission approval cannot be answered over /mcp; interrupt the worker and steer it instead (docs/t3code-backend.md)`,
+      4,
+    );
+  }
+  const read = await pendingRequest(session, "read", { threadId, requestId });
+  if (read?.type !== "approval") {
+    throw new Refusal("not_an_approval", `request ${requestId} on thread ${threadId} is not a pending permission approval; answer a question with respond`, 4);
+  }
+  const approval = approvalEntry({ ...read, requestId });
+  await pendingRequest(session, "respond", { threadId, requestId, decision, ...(feedback !== undefined ? { feedback } : {}) });
+  return { ok: true, threadId, requestId, decision, ...(feedback !== undefined ? { feedback } : {}), approval };
 }
 
 // watch: one bounded supervision wait across threads (see the header).
@@ -1488,8 +1579,10 @@ async function watch(flags) {
     if (t.archived === true || t.archivedAt) continue;
     const pending = await pendingOf(session, threadId, t);
     const signature = pendingSignature(pending);
-    if (pending.questions.length || pending.approvals) {
-      if (escalated.get(threadId) !== signature) return { ok: true, event: "blocked", threadId, signature, questions: pending.questions, approvals: pending.approvals, cleared };
+    if (pending.questions.length || pending.approvals || pending.approvalRequests.length) {
+      if (escalated.get(threadId) !== signature) {
+        return { ok: true, event: "blocked", threadId, signature, questions: pending.questions, approvals: pending.approvals, approvalRequests: pending.approvalRequests, cleared };
+      }
     } else if (escalated.has(threadId)) {
       cleared.push(threadId);
     }
@@ -1637,6 +1730,7 @@ const VERBS = {
   interrupt,
   requests,
   respond,
+  approve,
   watch,
   archive,
   close,

@@ -24,7 +24,21 @@ The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 After observing a Codex command-approval prompt under bypass or a Claude policy refusal of a bypass session, ask the captain for explicit approval to change the owning home's worker permission posture and relaunch the worker.
 Only after that explicit word, load `harness-adapters` and use `FM_HOME=<owning-home> bin/fm-approval-failover.sh apply <id>`; its header owns persistent configuration and guarded recovery, with no automatic detection.
 Report the saved model-reviewed remedy and actual recovery result, preserving explicit settings and work rather than changing vendor policy or answering approval or hook-trust prompts.
-A `backend=t3code` worker already runs at T3's `full-access` runtime mode, so the command refuses it before changing anything; approve its pending request in T3 Code itself ([T3 pending-request procedure](../../../docs/t3code-backend.md#push-events-and-polling-fallback)) or move the work to another backend.
+A `backend=t3code` worker already runs at T3's `full-access` runtime mode, so the command refuses it before changing anything; decide its pending approval under [T3 permission approvals](#t3-permission-approvals) instead.
+
+## T3 permission approvals
+
+A T3 worker can still park on a permission approval at full access, when the provider's own safety check or one of the captain's ask rules covers a command or file (the wake's `override` names which).
+The wake carries the request id, kind, command or file, and reason; `bin/fm-t3-answer.sh <id>` lists every pending approval again.
+The decision is firstmate's own; never ask the captain to act in a worker's window, and never let the worker answer its own approval.
+
+- Allow with `bin/fm-t3-approve.sh <id> <request-id> allow` when the command or file stays inside the worker's task scope and its own copy, and is neither destructive outside that copy nor security-sensitive.
+- Deny with `bin/fm-t3-approve.sh <id> <request-id> deny --feedback '<why and what to do instead>'` when it does not, and steer the worker through `fm-send` toward the in-scope path when the feedback alone will not redirect it.
+- Interrupt the worker with `bin/fm-control.sh <id> interrupt` first when it is heading somewhere a single deny will not stop.
+- Only when the action genuinely needs the captain's call - destructive, irreversible, or security-sensitive work the brief does not authorize, or a scope question only the captain can settle - deny or interrupt so nothing waits in the worker's window, then present the decision to the captain as firstmate's own under `AGENTS.md` section 9, and carry the answer back as a steer.
+
+Each answer is recorded in `data/<id>/t3-approvals.jsonl` ([`bin/fm-t3-approve.sh`](../../../bin/fm-t3-approve.sh) owns the record).
+When the T3 server does not advertise approval responses, the helper refuses and the wake says so: interrupt the worker and steer it around the command, which ends its wait without anyone clicking in T3 Code.
 
 ## Session-start reconciliation for a dead ordinary direct report
 
@@ -78,7 +92,7 @@ Escalate in order:
 
 1. Peek the pane, and check the task's steering inbox (`state/<id>.inbox/`) for unhandled `*.msg` records - a stale wake naming an unread firstmate instruction means the worker never acknowledged a durable steer, and the record itself shows exactly what was intended.
    A worker whose current state is a declared `paused:` wait has only said what it is waiting for, so verify the condition it names - its own background job's terminal record or process, for example - and when that condition has already cleared, steer the worker to read the result and resume instead of reporting the wait as healthy.
-2. If the crewmate is waiting on a question its brief already answers, follow the [T3 pending-request procedure](../../../docs/t3code-backend.md#push-events-and-polling-fallback) for a T3 runtime request.
+2. If the crewmate is waiting on a question its brief already answers, follow the [T3 pending-request procedure](../../../docs/t3code-backend.md#push-events-and-polling-fallback) for a T3 runtime request, and [T3 permission approvals](#t3-permission-approvals) for a T3 approval.
    On pane backends, answer in one line via `FM_HOME=<this-firstmate-home> bin/fm-send.sh` from an active firstmate session unless `FM_HOME` is already set to the active firstmate home.
 3. If the crewmate is confused or looping, interrupt with `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> interrupt`, then redirect with one corrective line through `fm-send`.
 4. If the crewmate is genuinely wedged after redirection and its backend supports a replacement, relaunch it with `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> relaunch --note '<progress so far>'`, which stops the agent, carries the brief plus that note into a replacement in the same local copy, and restores the prior record if the replacement cannot start.

@@ -160,3 +160,23 @@ The evidence is the T3 helper and backend suites against the fake T3.
 The new cases cover a registry instance found by agent, the none and two-of-one-agent refusals, Cursor refusing T3's in-process driver, a Gemini spawn carrying the trust variable, and an omitted model found by search but a near-miss slug refused.
 Today's four live passes are now in the verification record.
 The remaining agents need the fork's OpenCode change or the captain's setup first, then one cheap live scout each.
+
+## 6. A worker's approval comes to Firstmate, not to the captain (31 October 2026)
+
+![A worker's approval request wakes Firstmate with the command; Firstmate allows, denies with feedback, or asks the captain as its own decision](media/t3-worker-approvals.svg)
+
+The ask:
+
+> I mean if it needs my core, it needs my core, you know, like you should be able to escalate like the the worker should be able to escalate that issue to you and if you can't resolve it and it genuinely needs my call then you will present that decision as opposed to the worker presenting it like you should still be able to like kill it at the worker level or whatever you need to do and then represent the decision as you because the principle of first mate is I never need to interact with workers.
+
+Even at full access, Claude still stops for some commands, such as `python3 - <<EOF`, and T3 shows that request only in its own window.
+Firstmate could see that something was pending but could not answer it, so the worker waited for the captain to click.
+The fork's T3 is gaining a way to answer these over Firstmate's connection; this entry is the Firstmate half:
+
+- When a worker parks on an approval, Firstmate is woken at once with the request id, the command or file, the provider's reason, and whether a provider check or one of the captain's ask rules caused it.
+- `bin/fm-t3-approve.sh` allows or denies it, with feedback the worker sees on a deny, and records every decision in the task's own record.
+- The rule Firstmate follows: allow what stays inside the task and its own copy; deny with feedback, and steer or interrupt, what does not; only a call that genuinely needs the captain reaches the captain, asked as Firstmate's own decision, never as "go click in the worker's window".
+- On a T3 without the new feature the helper refuses, and Firstmate interrupts and steers the worker instead, which also ends the wait without the captain.
+
+The evidence is the T3 helper and backend suites against the fake T3, with new cases for an approval waking Firstmate with its command, an allow, a deny with feedback, an already-answered approval, and a T3 without the feature.
+Nothing has run live yet; the first live proof is one approval on a worker once the fork's half is installed.

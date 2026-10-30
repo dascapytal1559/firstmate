@@ -93,6 +93,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-extension-launch-barrier.mjs` | Publish one exact static core-owned invocation group before package code runs |
 | `fm-t3-mcp.mjs`          | T3 Code `/mcp` client: captain-run sign-in, capability gate, and the thread verbs the t3code adapter calls (docs/t3code-backend.md) |
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
+| `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | Detect a T3 server restart and steer the T3 workers it ended                          |
 | `fm-t3-restart-nudge.sh` | Outside launchd nudge that tells a T3-hosted main the server restarted                |
 | `fm-t3-main-pretool-check.sh` | PreToolUse guard for a T3 home's main: the restart reminder and the credential seatbelt |

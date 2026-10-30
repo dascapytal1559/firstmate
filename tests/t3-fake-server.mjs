@@ -41,6 +41,13 @@
 //     counts the rest in omittedModels (a provider's `omitted` models), and
 //     its declared `search` argument (absent under world noSearch) instead
 //     lists every model whose id or label contains the text, with no count.
+//   - a T3 with approval responses (world approvalResponses) advertises
+//     features.approvalResponses in orchestrator_capabilities, and its
+//     pending-request list also names each pending approval in `requests`
+//     ({requestId, type: "approval", kind, command, reason, override}, from the
+//     approval's runtime request), its read reads one, and its respond answers
+//     one with decision allow|deny and optional feedback; without it the
+//     pending-request tools see only user-input questions.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -74,7 +81,7 @@
 //   catalog; default FAKE_PROVIDERS), projects ([{id, title, workspaceRoot,
 //   defaultModelSelection, deletedAt}]), threads ({id: detail plus items,
 //   runs, and runtimeRequests [{id, kind: user_input|approval, status,
-//   questions}]}). An approval's activity item is an items entry {itemId,
+//   questions, and for an approval requestKind, command, reason, override}]}). An approval's activity item is an items entry {itemId,
 //   type: "approval_request", status} the world keeps beside its request.
 // DELETE /mcp ends a session and is logged with the session id it names.
 
@@ -186,6 +193,10 @@ const ok = (data) => ({ structuredContent: data, content: [{ type: "text", text:
 const now = () => new Date().toISOString();
 
 const pendingRequests = (t) => (t.runtimeRequests ?? []).filter((r) => r.status === "pending");
+// A pending approval as the approval-responses pending-request tools show it.
+const approvalEntry = (r) => ({
+  requestId: r.id, type: "approval", kind: r.requestKind ?? "command", command: r.command ?? null, reason: r.reason ?? null, override: r.override ?? null,
+});
 
 function detail(t) {
   const { items, runs, runtimeRequests, modelSelection, environment, instructions, ...rest } = t;
@@ -277,7 +288,10 @@ async function callTool(w, name, a) {
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
     case "orchestrator_capabilities":
-      return [ok({ parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search) }), false];
+      return [ok({
+        parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search),
+        features: { appOwnedSubagents: true, ...(w.approvalResponses ? { approvalResponses: true } : {}) },
+      }), false];
     case "t3_project_list":
       return [ok({ projects, nextCursor: null }), false];
     case "t3_project_create": {
@@ -412,11 +426,27 @@ async function callTool(w, name, a) {
       return callTool(w, `t3_pending_request_${a.action}`, a);
     case "t3_pending_request_list": {
       if (!t) return [notFound(a.threadId), false];
-      return [ok({ requestIds: pendingRequests(t).filter((r) => r.kind === "user_input").map((r) => r.id) }), false];
+      const requestIds = pendingRequests(t).filter((r) => r.kind === "user_input").map((r) => r.id);
+      if (!w.approvalResponses) return [ok({ requestIds }), false];
+      const requests = [
+        ...requestIds.map((requestId) => ({ requestId, type: "question" })),
+        ...pendingRequests(t).filter((r) => r.kind === "approval").map(approvalEntry),
+      ];
+      return [ok({ requestIds, requests }), false];
     }
     case "t3_pending_request_read":
     case "t3_pending_request_respond": {
       if (!t) return [notFound(a.threadId), false];
+      const appr = w.approvalResponses && pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "approval");
+      if (appr) {
+        if (name === "t3_pending_request_read") return [ok(approvalEntry(appr)), false];
+        if (!["allow", "deny"].includes(a.decision)) return [err("invalid_request", "decision must be allow or deny"), false];
+        appr.status = "resolved";
+        appr.decision = a.decision;
+        if (a.feedback !== undefined) appr.feedback = a.feedback;
+        for (const it of t.items ?? []) if (it.type === "approval_request" && it.itemId === `turn-item:runtime-request:${appr.id}`) it.status = a.decision === "allow" ? "completed" : "cancelled";
+        return [ok({ sequence: 1 }), true];
+      }
       const q = pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "user_input");
       if (!q) return [err("request_not_found", `Request ${a.requestId} is not a pending question in thread ${a.threadId}.`), false];
       if (name === "t3_pending_request_read") return [ok({ requestId: q.id, questions: q.questions ?? [] }), false];

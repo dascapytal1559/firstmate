@@ -3,9 +3,11 @@
 # Usage: fm-t3-answer.sh <task-id>
 #        fm-t3-answer.sh <task-id> <request-id> <answers-json>
 #   With only the task id, prints the thread's pending requests as JSON:
-#   questions (each request id with its questions, options, and ids) and
-#   approvals, the count of permission approvals T3's pending-request tools
-#   cannot see or answer; those are answered only in T3 Code itself.
+#   questions (each request id with its questions, options, and ids),
+#   approvalRequests (each permission approval a T3 with approvalResponses
+#   lists, with its command or file, reason, and override; answer one with
+#   bin/fm-t3-approve.sh), and approvals, the count of pending requests T3's
+#   pending-request tools cannot see or answer.
 #   With a request id, answers that question through
 #   T3's pending-request respond tool; <answers-json> is a JSON object keyed by
 #   question id, e.g. '{"q1":"yes"}'.

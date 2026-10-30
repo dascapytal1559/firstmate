@@ -2712,7 +2712,8 @@ test_push_wait_escalates_pending_question_once() {
   [ "$(wc -l < "$CASE_DIR/wakes")" -eq 1 ] || fail "one pending request set must wake exactly once, got: $(cat "$CASE_DIR/wakes")"
   assert_grep "$thread (t3code: agent blocked - waiting on human" "$CASE_DIR/wakes" "the wake names the T3 worker and the blocked cause"
   assert_grep "T3 question req-q1 pending - read and answer with bin/fm-t3-answer.sh" "$CASE_DIR/wakes" "the wake names the question and how to answer it"
-  assert_grep "1 T3 permission approval(s) pending - only T3 Code itself can approve" "$CASE_DIR/wakes" "the wake separates the approval the question tools cannot answer"
+  assert_grep "1 T3 permission approval(s) pending that this T3 cannot answer over /mcp - interrupt and steer the worker" "$CASE_DIR/wakes" \
+    "on a T3 without approval responses the wake names the approval apart, with the interrupt-and-steer fallback"
   assert_grep "$thread" "$state/.wake-queue" "the escalation is durably queued"
   assert_present "$state/.t3code-escalated-mcp_6d7e8f9a-1b2c-4d3e-8f4a-3456789abcde" "the escalated request set must be recorded"
   [ "$(t3_fake_calls t3_thread_wait | tail -1 | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).runId||"")')" = run-1 ] \
@@ -2723,6 +2724,70 @@ test_push_wait_escalates_pending_question_once() {
   [ ! -e "$state/.t3code-escalated-mcp_6d7e8f9a-1b2c-4d3e-8f4a-3456789abcde" ] || fail "an answered request must clear its escalation marker"
   [ "$(wc -l < "$CASE_DIR/wakes")" -eq 1 ] || fail "with nothing pending there is no new wake"
   pass "t3code push wait: a pending question wakes the supervisor once with how to answer it, approvals are named apart, and answering clears it"
+}
+
+# On a T3 with approval responses a pending permission approval wakes the
+# supervisor at once with what it asks for and how to decide it.
+test_push_wait_escalates_pending_approval_with_detail() {
+  local thread=mcp:5c6d7e8f-0a1b-4c2d-8e3f-23456789abcd state
+  t3_case push-approval running
+  t3_world "$(t3_thread_json "$thread" running false)"
+  FM_T3_T="$thread" t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-perm", kind: "approval", status: "pending", requestKind: "command", command: "python3 - <<EOF\nprint(1)\nEOF", reason: "heredoc into an interpreter", override: "provider_check" }]'
+  state="$CASE_DIR/state"
+  mkdir -p "$state"
+  fm_write_meta "$state/t3appr1.meta" "window=fm-t3appr1" "backend=t3code" "t3_thread_id=$thread" "kind=ship" "harness=claude"
+  t3_watch_cycles "$state" 2 || fail "the watcher's event wait failed"
+  [ "$(wc -l < "$CASE_DIR/wakes")" -eq 1 ] || fail "one pending approval must wake exactly once, got: $(cat "$CASE_DIR/wakes")"
+  assert_grep "approval req-perm command: python3 - <<EOF print(1) EOF - reason: heredoc into an interpreter - override: provider_check" "$CASE_DIR/wakes" \
+    "the wake carries the approval's command, reason, and override on one line"
+  assert_grep "T3 permission approval req-perm pending - decide it with bin/fm-t3-approve.sh" "$CASE_DIR/wakes" "the wake names how to decide the approval"
+  assert_grep "escalated immediately" "$CASE_DIR/wakes" "the approval is escalated at once, not by the wedge timer"
+  assert_grep "$thread" "$state/.wake-queue" "the escalation is durably queued"
+  pass "t3code push wait: a pending approval on a T3 with approval responses wakes the supervisor once with its detail"
+}
+
+# fm-t3-approve.sh answers an approval as the supervisor and records the
+# decision; a T3 without approval responses refuses with the fallback.
+test_approve_script_answers_and_records_approvals() {
+  local id thread=mcp:4b5c6d7e-9f0a-4b1c-8d2e-123456789abc out rc record
+  id=$(t3_uid t3approve1)
+  make_t3_control_task approve "$id" "$thread" running
+  FM_T3_T="$thread" t3_world_set 'w.threads[process.env.FM_T3_T].runtimeRequests = [
+    { id: "req-a", kind: "approval", status: "pending", requestKind: "command", command: "python3 - <<EOF", reason: "heredoc", override: "provider_check" },
+    { id: "req-b", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf ~/elsewhere", reason: "ask rule", override: "ask_rule" }]'
+  run_approve() { FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" "$ROOT/bin/fm-t3-approve.sh" "$@" 2>&1; }
+  record="$CTRL_DATA/$id/t3-approvals.jsonl"
+  out=$(run_approve "$id" req-a allow); rc=$?
+  expect_code 4 "$rc" "a T3 without approval responses refuses: $out"
+  assert_contains "$out" approval_responses_unsupported "the refusal names the missing feature"
+  assert_contains "$out" "bin/fm-control.sh $id interrupt" "the refusal points at the interrupt-and-steer fallback"
+  assert_absent "$record" "a refused answer records no decision"
+
+  t3_world_set 'w.toolset = "current"; w.approvalResponses = true'
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_CONFIG_OVERRIDE="$CONFIG" "$ROOT/bin/fm-t3-answer.sh" "$id" 2>&1); rc=$?
+  expect_code 0 "$rc" "listing pending requests: $out"
+  assert_contains "$out" '"approvalRequests":[{"requestId":"req-a","kind":"command","detail":"python3 - <<EOF"' "fm-t3-answer.sh lists the approval with its command"
+  out=$(run_approve "$id" req-a allow --feedback "why"); rc=$?
+  expect_code 2 "$rc" "feedback with an allow is refused: $out"
+  out=$(run_approve "$id" req-a allow); rc=$?
+  expect_code 0 "$rc" "allowing: $out"
+  assert_contains "$out" "answered $id approval req-a on T3 thread $thread: allow" "the answer is reported"
+  out=$(run_approve "$id" req-b deny --feedback "Outside your task; stay in your own copy."); rc=$?
+  expect_code 0 "$rc" "denying: $out"
+  assert_contains "$(t3_fake_calls t3_pending_request | grep '"action":"respond"' | tail -1)" '"feedback":"Outside your task; stay in your own copy."' "the deny carries its feedback to T3"
+  [ "$(wc -l < "$record")" -eq 2 ] || fail "each decision is one line in the task's durable record, got: $(cat "$record")"
+  node -e '
+const [a, b] = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+const ok = a.requestId === "req-a" && a.decision === "allow" && a.feedback === null && a.approval.detail === "python3 - <<EOF" && a.approval.override === "provider_check"
+  && b.requestId === "req-b" && b.decision === "deny" && b.feedback === "Outside your task; stay in your own copy." && b.taskId === process.argv[2] && /^\d{4}-/.test(b.at);
+process.exit(ok ? 0 : 1);' "$record" "$id" || fail "the record names each request, decision, feedback, and the approval as read: $(cat "$record")"
+  out=$(run_approve "$id" req-a allow); rc=$?
+  [ "$rc" -ne 0 ] || fail "an already-answered approval cannot be answered again: $out"
+  [ "$(wc -l < "$record")" -eq 2 ] || fail "a failed answer records nothing"
+  fm_write_meta "$CTRL_STATE/tmuxtask.meta" "window=s:w" "kind=ship"
+  out=$(run_approve tmuxtask req-a allow); rc=$?
+  expect_code 1 "$rc" "a non-T3 task has no approvals to answer"
+  pass "fm-t3-approve.sh: allows and denies with feedback by request id, records each decision, and refuses on a T3 without approval responses"
 }
 
 test_answer_script_reads_and_answers_questions() {
@@ -3670,6 +3735,8 @@ test_held_send_local_failure_stays_unconfirmed
 test_lost_send_reply_to_secondmate_names_armed_correlation
 test_status_table
 test_push_wait_escalates_pending_question_once
+test_push_wait_escalates_pending_approval_with_detail
+test_approve_script_answers_and_records_approvals
 test_answer_script_reads_and_answers_questions
 test_failed_t3_secondmate_is_resumed_in_place
 test_t3_secondmate_missing_thread_reproves_close_before_replacement

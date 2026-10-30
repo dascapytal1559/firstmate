@@ -491,11 +491,12 @@ if (env && typeof env === "object" && !Array.isArray(env) && typeof env.FM_T3COD
 
 # --- pending requests ---------------------------------------------------------
 #
-# A pending runtime request (pendingRequestCount) waits on a human. T3's
-# pending-request tools read and answer user-input questions only; a
-# permission approval stays answerable in T3 Code itself, so it is surfaced
-# as an approval count and never answered here. bin/fm-t3-answer.sh is the
-# supervisor's entry point.
+# A pending runtime request (pendingRequestCount) waits on the supervisor.
+# T3's pending-request tools read and answer user-input questions, and on a
+# T3 that advertises approvalResponses they also list and answer permission
+# approvals; on an earlier T3 an approval is surfaced as a count only.
+# bin/fm-t3-answer.sh and bin/fm-t3-approve.sh are the supervisor's entry
+# points.
 
 fm_backend_t3code_pending_requests() {  # <thread-id> -> requests JSON
   fm_backend_t3code_mcp requests --thread "$1"
@@ -503,6 +504,11 @@ fm_backend_t3code_pending_requests() {  # <thread-id> -> requests JSON
 
 fm_backend_t3code_answer_request() {  # <thread-id> <request-id> <answers-json-file>
   fm_backend_t3code_mcp respond --thread "$1" --request "$2" --answers-file "$3" >/dev/null
+}
+
+# Prints approve's JSON: the decision and the approval it answered.
+fm_backend_t3code_approve_request() {  # <thread-id> <request-id> <allow|deny> [feedback-file]
+  fm_backend_t3code_mcp approve --thread "$1" --request "$2" --decision "$3" ${4:+--feedback-file "$4"}
 }
 
 # --- native event wait ----------------------------------------------------------
@@ -549,8 +555,9 @@ fm_backend_t3code_events_capable() {  # <session>
 }
 
 # fm_backend_t3code_wait_transition: 0 with a normalized `blocked` record
-# (pane_id = thread id, workspace_id = request signature) on a fresh pending
-# request; 1 when a run ended (its terminal status written to the thread's
+# (pane_id = thread id, workspace_id = request signature, detail = each
+# answerable approval's id, kind, command or file, reason, and override) on a
+# fresh pending request; 1 when a run ended (its terminal status written to the thread's
 # run-ended record first), a status or turn-end file changed, the budget
 # passed, or nothing was running (the budget is slept); 2 when the server
 # could not be read.
@@ -567,8 +574,12 @@ fm_backend_t3code_wait_transition() {  # <session> <timeout_secs> <state_dir> <t
   # shellcheck disable=SC2016  # ${...} belongs to the Node snippet.
   out=$(printf '%s' "$out" | node -e '
 const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const clip = (v, n) => { const s = String(v).replace(/\s+/g, " ").trim(); return s.length > n ? `${s.slice(0, n - 3)}...` : s; };
+const approval = (a) =>
+  `approval ${a.requestId}${a.kind ? ` ${a.kind}` : ""}${a.detail ? `: ${clip(a.detail, 300)}` : ""}` +
+  `${a.reason ? ` - reason: ${clip(a.reason, 200)}` : ""}${a.override ? ` - override: ${a.override}` : ""}`;
 for (const id of d.cleared ?? []) console.log(`cleared\t${id}`);
-if (d.event === "blocked") console.log(`blocked\t${d.threadId}\t${d.signature}`);
+if (d.event === "blocked") console.log(`blocked\t${d.threadId}\t${d.signature}\t${(d.approvalRequests ?? []).map(approval).join("; ")}`);
 else if (d.event === "run-ended") console.log(`run-ended\t${d.threadId}\t${d.runId}\t${d.status}`);
 else console.log(`event\t${d.event}`);
 ') || return 2
@@ -577,7 +588,7 @@ else console.log(`event\t${d.event}`);
     case "$kind" in
       cleared) rm -f "$(fm_backend_t3code_escalation_marker "$state" "$a")" ;;
       blocked)
-        fm_transition_record "$a" "$b" "" blocked t3code
+        fm_transition_record "$a" "$b" "" blocked t3code "$c"
         return 0
         ;;
       run-ended) fm_backend_t3code_run_ended_write "$state" "$a" "$b" "$c" || true ;;
@@ -601,18 +612,29 @@ fm_backend_t3code_clear_transition() {  # <state_dir> <thread-id>
 }
 
 # fm_backend_t3code_transition_note: the escalation detail for a blocked
-# record, naming what is pending and how it is answered.
+# record, naming what is pending and how it is answered (the signature form is
+# fm-t3-mcp.mjs's pendingSignature).
 fm_backend_t3code_transition_note() {  # <record>
-  local signature questions approvals
+  local signature questions approvals answerable sep=''
   signature=$(fm_transition_workspace_id "$1")
   questions=${signature#q:}
   questions=${questions%%;*}
-  approvals=${signature##*;a:}
-  approvals=${approvals%%:*}
-  [ -z "$questions" ] || printf 'T3 question %s pending - read and answer with bin/fm-t3-answer.sh' "$questions"
+  approvals=${signature#*;a:}
+  approvals=${approvals%%[:;]*}
+  case "$signature" in
+    *';r:'*) answerable=${signature##*;r:} ;;
+    *) answerable= ;;
+  esac
+  if [ -n "$questions" ]; then
+    printf 'T3 question %s pending - read and answer with bin/fm-t3-answer.sh' "$questions"
+    sep='; '
+  fi
+  if [ -n "$answerable" ]; then
+    printf '%sT3 permission approval %s pending - decide it with bin/fm-t3-approve.sh' "$sep" "$answerable"
+    sep='; '
+  fi
   if [ "${approvals:-0}" != 0 ]; then
-    [ -z "$questions" ] || printf '; '
-    printf '%s T3 permission approval(s) pending - only T3 Code itself can approve' "$approvals"
+    printf '%s%s T3 permission approval(s) pending that this T3 cannot answer over /mcp - interrupt and steer the worker' "$sep" "$approvals"
   fi
 }
 

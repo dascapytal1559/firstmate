@@ -659,6 +659,84 @@ test_requests_and_respond() {
   pass "fm-t3-mcp requests/respond: questions are read and answered by id; approvals are counted, never answered"
 }
 
+# A T3 that advertises approvalResponses lists each pending permission
+# approval with what it asks for, and the supervisor answers it by id; one
+# that does not keeps approvals unanswerable.
+test_approvals_with_approval_responses() {
+  local sig
+  fresh_case approvals '{"toolset":"current","approvalResponses":true}'
+  t3_fake_set 'w.threads = { "thread-a": { threadId: "thread-a", projectId: "p", status: "running", activeRunId: "run-a", archived: false, worktreePath: null,
+    items: [{ itemId: "turn-item:runtime-request:req-appr-a", type: "approval_request", status: "waiting", text: "python3?" }],
+    runs: [{ runId: "run-a", ordinal: 1, status: "running" }],
+    runtimeRequests: [
+      { id: "req-question", kind: "user_input", status: "pending", questions: [{ id: "q1", header: "Pick", question: "Which?", options: [] }] },
+      { id: "req-appr-a", kind: "approval", status: "pending", requestKind: "command", command: "python3 - <<EOF", reason: "heredoc into an interpreter", override: "provider_check" } ] } }'
+  mcp requests --thread thread-a
+  expect_code 0 "$RC" "requests: $ERR"
+  assert_equals true "$(field "$OUT" approvalResponses)" "the feature flag is reported"
+  assert_equals req-question "$(field "$OUT" questions.0.requestId)" "the question stays a question"
+  assert_equals req-appr-a "$(field "$OUT" approvalRequests.0.requestId)" "the approval is listed by request id"
+  assert_equals command "$(field "$OUT" approvalRequests.0.kind)" "the approval names its kind"
+  assert_equals "python3 - <<EOF" "$(field "$OUT" approvalRequests.0.detail)" "the approval names the command it asks for"
+  assert_equals "heredoc into an interpreter" "$(field "$OUT" approvalRequests.0.reason)" "the approval carries the provider's reason"
+  assert_equals provider_check "$(field "$OUT" approvalRequests.0.override)" "the approval names why full access did not cover it"
+  assert_equals 0 "$(field "$OUT" approvals)" "an answerable approval is not counted as unanswerable"
+  assert_equals 'q:req-question;a:0;r:req-appr-a' "$(field "$OUT" signature)" "the signature names the answerable approval by request id"
+  t3_fake_set 'w.threads["thread-a"].runtimeRequests[0].status = "resolved"'
+  mcp watch --thread thread-a --timeout-ms 200
+  assert_equals blocked "$(field "$OUT" event)" "a pending approval is a blocked event"
+  sig=$(field "$OUT" signature)
+  assert_equals 'q:;a:0;r:req-appr-a' "$sig" "the blocked signature names the approval"
+  assert_equals "python3 - <<EOF" "$(field "$OUT" approvalRequests.0.detail)" "the blocked event carries the approval's detail"
+  mcp watch --thread thread-a --timeout-ms 200 --escalated "thread-a=$sig"
+  assert_equals timeout "$(field "$OUT" event)" "the escalated approval does not block again"
+
+  mcp approve --thread thread-a --request req-appr-a --decision allow --feedback-file /dev/null
+  expect_code 2 "$RC" "feedback is refused on an allow"
+  mcp approve --thread thread-a --request req-appr-a --decision maybe
+  expect_code 2 "$RC" "a decision other than allow or deny is refused"
+  : > "$T3_FAKE_LOG"
+  mcp approve --thread thread-a --request req-appr-a --decision allow
+  expect_code 0 "$RC" "approve allow: $ERR"
+  assert_equals allow "$(field "$OUT" decision)" "the decision is reported"
+  assert_equals "python3 - <<EOF" "$(field "$OUT" approval.detail)" "the answered approval is reported as read before the answer"
+  assert_contains "$(t3_fake_calls t3_pending_request | grep '"action":"respond"')" '"decision":"allow"' "the allow reaches T3's pending-request respond"
+  assert_not_contains "$(t3_fake_calls t3_pending_request | grep '"action":"respond"')" feedback "an allow sends no feedback"
+  mcp watch --thread thread-a --timeout-ms 200 --escalated "thread-a=$sig"
+  assert_equals thread-a "$(field "$OUT" cleared.0)" "the answered approval clears the escalation"
+
+  t3_fake_set 'w.threads["thread-a"].runtimeRequests.push({ id: "req-appr-b", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf /", reason: "ask rule", override: "ask_rule" })'
+  printf 'Outside your task; work inside your own copy instead.' > "$TMP_ROOT/feedback"
+  : > "$T3_FAKE_LOG"
+  mcp approve --thread thread-a --request req-appr-b --decision deny --feedback-file "$TMP_ROOT/feedback"
+  expect_code 0 "$RC" "approve deny: $ERR"
+  assert_equals deny "$(field "$OUT" decision)" "the deny is reported"
+  assert_equals "Outside your task; work inside your own copy instead." "$(field "$(t3_fake_calls t3_pending_request | grep '"action":"respond"')" feedback)" "the deny carries its feedback to T3"
+  mcp requests --thread thread-a
+  assert_equals 0 "$(field "$OUT" pendingRequestCount)" "nothing stays pending after both answers"
+  mcp approve --thread thread-a --request req-appr-b --decision allow
+  expect_code 3 "$RC" "an approval already answered is T3's own refusal"
+  t3_fake_set 'w.threads["thread-a"].runtimeRequests.push({ id: "req-question-2", kind: "user_input", status: "pending", questions: [] })'
+  mcp approve --thread thread-a --request req-question-2 --decision allow
+  expect_code 4 "$RC" "a request that is not a pending approval is refused"
+  assert_equals not_an_approval "$(field "$OUT" error.code)" "the refusal says it is not an approval"
+
+  fresh_case approvals-off '{"toolset":"current"}'
+  t3_fake_set 'w.threads = { "thread-a": { threadId: "thread-a", projectId: "p", status: "running", activeRunId: "run-a", archived: false, worktreePath: null, items: [],
+    runs: [{ runId: "run-a", ordinal: 1, status: "running" }],
+    runtimeRequests: [{ id: "req-appr-a", kind: "approval", status: "pending", command: "python3 - <<EOF" }] } }'
+  mcp requests --thread thread-a
+  assert_equals false "$(field "$OUT" approvalResponses)" "a T3 without the flag reports it"
+  assert_equals 1 "$(field "$OUT" approvals)" "its approval is counted as unanswerable"
+  assert_equals "" "$(field "$OUT" approvalRequests.0.requestId)" "and never listed as answerable"
+  : > "$T3_FAKE_LOG"
+  mcp approve --thread thread-a --request req-appr-a --decision allow
+  expect_code 4 "$RC" "approve refuses a T3 without approvalResponses"
+  assert_equals approval_responses_unsupported "$(field "$OUT" error.code)" "the refusal names the missing feature"
+  [ -z "$(t3_fake_calls t3_pending_request)" ] || fail "nothing is read or answered on a T3 without the feature"
+  pass "fm-t3-mcp approve: approvals are listed with their detail, allowed or denied with feedback by id, and refused on a T3 without approvalResponses"
+}
+
 test_watch_is_event_driven_and_bounded() {
   local start elapsed sig ender
   fresh_case watch
@@ -1272,6 +1350,7 @@ test_watch_reports_failed_waits_not_timeout
 test_helper_runs_through_symlinked_path
 test_empty_reply_is_never_success
 test_watch_escalates_a_replaced_approval
+test_approvals_with_approval_responses
 test_jsonrpc_server_error_is_not_proven_refusal
 test_orchestration_error_is_not_proven_refusal
 test_long_wait_rearms_in_slices

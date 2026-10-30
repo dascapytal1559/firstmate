@@ -52,7 +52,7 @@ T3 0.1.0 grants a full-access `mcp-client` all four scopes and refuses a pairing
 No browser is involved, and the token and pairing code are never printed.
 
 Full access is required because a worker writes its status lines outside its worktree.
-Under T3's narrower modes Codex's sandbox blocks that write and Claude parks on an approval that an MCP client cannot grant.
+Under T3's narrower modes Codex's sandbox blocks that write and Claude parks on an approval for every guarded action.
 The credential is much narrower than T3's administrative bearer from `t3 auth session issue`, which this backend no longer uses; T3 accepts an `mcp-client` session only on `/mcp`.
 
 The credential, the server's origin, its environment id, and its version are written to the local, gitignored `config/t3code-token`, mode 0600.
@@ -105,7 +105,7 @@ When T3 lists both, pending questions use the merged `t3_pending_request`, but t
 | Capability | Current tool family | Earlier tool family |
 |---|---|---|
 | Read a thread's binding | `t3_thread_configure` with only `threadId` (a read; the helper never sends `modelSelection`) | `t3_thread_configuration` |
-| Pending questions | `t3_pending_request` with `action` `list`, `read`, or `respond` | `t3_pending_request_list`, `t3_pending_request_read`, `t3_pending_request_respond` |
+| Pending questions (and approvals where `approvalResponses` is advertised) | `t3_pending_request` with `action` `list`, `read`, or `respond` | `t3_pending_request_list`, `t3_pending_request_read`, `t3_pending_request_respond` |
 
 It then refuses unless `t3_environment_read` reports the environment id recorded at sign-in, so a different T3 server behind the same address is never driven with this credential.
 A refusal names the missing tool or both environment ids, and spawn, control, and teardown stop before their first mutation.
@@ -270,7 +270,8 @@ Teardown still requires a proven archive before returning the worktree.
 T3 accepts an `mcp-client` session only on `/mcp`, so its WebSocket event stream is not available to this credential.
 `t3_thread_wait` is itself event-driven on T3's stored run updates, so the watcher's push splice uses it instead: each cycle makes one bounded `fm-t3-mcp.mjs watch` call across the recorded T3 workers.
 A new or changed set of pending requests is escalated at once, once per set, as a `blocked` wake that names the question ids and any permission approvals.
-Each approval is identified by its `approval_request` activity item, which T3 holds at status `waiting` until it is answered, among the thread's last 100 items, so an approval answered and replaced by another before the next cycle is a new set ([source evidence](verification/runtime-backends.md#permission-approvals-in-the-activity-view)).
+On a T3 whose `orchestrator_capabilities` advertises the `approvalResponses` feature, the pending-request list names each approval by request id, and the wake carries its kind, command or file, the provider's reason, and its `override` (`provider_check` or `ask_rule`).
+On an earlier T3 each approval is identified by its `approval_request` activity item, which T3 holds at status `waiting` until it is answered, among the thread's last 100 items, so an approval answered and replaced by another before the next cycle is a new set ([source evidence](verification/runtime-backends.md#permission-approvals-in-the-activity-view)).
 Otherwise the call waits on each thread's exact active run and returns as soon as one turns terminal, so the poll loop reconciles that turn without waiting out its interval.
 The same call races a change to a status or turn-end file in the home's state directory (`watch --state-dir`, filter and debounce owned by `bin/fm-state-watch.mjs`), so a worker's own append ends the wait within milliseconds, before T3 records the run's end; with no active run the call holds on that directory for the interval instead of re-arming.
 A run's terminal status is kept in the thread's run-ended record rather than discarded, and the watcher uses it, or one `state` read, to report a run that ends `failed`, `interrupted`, `cancelled`, or `rolled_back` after the worker's surfaced `done`, `failed`, or decision, carrying the error message T3 exposes on this credential ([`watcher-continuity.md`](watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path) owns the rule).
@@ -279,7 +280,9 @@ Secondmate threads stay off the splice, as on Herdr.
 In a home that also records Herdr or Rex workers, that backend keeps the push wait and the T3 workers stay on the poll loop, so adding a T3 task never slows Herdr or Rex escalation.
 
 Read and answer a worker's pending questions with [`bin/fm-t3-answer.sh`](../bin/fm-t3-answer.sh), which uses T3's pending-request tools (see the [capability gate](#capability-gate) for the two generations).
-Those tools list and answer questions only; a permission approval is visible through `t3_thread_read`'s activity view as an `approval_request` item, which is how the wake identifies it, but no `/mcp` tool answers it, so it is surfaced as a count and answered only in T3 Code itself.
+Its listing also shows each answerable approval, and [`bin/fm-t3-approve.sh`](../bin/fm-t3-approve.sh) allows or denies one through the same tool, as T3 Code's own buttons do, recording the decision in the task's durable record.
+Firstmate decides every approval itself under the `stuck-crewmate-recovery` skill's T3 permission approvals policy, so the captain never answers one in a worker's thread.
+A T3 without `approvalResponses` lists and answers questions only: the approval is surfaced as a count, the helper refuses, and firstmate interrupts and steers the worker instead.
 
 <a id="away-mode"></a>
 
@@ -335,7 +338,7 @@ If a task's thread no longer reads back, release the task by hand:
   Firstmate's pane-backed hook-trust workaround therefore does not apply; supervision uses T3's [thread status table](#restart-and-liveness-behavior).
 - `fm-control.sh exit` is refused because the V2 `/mcp` tools have no session stop, and `relaunch` is refused because a thread keeps its conversation, so no fresh agent can replace it.
 - The WebSocket event stream is not available to an `mcp-client` credential; the [run wait](#push-events-and-polling-fallback) stands in for it.
-- A permission approval cannot be answered through `/mcp`; it waits for T3 Code itself.
+- A permission approval can be answered through `/mcp` only on a T3 that advertises `approvalResponses`; elsewhere firstmate interrupts and steers the worker instead.
 - Request-id deduplication holds within one T3 auth session only: every sign-in starts a new session, so resending an unconfirmed send, or retrying a frozen away-mode digest, after the captain signs in again can deliver it twice; verify such a message in T3 Code first.
 - A tracked `.codex/config.toml` that already defines `[shell_environment_policy]` is refused by file and table name before a slot is leased.
 - While a tracked Codex overlay is installed, do not edit that file or clear its `skip-worktree` flag; configuration changes require cleanup first.
