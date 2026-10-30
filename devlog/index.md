@@ -200,3 +200,25 @@ This entry is the Firstmate half; the fork's T3 is gaining the field in parallel
 
 The evidence is the T3 helper suite (45 passing, with a new case for a parent bound, a wrong lineage, a wrong parent, an unknown parent, and a T3 without the field) and the T3 backend suite (119 passing, with new spawn cases for the home's main, an explicit target, an older T3, and a home with two live threads).
 Nothing has run live yet; the first live proof is one spawn once the fork's T3 half is installed.
+
+## 8. T3 wakes the main after a restart, so the outside nudge goes (31 October 2026)
+
+![The coordinator thread in a probe T3 after a restart: one note from T3 Code saying when the server restarted, which crew thread had its run cut, and to run session start](media/t3-restart-note.png)
+
+The ask:
+
+> I want you to kind of go over my changes for T3 code and first mate like our fork changes ... think about the direction or the architecture or the approach ... whether or not it could be done sort of more elegantly because we've kind of like bolted on layers after layers of sort of changes ...
+
+A T3 restart ends the main's session along with every worker's, and nothing inside a dead session can wake it.
+Until now a launchd job outside T3 polled the server every 30 seconds and sent the main one message per restart.
+The architecture review's second recommendation was to let T3, which knows when it starts, say so itself; the fork's T3 now sends each thread with crew one note per server start (picture above, from that task's live probe).
+This entry is the Firstmate half: the outside job, its launchd template, its records, its install and uninstall commands, and their docs are gone.
+
+- The main's restart reminder is kept, against the review's plan to delete it.
+  T3 skips the note for a main whose own turn the restart cut, and wakes it with "Continue where you left off." instead, which says nothing about session start; the reminder, which denies the first tool call while the lock names a dead process, is the only thing that sends that main to session start.
+  The deletion is kept aside as a patch in case the captain wants it anyway.
+- The credential guard in the same hook is unchanged, and `bin/fm-t3-restart.sh recover` still steers the interrupted workers once session start runs.
+- The launchd job already installed on this Mac is left running until this lands; it is removed by hand afterwards.
+
+The evidence is the T3 helper, away-daemon, turn-end guard, and T3 backend suites (44, 156, 91, and 113 passing), the linters, and the documentation check.
+The note only reaches a main whose workers are recorded as its crew, which needs entry 7's Firstmate half to have landed.
