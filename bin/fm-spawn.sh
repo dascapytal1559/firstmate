@@ -906,6 +906,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-supervisor-target-lib.sh
+. "$SCRIPT_DIR/fm-supervisor-target-lib.sh"
 # shellcheck source=bin/fm-kimi-trust-lib.sh
 . "$SCRIPT_DIR/fm-kimi-trust-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
@@ -1557,6 +1559,7 @@ T3CODE_CREATE_UNCERTAIN=0
 T3CODE_LAUNCH_UNCONFIRMED=0
 T3CODE_PROJECT_ID=
 T3CODE_MODEL_SELECTION=
+T3CODE_PARENT_THREAD=
 T3CODE_ENV_CHANNEL=
 T3CODE_INSTRUCTIONS_CHANNEL=
 HERDR_PROJECTION_ABORT_CLEANUP=0
@@ -2620,6 +2623,29 @@ spawn_t3code_select_channels() {
       ;;
     esac
   fi
+}
+
+# spawn_t3code_parent_thread - print the T3 thread running this spawn's
+# firstmate, which the task's thread names as its crew parent: an explicit
+# FM_SUPERVISOR_TARGET when discover_supervisor_backend pairs it with t3code
+# (a per-directory secondmate carries its own), else the one live thread in
+# this home. The home lookup is the t3code supervisor rule's cwd match
+# without its selection gate, which a spawn on t3code has already passed. A
+# secondmate's own spawn runs in its parent's home, so a secondmate is crew
+# of the main and its workers crew of the secondmate. Nothing is printed when
+# no T3 thread runs this firstmate, and the thread then launches without a
+# parent.
+spawn_t3code_parent_thread() {
+  local parent='' rc=0
+  if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
+    [ "$(discover_supervisor_backend 2>/dev/null)" != t3code ] || printf '%s' "$FM_SUPERVISOR_TARGET"
+    return 0
+  fi
+  parent=$(fm_backend_t3code_thread_for_home "$FM_HOME" 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    echo "note: several live T3 threads run in $FM_HOME; launching $ID's thread without a crew parent (FM_SUPERVISOR_TARGET names one)" >&2
+  fi
+  printf '%s' "$parent"
 }
 
 # spawn_t3code_channel_text: the channel statement as a T3 worker receives it.
@@ -5075,6 +5101,7 @@ EOF
     # The T3 project is the directory the agent runs in: the project for a
     # worker, the home itself for a secondmate.
     T3CODE_PROJECT_ID=$(fm_backend_t3code_project_ensure "$PROJ_ABS") || exit 1
+    T3CODE_PARENT_THREAD=$(spawn_t3code_parent_thread)
     if [ "$KIND" = secondmate ]; then
       # The home's own daemon and crew call the same server, so they read the
       # primary's credential through a link rather than a copy of the secret.
@@ -5929,7 +5956,8 @@ spawn_t3code_env_assemble() {
 # worktree with the existing_worktree strategy; a secondmate's at its home
 # (the project's own root). On the thread channels the environment
 # (spawn_t3code_env_assemble) and the channel statement ride the launch, and
-# the helper's read-back proves they bound. The helper archives a thread T3
+# the helper's read-back proves they bound; so does the crew parent
+# (spawn_t3code_parent_thread) where T3 offers lineage. The helper archives a thread T3
 # bound anywhere else. Exit 1 from it means the outcome is uncertain: a lost
 # reply can leave a thread behind whose id never came back, a failed binding
 # read-back leaves the binding unproven even after requesting archive, and a
@@ -5962,7 +5990,7 @@ require("fs").writeFileSync(file, JSON.stringify(env), { mode: 0o600 });
   T3CODE_CREATE_UNCERTAIN=1
   T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$title" \
     "$(git -C "$branch_dir" branch --show-current 2>/dev/null || true)" "$worktree" "$T3CODE_MODEL_SELECTION" \
-    "$env_file" "$instructions_file") || rc=$?
+    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD") || rc=$?
   rm -f "$env_file" "$instructions_file"
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 1 ] || T3CODE_CREATE_UNCERTAIN=0

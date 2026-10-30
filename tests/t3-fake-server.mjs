@@ -37,6 +37,10 @@
 //     binds its `environment` and `instructions`, and the configuration read
 //     returns them with effectiveRuntimeMode; upstream T3 (no threadFacts)
 //     drops both fields and reads back neither;
+//   - a T3 with crew lineage (world crewLineage) declares t3_thread_launch's
+//     `parentThreadId`, refuses a parent it cannot read, and records the
+//     launched thread as relationshipToParent "crew" under it, which
+//     t3_thread_read reports; without it the argument is dropped;
 //   - orchestrator_capabilities lists a short set of models per provider and
 //     counts the rest in omittedModels (a provider's `omitted` models), and
 //     its declared `search` argument (absent under world noSearch) instead
@@ -61,8 +65,8 @@
 //   tool names instead of the earlier default), revoked (every /mcp call is 401),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
-//   bindInstructions, bindEffectiveRuntimeMode (override what a launch binds),
-//   threadFacts, noStop,
+//   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
+//   (override what a launch binds), threadFacts, crewLineage, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -107,6 +111,11 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "ro
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
 // Input schemas for the tools whose optional fields the helper gates on.
 const TOOL_SCHEMAS = {
+  t3_thread_launch: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
+      "environment", "instructions", "message", ...(w.crewLineage ? ["parentThreadId"] : [])].map((k) => [k, {}])),
+  }),
   t3_thread_interrupt: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "runId", "reason", ...(w.noStop ? [] : ["stop"]), "clientRequestId"].map((k) => [k, {}])),
@@ -301,6 +310,8 @@ async function callTool(w, name, a) {
       return [ok(p), true];
     }
     case "t3_thread_launch": {
+      const parent = w.crewLineage ? a.parentThreadId : undefined;
+      if (parent !== undefined && !threads[parent]) return [notFound(parent), false];
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -316,6 +327,10 @@ async function callTool(w, name, a) {
         branch: ws.branch ?? null, worktreePath: w.bindWorktree ?? (ws.type === "existing_worktree" ? ws.worktreePath : null),
         parentThreadId: null, relationshipToParent: null, pendingRequestCount: 0, archived: false, items: [], runs: [],
       };
+      if (parent !== undefined) {
+        n.parentThreadId = w.bindParent ?? parent;
+        n.relationshipToParent = w.bindRelationship ?? "crew";
+      }
       if (w.threadFacts) {
         if (a.environment !== undefined || w.bindEnvironment !== undefined) n.environment = w.bindEnvironment ?? a.environment;
         if (a.instructions !== undefined || w.bindInstructions !== undefined) n.instructions = w.bindInstructions ?? a.instructions;

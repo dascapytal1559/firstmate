@@ -1696,6 +1696,31 @@ test_spawn_claude_worker_rides_thread_channels() {
   pass "fm-spawn.sh --backend t3code claude: on a T3 with per-thread facts the environment and statement ride the launch and only the busy hooks stay in the worktree"
 }
 
+# A worker's thread names the T3 thread running its firstmate as its crew
+# parent where T3 offers lineage: the one live thread in the home (t-main),
+# or an explicit FM_SUPERVISOR_TARGET paired with t3code; a T3 without
+# lineage, or a home with several live threads, launches it with no parent.
+test_spawn_names_supervisor_thread_as_crew_parent() {  # <case> <world js> <expected parent> [NAME=VALUE...]
+  local name=$1 js=$2 expect=$3 id out rc home
+  shift 3
+  id=$(t3_uid "t3crew-$name")
+  t3_case "spawn-crew-$name"
+  t3_worker_setup "$id"
+  home=$(cd "$CASE_DIR/home" && pwd -P)
+  FM_T3_HOME="$home" t3_world_set '
+w.crewLineage = true;
+w.projects.push({ id: "proj-home", title: "home", workspaceRoot: process.env.FM_T3_HOME, deletedAt: null, defaultModelSelection: null });
+const at = (id, status) => ({ ...w.threads["thread-live"], threadId: id, projectId: "proj-home", status, activeRunId: status === "running" ? "r-" + id : null });
+w.threads["t-main"] = at("t-main", "running");
+w.threads["t-other"] = at("t-other", "completed");'
+  t3_world_set "$js"
+  out=$(unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND; for kv in "$@"; do export "${kv?}"; done; t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "$name: the worker spawn should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'a.parentThreadId')" = "${expect:-undefined}" ] || fail "$name: the launch should name parent '${expect:-none}', got '$(t3_launch_field 'a.parentThreadId')'"
+  [ -n "$expect" ] || [ "$name" != ambiguous ] || assert_contains "$out" "without a crew parent" "an ambiguous home says the thread has no crew parent"
+  pass "fm-spawn.sh --backend t3code: crew parent ($name) is '${expect:-none}'"
+}
+
 # A harness without any channel is refused before anything is leased, and so
 # is an instance that cannot run full-access.
 test_spawn_refuses_harness_without_a_channel_or_full_access() {
@@ -3814,6 +3839,10 @@ test_teardown_force_interrupts_a_running_turn
 test_spawn_grok_worker_rides_thread_channels
 test_spawn_gemini_worker_finds_registry_instance_by_agent
 test_spawn_claude_worker_rides_thread_channels
+test_spawn_names_supervisor_thread_as_crew_parent home ';' t-main
+test_spawn_names_supervisor_thread_as_crew_parent explicit ';' t-other FM_SUPERVISOR_TARGET=t-other FM_SUPERVISOR_BACKEND=t3code
+test_spawn_names_supervisor_thread_as_crew_parent upstream 'delete w.crewLineage' ''
+test_spawn_names_supervisor_thread_as_crew_parent ambiguous 'w.threads["t-other"].status = "running"; w.threads["t-other"].activeRunId = "r-t-other"' ''
 test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease
 test_spawn_secondmate_rides_thread_environment

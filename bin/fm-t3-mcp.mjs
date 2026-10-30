@@ -60,15 +60,21 @@
 //   fm-t3-mcp.mjs launch --project <id> --title <title> --model-selection <json>
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
+//       [--parent <thread-id>]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
 //     to strings) and --instructions-file ride as the launch's per-thread
-//     environment and instructions. Reads the thread and its configuration
+//     environment and instructions. --parent names the thread this one works
+//     for, sent as parentThreadId only where t3_thread_launch's tools/list
+//     schema declares it (T3 then lists the thread as that thread's crew);
+//     elsewhere the launch goes ahead without it, and the result's
+//     parentThreadId is null. Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
-//     read reports one), instance, model, every requested option value, and
-//     the given environment and instructions; a refused
+//     read reports one), instance, model, every requested option value,
+//     the given environment and instructions, and, when a parent was sent,
+//     relationshipToParent crew under exactly that parent; a refused
 //     thread that does not then read back archived with no active run exits
 //     1, because it may still be live. A read-back that fails also archives
 //     and exits 1, since the thread exists but its binding is unproven. T3's
@@ -1130,10 +1136,13 @@ const sameEnvironment = (a, b) =>
 
 // What a launch must read back: the workspace, full access (and the effective
 // mode T3 runs the driver at, when it reports one), exactly the requested
-// instance, model, and option values, and the thread environment and
-// instructions it was given.
-function bindingProblems(t, config, selection, worktree, environment, instructions) {
+// instance, model, and option values, the thread environment and
+// instructions it was given, and the crew lineage under the parent it named.
+function bindingProblems(t, config, selection, worktree, environment, instructions, parent) {
   const problems = [];
+  if (parent !== null && (t.relationshipToParent !== "crew" || t.parentThreadId !== parent)) {
+    problems.push(`lineage ${t.relationshipToParent ?? "none"} under ${t.parentThreadId ?? "no parent"}`);
+  }
   if (worktree ? realOrRaw(t.worktreePath ?? "") !== realOrRaw(worktree) : (t.worktreePath ?? null) !== null) {
     problems.push(`worktreePath ${t.worktreePath ?? "none"}`);
   }
@@ -1159,6 +1168,7 @@ async function launch(flags) {
   const message = flags["message-file"] ? readMessage(flags) : null;
   const environment = launchEnvironment(flags);
   const instructions = launchInstructions(flags);
+  if (flags.parent !== undefined && !flags.parent) usage("--parent needs a thread id");
   let session;
   let g;
   try {
@@ -1167,6 +1177,9 @@ async function launch(flags) {
     if (err instanceof Refusal && err.exit !== 1) throw err;
     throw new Refusal(err instanceof Refusal ? err.code : "unexpected", `${err?.message ?? String(err)}; no thread was launched`, 8, err instanceof Refusal ? err.extra : {});
   }
+  // A T3 without crew lineage drops an undeclared argument, so the parent
+  // rides, and is proven, only where the launch schema declares it.
+  const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1180,6 +1193,7 @@ async function launch(flags) {
     ...(environment ? { environment } : {}),
     ...(instructions !== null ? { instructions } : {}),
     ...(message ? { message } : {}),
+    ...(parent !== null ? { parentThreadId: parent } : {}),
   };
   let out;
   try {
@@ -1207,12 +1221,12 @@ async function launch(flags) {
       { threadId: out.threadId },
     );
   }
-  const problems = bindingProblems(t, config, selection, worktree, environment, instructions);
+  const problems = bindingProblems(t, config, selection, worktree, environment, instructions, parent);
   if (problems.length) {
     const archived = await archiveLaunched();
     throw new Refusal(
       "binding_mismatch",
-      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
+      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""}${parent !== null ? `, crew of ${parent}` : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
       archived ? 4 : 1,
       { threadId: out.threadId },
     );
@@ -1225,6 +1239,7 @@ async function launch(flags) {
     model: selection.model,
     runId: out.runId ?? null,
     status: t.status ?? null,
+    parentThreadId: parent,
     environmentId: g.environmentId,
     origin: session.origin,
     serverVersion: g.serverVersion,

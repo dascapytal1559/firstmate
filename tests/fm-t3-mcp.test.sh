@@ -1253,6 +1253,46 @@ test_launch_binds_thread_environment_and_instructions() {
   pass "fm-t3-mcp launch: per-thread environment and instructions are sent and proven bound, and an effective downgrade is refused"
 }
 
+test_launch_names_its_crew_parent() {
+  local project main call
+  fresh_case launch-crew '{"crewLineage":true}'
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title main --model-selection "$SEL"
+  main=$(field "$OUT" threadId)
+  assert_equals "" "$(field "$OUT" parentThreadId)" "a launch without --parent names no parent"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --parent "$main"
+  expect_code 0 "$RC" "a launch that reads back as crew of its parent succeeds: $ERR"
+  assert_equals "$main" "$(field "$OUT" parentThreadId)" "the result names the parent T3 bound"
+  call=$(t3_fake_calls t3_thread_launch | tail -1)
+  assert_equals "$main" "$(field "$call" parentThreadId)" "the launch carries the parent where the schema declares it"
+  t3_fake_set 'w.bindRelationship = "fork"'
+  : > "$T3_FAKE_LOG"
+  mcp launch --project "$project" --title forked --model-selection "$SEL" --worktree "$WT" --parent "$main"
+  expect_code 4 "$RC" "a thread that reads back as anything but crew is refused"
+  assert_contains "$ERR" "lineage fork" "the refusal names the lineage T3 recorded"
+  assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the mis-bound thread is archived"
+  t3_fake_set 'w.bindRelationship = "crew"; w.bindParent = "mcp:someone-else"'
+  : > "$T3_FAKE_LOG"
+  mcp launch --project "$project" --title misparented --model-selection "$SEL" --worktree "$WT" --parent "$main"
+  expect_code 4 "$RC" "a crew thread under another parent is refused"
+  assert_contains "$ERR" "under mcp:someone-else" "the refusal names the parent T3 recorded"
+  assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the mis-parented thread is archived"
+  t3_fake_set 'delete w.bindRelationship; delete w.bindParent'
+  mcp launch --project "$project" --title orphan --model-selection "$SEL" --worktree "$WT" --parent mcp:missing
+  expect_code 3 "$RC" "T3's refusal of an unknown parent launches nothing"
+  t3_fake_set 'delete w.crewLineage'
+  : > "$T3_FAKE_LOG"
+  mcp launch --project "$project" --title upstream --model-selection "$SEL" --worktree "$WT" --parent "$main"
+  expect_code 0 "$RC" "a T3 without crew lineage launches without the parent: $ERR"
+  assert_equals "" "$(field "$OUT" parentThreadId)" "the result says no parent bound"
+  call=$(t3_fake_calls t3_thread_launch | tail -1)
+  assert_equals "" "$(field "$call" parentThreadId)" "an undeclared parent is never sent"
+  mcp launch --project "$project" --title empty --model-selection "$SEL" --worktree "$WT" --parent ""
+  expect_code 2 "$RC" "an empty --parent is invalid use"
+  pass "fm-t3-mcp launch: --parent rides only where the launch schema declares it and must read back as crew of exactly that parent"
+}
+
 # t3_family <worker-status> <child-status> <grandchild-status>: a worker
 # thread with a delegated child and grandchild on the same project.
 # shellcheck disable=SC2016  # ${...} belongs to the JavaScript snippet.
@@ -1340,6 +1380,7 @@ test_resolve_selection_adapter_rows
 test_resolve_selection_searches_omitted_models
 test_resolve_selection_by_root_is_read_only
 test_launch_binds_thread_environment_and_instructions
+test_launch_names_its_crew_parent
 test_close_stops_delegated_threads
 test_requests_and_respond
 test_gate_accepts_either_tool_generation

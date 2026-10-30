@@ -118,6 +118,11 @@ A secondmate's T3 project is its home and its thread is launched with the `root`
 T3 assigns the thread id at launch (`mcp:<uuid>`), and the task records it as `t3_thread_id`.
 The normal isolation and unlanded-work refusal rules still apply.
 
+Each launched thread also names the T3 thread running the firstmate that spawned it as its parent, so T3 lists it as that thread's crew: a worker under the main or under the secondmate that spawned it, and a secondmate under the main.
+The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else the one live worktree-less thread in the spawning home, the same cwd match away mode uses.
+It is sent as `parentThreadId` only where the `t3_thread_launch` schema declares it, and the launch read-back must then show `relationshipToParent` `crew` under exactly that parent, or the thread is archived and refused like any other mis-binding.
+A T3 without crew lineage, a firstmate not running in T3, or a home with several live threads launches the thread with no parent, which changes only how T3 groups it; lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
+
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.
 
 ## Worker environment and channel statement

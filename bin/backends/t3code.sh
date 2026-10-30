@@ -155,13 +155,17 @@ process.stdout.write([JSON.stringify(d.selection), word(d.threadEnvironment), wo
 # lease; the helper owns those failure verdicts. The optional environment
 # file (a JSON object) and instructions file ride as the thread's own launch
 # environment and instructions, and the helper's read-back proves they bound.
-fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] -> thread id
-  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} out rc
+# The optional parent thread id names the thread this one works for; where T3
+# offers crew lineage the helper sends it and proves the thread reads back as
+# that thread's crew, and elsewhere the thread launches without it.
+fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] [parent-thread-id] -> thread id
+  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} parent=${8:-} out rc
   local -a args=(launch --project "$project_id" --title "$title" --model-selection "$selection")
   [ -z "$branch" ] || args+=(--branch "$branch")
   [ -z "$worktree" ] || args+=(--worktree "$worktree")
   [ -z "$env_file" ] || args+=(--environment-file "$env_file")
   [ -z "$instructions_file" ] || args+=(--instructions-file "$instructions_file")
+  [ -z "$parent" ] || args+=(--parent "$parent")
   out=$(fm_backend_t3code_mcp "${args[@]}") && rc=0 || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   printf '%s' "$out" | fm_backend_t3code_json_get threadId || return 1
