@@ -11,20 +11,20 @@
 #
 # Target string shape: the T3 thread id T3 assigned at launch.
 #
-# T3 sets environment variables per provider instance, never per thread, so
-# every fact firstmate would type into a pane before launch (GOTMPDIR,
+# Every fact firstmate would type into a pane before launch (GOTMPDIR,
 # COMPACT_ADVISER_DISABLE, FM_TASK_INBOX, the Git hook override, optional
-# LAVISH_AXI_HOST, FM_TASK_ID, TRACEPARENT,
-# and a secondmate's FM_* launch prefix) travels
-# instead as per-directory harness config that bin/fm-spawn.sh writes into the
-# launch directory before the first turn: `.claude/settings.local.json` `env`
-# for Claude, `.codex/config.toml` `[shell_environment_policy] set` for Codex.
+# LAVISH_AXI_HOST, FM_TASK_ID, TRACEPARENT, and a secondmate's FM_* launch
+# prefix) rides the thread's launch `environment` where the instance
+# advertises threadEnvironment, and the task-worker channel statement rides its
+# `instructions` where it advertises threadInstructions. On a T3 without them,
+# bin/fm-spawn.sh writes the claude and codex per-directory fallbacks into the
+# launch directory instead; docs/t3code-backend.md owns which channel applies.
 #
 # Config (gitignored config/ of the active home):
 #   t3code-token      the mcp-client credential the captain's
 #                     `bin/fm-t3-mcp.mjs login` writes, mode 0600
-#   t3code-instances  optional `harness=instanceId` lines (claude=claudeAgent,
-#                     codex=codex by default)
+#   t3code-instances  optional `harness=instanceId` lines overriding the
+#                     default instance of bin/fm-t3-mcp.mjs's HARNESSES table
 
 # T3 has no composer, but the shared submit dispatcher in bin/fm-backend.sh
 # prepares and reads the composer dialog sink around every adapter, so this
@@ -96,13 +96,17 @@ fm_backend_t3code_project_ensure() {  # <project-path> -> project id
   fm_backend_t3code_mcp project-ensure --root "$real" --title "$(basename "$real")" | fm_backend_t3code_json_get projectId
 }
 
+# fm_backend_t3code_harness_field <harness> <field>: one field of the harness's
+# row in bin/fm-t3-mcp.mjs's HARNESSES table, read locally; a harness T3
+# cannot run fails with the helper's refusal on stderr.
+fm_backend_t3code_harness_field() {  # <harness> <field>
+  command -v node >/dev/null 2>&1 || { echo "error: backend=t3code selected but 'node' is not installed" >&2; return 1; }
+  node "$FM_BACKEND_T3CODE_HELPER" harness --harness "$1" | fm_backend_t3code_json_get "$2"
+}
+
 fm_backend_t3code_instance_id() {  # <harness>
   local harness=$1 file line value
-  case "$harness" in
-    claude) value=claudeAgent ;;
-    codex) value=codex ;;
-    *) echo "error: backend=t3code supports only the claude and codex harnesses, not '$harness'" >&2; return 1 ;;
-  esac
+  value=$(fm_backend_t3code_harness_field "$harness" instanceId) || return 1
   file="$(fm_backend_t3code_config_dir)/t3code-instances"
   if [ -f "$file" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
@@ -113,19 +117,25 @@ fm_backend_t3code_instance_id() {  # <harness>
   printf '%s' "$value"
 }
 
-# fm_backend_t3code_model_selection: the launch's model selection, resolved
-# against T3's own catalog before anything is leased (bin/fm-t3-mcp.mjs
-# resolve-selection owns the driver, model, and option checks). Prints the
-# selection JSON; the helper prints its own refusal.
-fm_backend_t3code_model_selection() {  # <harness> <model> <effort> <project-id> -> JSON
-  local harness=$1 model=${2:-default} effort=${3:-default} project_id=$4 instance out
+# fm_backend_t3code_resolve: the launch's model selection and the instance's
+# per-thread channels, resolved against T3's own catalog before anything is
+# leased (bin/fm-t3-mcp.mjs resolve-selection owns the driver, agent,
+# full-access, model, and option checks). Prints one TAB-separated line:
+#   <selection-json>\t<environment: thread|none>\t<instructions: thread|none>
+# The helper prints its own refusal.
+# Read-only: a default model is the project's default from the live T3
+# project rooted at <project-path>, which must already exist.
+fm_backend_t3code_resolve() {  # <harness> <model> <effort> <project-path>
+  local harness=$1 model=${2:-default} effort=${3:-default} project=$4 instance real out
   instance=$(fm_backend_t3code_instance_id "$harness") || return 1
+  real=$(cd "$project" 2>/dev/null && pwd -P) || { echo "error: project path $project is not a directory" >&2; return 1; }
   out=$(fm_backend_t3code_mcp resolve-selection --harness "$harness" --instance "$instance" \
-    --model "$model" --effort "$effort" --project "$project_id") || return 1
+    --model "$model" --effort "$effort" --root "$real") || return 1
   printf '%s' "$out" | node -e '
 const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
 if (!d.ok || !d.selection) process.exit(1);
-process.stdout.write(JSON.stringify(d.selection));
+const word = (v) => (v === true ? "thread" : "none");
+process.stdout.write([JSON.stringify(d.selection), word(d.threadEnvironment), word(d.threadInstructions)].join("\t"));
 '
 }
 
@@ -137,12 +147,16 @@ process.stdout.write(JSON.stringify(d.selection));
 # reply can leave a thread behind whose id never came back, a failed binding
 # read-back leaves the binding unproven even after requesting archive, and a
 # mis-bound thread may not read back archived. In each case spawn keeps the
-# lease; the helper owns those failure verdicts.
-fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> -> thread id
-  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 out rc
+# lease; the helper owns those failure verdicts. The optional environment
+# file (a JSON object) and instructions file ride as the thread's own launch
+# environment and instructions, and the helper's read-back proves they bound.
+fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] -> thread id
+  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} out rc
   local -a args=(launch --project "$project_id" --title "$title" --model-selection "$selection")
   [ -z "$branch" ] || args+=(--branch "$branch")
   [ -z "$worktree" ] || args+=(--worktree "$worktree")
+  [ -z "$env_file" ] || args+=(--environment-file "$env_file")
+  [ -z "$instructions_file" ] || args+=(--instructions-file "$instructions_file")
   out=$(fm_backend_t3code_mcp "${args[@]}") && rc=0 || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   printf '%s' "$out" | fm_backend_t3code_json_get threadId || return 1
@@ -423,28 +437,16 @@ fm_backend_t3code_send_key() {  # <thread-id> <key>
   esac
 }
 
-# Interrupt any running turn, then archive the thread so it can never act in
-# a returned slot, and succeed only on T3's read-back of archived:true with no
-# active run (the helper's archive owns that proof). Archiving keeps the
-# transcript visible in T3. Idempotent: an archived thread with no active run,
-# or one the verified server no longer has, is already the end state.
+# Stop any running turn and every task the thread delegated, then archive the
+# thread so neither it nor a delegated thread can act in a returned slot, and
+# succeed only on T3's read-back of archived:true with no active run and no
+# active delegated thread below it (bin/fm-t3-mcp.mjs close owns the stop and
+# that proof). Archiving keeps the transcript visible in T3. Idempotent: an
+# archived thread with nothing active below it, or one the verified server no
+# longer has, is already the end state.
 fm_backend_t3code_kill() {  # <thread-id>
-  local thread=$1 out exists
-  out=$(fm_backend_t3code_thread_state "$thread") || return 1
-  exists=$(printf '%s' "$out" | fm_backend_t3code_json_get exists) || return 1
-  case "$exists" in
-    true) ;;
-    false) return 0 ;;
-    *) return 1 ;;
-  esac
-  if [ "$(printf '%s' "$out" | fm_backend_t3code_json_get archived)" = true ] \
-    && ! printf '%s' "$out" | fm_backend_t3code_json_get activeRunId >/dev/null; then
-    return 0
-  fi
-  if printf '%s' "$out" | fm_backend_t3code_json_get activeRunId >/dev/null; then
-    fm_backend_t3code_native_interrupt "$thread" >/dev/null || return 1
-  fi
-  out=$(fm_backend_t3code_mcp archive --thread "$thread") || return 1
+  local out
+  out=$(fm_backend_t3code_mcp close --thread "$1") || return 1
   [ "$(printf '%s' "$out" | fm_backend_t3code_json_get closed)" = true ]
 }
 
@@ -650,11 +652,11 @@ fm_backend_t3code_resume_failed() {  # <thread-id>
   fm_backend_t3code_turn_start "$1" "Firstmate recovery: your previous T3 run ended failed. Re-read your AGENTS.md and your home's config first, since either may have changed while the run was down. Then reconcile the work already recorded in your home, report anything your parent needs through your parent channel, then idle as your charter says."
 }
 
+# The harness admission gate at spawn start: a harness with a row in
+# bin/fm-t3-mcp.mjs's HARNESSES table, refused with that table's list
+# otherwise. Whether the selected instance can run it is resolve's check.
 fm_backend_t3code_validate_harness() {  # <harness>
-  case "$1" in
-    claude|codex) return 0 ;;
-    *) echo "error: backend=t3code runs only the claude and codex harnesses, not '$1'" >&2; return 1 ;;
-  esac
+  fm_backend_t3code_harness_field "$1" driverKind >/dev/null
 }
 
 # fm_backend_t3code_codex_trusted: whether ${CODEX_HOME:-~/.codex}/config.toml

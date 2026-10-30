@@ -997,6 +997,182 @@ test_watch_state_dir_races_the_run_wait() {
   pass "fm-t3-mcp watch --state-dir: a status or turn-end change ends the wait, a run end and a pending request still win, and an idle thread holds for the budget"
 }
 
+# The one adapter table: every row resolves through T3's catalog the same
+# way, an ACP registry row must name its agent, an instance that cannot run
+# full-access is refused, and an effort word maps only onto a catalog value
+# of the same name.
+test_resolve_selection_adapter_rows() {
+  local project
+  fresh_case resolve-rows
+  mcp harness --harness grok
+  expect_code 0 "$RC" "harness reads the table without a server call: $ERR"
+  assert_equals grok "$(field "$OUT" driverKind)" "the grok row runs on the grok driver"
+  assert_equals reasoningEffort "$(field "$OUT" effortOption)" "the grok row carries effort as reasoningEffort"
+  mcp harness --harness omp
+  expect_code 4 "$RC" "a harness with no T3 driver is refused"
+  assert_equals harness_unsupported "$(field "$OUT" error.code)" "the refusal code names the unsupported harness"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp resolve-selection --harness grok --model grok-4.7-build-fast --effort low --project "$project"
+  expect_code 0 "$RC" "grok resolves on its default instance: $ERR"
+  assert_equals '{"instanceId":"grok","model":"grok-4.7-build-fast","options":[{"id":"reasoningEffort","value":"low"}]}' "$(field "$OUT" selection)" \
+    "a grok effort rides reasoningEffort on the grok instance"
+  assert_equals false "$(field "$OUT" threadEnvironment)" "an instance that does not advertise a per-thread environment reads false"
+  mcp resolve-selection --harness grok --model grok-4.7 --effort max --project "$project"
+  expect_code 4 "$RC" "an effort word the catalog lacks is refused, never mapped onto a neighbour"
+  assert_contains "$ERR" "xhigh, high, medium, low" "the refusal lists the catalog's values"
+  mcp resolve-selection --harness grok --model grok-4.7 --effort huge --project "$project"
+  expect_code 2 "$RC" "a word that is not a Firstmate effort word is invalid use"
+  t3_fake_set 'w.threadFacts = true'
+  mcp resolve-selection --harness grok --model grok-4.7 --effort default --project "$project"
+  assert_equals true "$(field "$OUT" threadEnvironment)" "an advertised per-thread environment reads true"
+  assert_equals true "$(field "$OUT" threadInstructions)" "advertised per-thread instructions read true"
+  t3_fake_set 'w.providers = [
+    { providerInstanceId: "pi", driverKind: "pi", constraints: [], runtimeModes: ["approval-required", "auto"], models: [{ id: "default", options: [] }] },
+    { providerInstanceId: "antigravity", driverKind: "antigravity", constraints: [], models: [{ id: "agy-1", options: [{ id: "thought_level", values: ["low", "high"] }] }] },
+    { providerInstanceId: "cursor", driverKind: "cursor", constraints: [], models: [{ id: "c-1", options: [{ id: "effort", values: ["low"] }, { id: "reasoning", values: ["low"] }] }] },
+    { providerInstanceId: "gemini", driverKind: "acpRegistry", agentId: "kimi", constraints: [], models: [{ id: "g-1", options: [] }] },
+    { providerInstanceId: "kimi", driverKind: "acpRegistry", constraints: [], models: [{ id: "k-1", options: [] }] },
+    { providerInstanceId: "devin", driverKind: "acpRegistry", agentId: "devin", constraints: [], models: [{ id: "d-1", options: [] }] }]'
+  mcp resolve-selection --harness pi --model default --effort default --project "$project"
+  expect_code 4 "$RC" "an instance whose runtimeModes lack full-access is refused"
+  assert_equals full_access_unsupported "$(field "$OUT" error.code)" "the refusal names the missing full-access mode"
+  mcp resolve-selection --harness agy --model agy-1 --effort high --project "$project"
+  expect_code 0 "$RC" "a from-catalog row finds the model's one effort option: $ERR"
+  assert_equals '{"instanceId":"antigravity","model":"agy-1","options":[{"id":"thought_level","value":"high"}]}' "$(field "$OUT" selection)" \
+    "agy effort rides the catalog's thought_level option"
+  mcp resolve-selection --harness cursor --model c-1 --effort low --project "$project"
+  expect_code 4 "$RC" "a model offering several effort options is refused rather than guessed"
+  assert_contains "$ERR" "several effort options (effort, reasoning)" "the refusal names the candidate options"
+  mcp resolve-selection --harness cursor --model c-1 --effort default --project "$project"
+  expect_code 0 "$RC" "the same model with no effort override resolves: $ERR"
+  mcp resolve-selection --harness gemini --model g-1 --effort default --project "$project"
+  expect_code 4 "$RC" "an ACP registry instance running another agent is refused"
+  assert_equals agent_mismatch "$(field "$OUT" error.code)" "the refusal names the agent mismatch"
+  assert_contains "$ERR" "runs the ACP registry agent 'kimi', not 'gemini'" "the refusal names both agents"
+  mcp resolve-selection --harness kimi --model k-1 --effort default --project "$project"
+  expect_code 4 "$RC" "an ACP registry instance that does not report its agent is refused"
+  assert_contains "$ERR" "does not report which ACP registry agent it runs" "the refusal says the agent is unverifiable"
+  mcp resolve-selection --harness devin --model d-1 --effort default --project "$project"
+  expect_code 0 "$RC" "an ACP registry instance reporting the row's agent resolves: $ERR"
+  pass "fm-t3-mcp resolve-selection: every adapter row resolves through T3's catalog; agent, full-access, and effort mapping refuse what they cannot prove"
+}
+
+# --model default reads the project rooted at --root without creating it.
+test_resolve_selection_by_root_is_read_only() {
+  fresh_case resolve-root
+  mcp resolve-selection --harness claude --model default --effort default --root "$TMP_ROOT/proj"
+  expect_code 4 "$RC" "a default model on a root T3 has no project for is refused"
+  assert_equals project_not_found "$(field "$OUT" error.code)" "the refusal names the missing project"
+  [ -z "$(t3_fake_mutations)" ] || fail "a resolve by root must not create the project, got '$(t3_fake_mutations)'"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  FM_T3_ID="$(field "$OUT" projectId)" t3_fake_set 'w.projects.find((p) => p.id === process.env.FM_T3_ID).defaultModelSelection = { instanceId: "claudeAgent", model: "claude-haiku-5-5" }'
+  mcp resolve-selection --harness claude --model default --effort low --root "$TMP_ROOT/proj"
+  expect_code 0 "$RC" "a default model resolves from the project rooted there: $ERR"
+  assert_equals claude-haiku-5-5 "$(field "$OUT" selection.model)" "the project's default model is used"
+  pass "fm-t3-mcp resolve-selection --root: the default model comes from the live project at that root, never a created one"
+}
+
+# On a server with per-thread facts the launch carries the environment and
+# instructions and proves they bound; a server that drops them, rebinds them,
+# or runs the driver below full access is refused with the thread archived.
+test_launch_binds_thread_environment_and_instructions() {
+  local project call envf="$TMP_ROOT/thread-env.json" instr="$TMP_ROOT/thread-instructions"
+  fresh_case launch-thread-facts '{"threadFacts":true}'
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  printf '{"FM_TASK_ID":"t1","GOTMPDIR":"/tmp/fm-t1/gotmp"}' > "$envf"
+  printf 'You are a task worker launched by Firstmate.' > "$instr"
+  mcp launch --project "$project" --title env --model-selection "$SEL" --worktree "$WT" --environment-file "$envf" --instructions-file "$instr"
+  expect_code 0 "$RC" "a launch whose environment and instructions read back succeeds: $ERR"
+  call=$(t3_fake_calls t3_thread_launch | tail -1)
+  assert_equals '{"FM_TASK_ID":"t1","GOTMPDIR":"/tmp/fm-t1/gotmp"}' "$(field "$call" environment)" "the launch carries the environment"
+  assert_equals 'You are a task worker launched by Firstmate.' "$(field "$call" instructions)" "the launch carries the instructions verbatim"
+  mcp launch --project "$project" --title plain --model-selection "$SEL" --worktree "$WT"
+  call=$(t3_fake_calls t3_thread_launch | tail -1)
+  assert_equals "" "$(field "$call" environment)" "a launch without an environment file sends none"
+  t3_fake_set 'w.bindEnvironment = { FM_TASK_ID: "other" }'
+  : > "$T3_FAKE_LOG"
+  mcp launch --project "$project" --title rebound --model-selection "$SEL" --worktree "$WT" --environment-file "$envf"
+  expect_code 4 "$RC" "a thread whose environment reads back different is refused"
+  assert_contains "$ERR" "environment differs" "the refusal names the environment"
+  assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the mis-bound thread is archived"
+  t3_fake_set 'delete w.bindEnvironment; w.bindEffectiveRuntimeMode = "approval-required"'
+  mcp launch --project "$project" --title downgraded --model-selection "$SEL" --worktree "$WT"
+  expect_code 4 "$RC" "a thread T3 runs below full access is refused even when its record says full-access"
+  assert_contains "$ERR" "effectiveRuntimeMode approval-required" "the refusal names the effective mode"
+  t3_fake_set 'delete w.bindEffectiveRuntimeMode; delete w.threadFacts'
+  : > "$T3_FAKE_LOG"
+  mcp launch --project "$project" --title upstream --model-selection "$SEL" --worktree "$WT" --environment-file "$envf" --instructions-file "$instr"
+  expect_code 4 "$RC" "a server that drops the per-thread fields is refused rather than trusted"
+  assert_contains "$ERR" "environment not bound" "the refusal says the environment did not bind"
+  assert_contains "$ERR" "instructions not bound" "the refusal says the instructions did not bind"
+  assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the unbound thread is archived"
+  printf '{"BAD-NAME":"x"}' > "$envf"
+  mcp launch --project "$project" --title bad --model-selection "$SEL" --worktree "$WT" --environment-file "$envf"
+  expect_code 2 "$RC" "an environment name that is not a shell variable is invalid use"
+  pass "fm-t3-mcp launch: per-thread environment and instructions are sent and proven bound, and an effective downgrade is refused"
+}
+
+# t3_family <worker-status> <child-status> <grandchild-status>: a worker
+# thread with a delegated child and grandchild on the same project.
+# shellcheck disable=SC2016  # ${...} belongs to the JavaScript snippet.
+t3_family() {
+  FM_W="$1" FM_C="$2" FM_G="$3" t3_fake_set '
+const run = (id, status) => ({ runId: id, ordinal: 1, status, requestedAt: "2026-10-31T00:00:00Z", startedAt: "2026-10-31T00:00:00Z", completedAt: null });
+const active = (s) => ["preparing", "queued", "starting", "running", "waiting"].includes(s);
+const mk = (id, status, parent) => ({ threadId: id, projectId: "proj-fam", title: id, status, activeRunId: active(status) ? `run-${id}` : null,
+  latestRunId: `run-${id}`, archived: false, worktreePath: null, pendingRequestCount: 0, providerInstanceId: "claudeAgent", runtimeMode: "full-access",
+  parentThreadId: parent, relationshipToParent: parent ? "subagent" : null, items: [], runs: [run(`run-${id}`, status)] });
+w.threads = { worker: mk("worker", process.env.FM_W, null), child: mk("child", process.env.FM_C, "worker"),
+  grandchild: mk("grandchild", process.env.FM_G, "child"), stranger: mk("stranger", "running", null) };'
+}
+
+# close: Stop reaches a running worker's delegated threads at any depth where
+# the server's schema declares stop, and the close proof refuses while any of
+# them still runs (archive alone does not stop them).
+test_close_stops_delegated_threads() {
+  local call
+  fresh_case close-family
+  t3_family running running running
+  mcp close --thread worker
+  expect_code 0 "$RC" "close stops the worker and its delegated threads: $ERR"
+  assert_equals true "$(field "$OUT" closed)" "the close is proven"
+  call=$(t3_fake_calls t3_thread_interrupt | tail -1)
+  assert_equals true "$(field "$call" stop)" "close sends Stop where the schema declares it"
+  assert_equals worker "$(field "$call" threadId)" "Stop targets the worker thread itself"
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+for (const id of ["child", "grandchild"]) if (w.threads[id].activeRunId) { console.error(id + " still runs"); process.exit(1); }
+if (!w.threads.stranger.activeRunId) { console.error("an unrelated thread was stopped"); process.exit(1); }' "$T3_FAKE_WORLD" \
+    || fail "Stop must end every delegated thread below the worker and nothing else"
+  fresh_case close-idle-parent
+  t3_family completed completed running
+  mcp close --thread worker
+  expect_code 0 "$RC" "an idle worker with a running grandchild is still stopped: $ERR"
+  assert_equals true "$(field "$(t3_fake_calls t3_thread_interrupt | tail -1)" stop)" "a running descendant alone triggers Stop"
+  fresh_case close-no-stop '{"noStop":true}'
+  t3_family completed running completed
+  FM_T3CODE_ARCHIVE_TIMEOUT_MS=300 mcp close --thread worker
+  expect_code 1 "$RC" "without Stop a running delegated thread leaves the close unproven"
+  assert_equals close_unproven "$(field "$OUT" error.code)" "the refusal is the unproven close"
+  assert_contains "$ERR" "delegated thread(s) child still run" "the refusal names the running child"
+  [ -z "$(t3_fake_calls t3_thread_interrupt)" ] || fail "a server without Stop gets no interrupt for an idle worker"
+  t3_fake_set 'w.threads.child.status = "completed"; w.threads.child.activeRunId = null; w.threads.child.runs[0].status = "completed"'
+  mcp close --thread worker
+  expect_code 0 "$RC" "once the child ends, the archived worker closes: $ERR"
+  fresh_case close-plain
+  t3_family completed completed completed
+  mcp close --thread worker
+  expect_code 0 "$RC" "an idle worker with nothing running below it closes: $ERR"
+  [ "$(t3_fake_mutations)" = t3_thread_organize ] || fail "an idle worker with no running child is only archived, got '$(t3_fake_mutations)'"
+  mcp close --thread worker
+  expect_code 0 "$RC" "an archived worker with nothing running is already closed: $ERR"
+  [ "$(t3_fake_mutations)" = t3_thread_organize ] || fail "an already-closed worker gets no further mutation, got '$(t3_fake_mutations)'"
+  mcp close --thread gone
+  assert_equals true "$(field "$OUT" missing)" "a thread the server lacks is closed"
+  pass "fm-t3-mcp close: Stop ends a worker's delegated threads at any depth, and the close proof refuses while one still runs"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
@@ -1021,6 +1197,10 @@ test_thread_for_root_pages_and_forks
 test_resolve_selection_uses_t3_catalog
 test_resolve_selection_accepts_current_catalog_values
 test_launch_reads_back_full_configuration
+test_resolve_selection_adapter_rows
+test_resolve_selection_by_root_is_read_only
+test_launch_binds_thread_environment_and_instructions
+test_close_stops_delegated_threads
 test_requests_and_respond
 test_gate_accepts_either_tool_generation
 test_current_tool_names_drive_launch_and_requests

@@ -348,48 +348,70 @@ test_project_ensure_matches_realpath_or_creates() {
   pass "fm_backend_t3code_project_ensure: matches by realpath, otherwise creates titled with the directory name"
 }
 
+# t3_selection <harness> <model> <effort>: the selection JSON
+# fm_backend_t3code_resolve prints for the case's project, without its channels.
+t3_selection() {
+  local out
+  out=$(t3_run 'fm_backend_t3code_resolve "$1" "$2" "$3" "$4"' "$1" "$2" "$3" "$REPO") || return 1
+  printf '%s' "${out%%$'\t'*}"
+}
+
 test_model_selection_table() {
   local out
   t3_case model-selection
-  out=$(t3_run 'fm_backend_t3code_model_selection claude claude-fable-5-1 high proj-1')
+  out=$(t3_selection claude claude-fable-5-1 high)
   [ "$out" = '{"instanceId":"claudeAgent","model":"claude-fable-5-1","options":[{"id":"effort","value":"high"}]}' ] \
     || fail "claude effort should ride options id effort, got '$out'"
-  out=$(t3_run 'fm_backend_t3code_model_selection codex gpt-5.6-sol xhigh proj-1')
+  out=$(t3_selection codex gpt-5.6-sol xhigh)
   [ "$out" = '{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"xhigh"}]}' ] \
     || fail "codex effort should ride options id reasoningEffort, got '$out'"
-  out=$(t3_run 'fm_backend_t3code_model_selection claude claude-sonnet-5 default proj-1')
+  out=$(t3_selection grok grok-4.7-build-fast low)
+  [ "$out" = '{"instanceId":"grok","model":"grok-4.7-build-fast","options":[{"id":"reasoningEffort","value":"low"}]}' ] \
+    || fail "grok effort should ride options id reasoningEffort on the grok instance, got '$out'"
+  out=$(t3_selection claude claude-sonnet-5 default)
   [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}' ] || fail "effort default must omit options, got '$out'"
-  out=$(t3_run 'fm_backend_t3code_model_selection claude default max proj-1')
+  out=$(t3_selection claude default max)
   [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5","options":[{"id":"effort","value":"max"}]}' ] \
     || fail "model default should take the project default and still apply effort, got '$out'"
-  out=$(t3_run 'fm_backend_t3code_model_selection codex gpt-5.6-sol max proj-1' 2>&1) && fail "codex max must be refused"
+  out=$(t3_selection codex gpt-5.6-sol max 2>&1) && fail "codex max must be refused"
   assert_contains "$out" "cannot pass effort 'max' to harness 'codex'" "the codex max refusal must name the harness and value"
+  out=$(t3_selection grok grok-4.7 max 2>&1) && fail "grok max must be refused: its catalog lists no max"
+  assert_contains "$out" "xhigh, high, medium, low" "the grok max refusal must list the catalog's values"
+  out=$(t3_run 'fm_backend_t3code_resolve claude claude-sonnet-5 default "$1"' "$REPO")
+  [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}'$'\t''none'$'\t''none' ] \
+    || fail "an instance that advertises no per-thread facts resolves to channels none/none, got '$out'"
+  t3_world_set 'w.threadFacts = true'
+  out=$(t3_run 'fm_backend_t3code_resolve claude claude-sonnet-5 default "$1"' "$REPO")
+  [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}'$'\t''thread'$'\t''thread' ] \
+    || fail "an instance that advertises threadEnvironment and threadInstructions resolves to thread/thread, got '$out'"
+  t3_world_set 'delete w.threadFacts'
   t3_world_set 'w.projects[0].defaultModelSelection = { instanceId: "codex", model: "gpt-5.6-sol", options: [{ id: "reasoningEffort", value: "low" }, { id: "serviceTier", value: "priority" }] }'
   printf 'codex=codex\n' > "$CONFIG/t3code-instances"
-  out=$(t3_run 'fm_backend_t3code_model_selection codex default high proj-1')
+  out=$(t3_selection codex default high)
   [ "$out" = '{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"},{"id":"serviceTier","value":"priority"}]}' ] \
     || fail "an effort override must keep the project's other default options, got '$out'"
   printf 'claude=codex\n' > "$CONFIG/t3code-instances"
-  out=$(t3_run 'fm_backend_t3code_model_selection claude gpt-5.6-sol high proj-1' 2>&1) && fail "a claude harness mapped onto a codex instance must be refused"
+  out=$(t3_selection claude gpt-5.6-sol high 2>&1) && fail "a claude harness mapped onto a codex instance must be refused"
   assert_contains "$out" "runs the codex driver, not claudeAgent" "the refusal names the driver T3's catalog reports"
   rm -f "$CONFIG/t3code-instances"
   t3_world_set 'w.projects[0].defaultModelSelection = { instanceId: "claudeAgent", model: "claude-sonnet-5" }'
-  out=$(t3_run 'fm_backend_t3code_model_selection pi x high proj-1' 2>&1) && fail "a non-T3 harness must be refused"
-  assert_contains "$out" "only the claude and codex harnesses" "the harness refusal must name the supported set"
+  out=$(t3_selection rovo x high 2>&1) && fail "a harness without a T3 driver must be refused"
+  assert_contains "$out" "not 'rovo'" "the harness refusal must name the harness"
+  assert_contains "$out" "claude, codex, grok" "the harness refusal must name the supported set"
   t3_world_set 'w.projects[0].defaultModelSelection = null'
-  out=$(t3_run 'fm_backend_t3code_model_selection claude default default proj-1' 2>&1) && fail "model default with no project default must be refused"
+  out=$(t3_selection claude default default 2>&1) && fail "model default with no project default must be refused"
   assert_contains "$out" "has no default model; pass --model" "the default-model refusal must name the fix"
   printf 'claude=claude-pool\n' > "$CONFIG/t3code-instances"
   t3_world_set 'w.providers = [{ providerInstanceId: "claude-pool", driverKind: "claudeAgent", constraints: [], models: ["claude-sonnet-5", "claude-fable-5-1"].map((id) => ({ id, options: [{ id: "effort", type: "select", options: ["low", "high", "max"].map((v) => ({ id: v })) }] })) }]'
   t3_world_set 'w.projects[0].defaultModelSelection = { instanceId: "claudeAgent", model: "claude-sonnet-5" }'
-  out=$(t3_run 'fm_backend_t3code_model_selection claude default default proj-1' 2>&1) && fail "default model on another instance must refuse"
+  out=$(t3_selection claude default default 2>&1) && fail "default model on another instance must refuse"
   assert_contains "$out" "pass --model explicitly" "mismatched default must name the remedy"
-  out=$(t3_run 'fm_backend_t3code_model_selection claude claude-fable-5-1 default proj-1')
+  out=$(t3_selection claude claude-fable-5-1 default)
   [ "$out" = '{"instanceId":"claude-pool","model":"claude-fable-5-1"}' ] || fail "config/t3code-instances must override the instance id, got '$out'"
   t3_world_set 'w.projects[0].defaultModelSelection.instanceId = "claude-pool"'
-  out=$(t3_run 'fm_backend_t3code_model_selection claude default default proj-1')
+  out=$(t3_selection claude default default)
   [ "$out" = '{"instanceId":"claude-pool","model":"claude-sonnet-5"}' ] || fail "matching default must use the configured instance, got '$out'"
-  pass "fm_backend_t3code_model_selection: T3's catalog decides driver, model, and effort; overrides keep other options; default handling, instances file"
+  pass "fm_backend_t3code_resolve: T3's catalog decides driver, model, effort, and per-thread channels; overrides keep other options; default handling, instances file"
 }
 
 test_thread_create_and_turn_start_payloads() {
@@ -739,8 +761,10 @@ test_helper_through_symlinked_root_reaches_t3_and_kill_fails_closed() {
     || fail "a kill through a symlinked Firstmate root must close the thread"
   [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] \
     || fail "a kill through a symlinked root must interrupt, then archive, got '$(t3_dispatch_types)'"
-  out=$(t3_run 'fm_backend_t3code_thread_state() { printf "not json"; }; fm_backend_t3code_kill thread-live && echo closed || echo refused')
-  [ "$out" = refused ] || fail "a kill whose state read is unparseable must fail closed, got '$out'"
+  t3_world "$(t3_thread_json thread-live running false)"
+  t3_world_set 'w.failTools = { t3_thread_read: { code: "unavailable", message: "read unavailable" } }'
+  out=$(t3_run 'fm_backend_t3code_kill thread-live 2>/dev/null && echo closed || echo refused')
+  [ "$out" = refused ] || fail "a kill that cannot read the thread must fail closed, got '$out'"
   pass "t3code helper: runs through a symlinked Firstmate root, and a kill that cannot read the thread fails closed"
 }
 
@@ -856,12 +880,14 @@ test_harness_admission_and_typing_refusals() {
   [ "$out" = 'error: backend=t3code has no pane to type into' ] || fail "the typing refusal changed: $out"
   [ ! -s "$LOG" ] || fail 'refused typing must not dispatch or read a thread'
   t3_run 'fm_backend_send_key t3code thread-live Enter' || fail 'runtime Enter remains a no-op'
-  t3_run 'fm_backend_validate_harness t3code claude; fm_backend_validate_harness t3code codex' || fail 'T3 supported harnesses changed'
-  for op in opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy devin; do
+  for op in claude codex grok pi muse opencode agy cursor gemini kimi devin; do
+    t3_run 'fm_backend_validate_harness t3code "$1"' "$op" || fail "T3 must admit harness $op, which has a T3 driver"
+  done
+  for op in pi-signed rovo omp polytoken commandcode cortex; do
     if out=$(t3_run 'fm_backend_validate_harness t3code "$1"' "$op" 2>&1); then fail "T3 must refuse harness $op"; fi
     assert_contains "$out" "not '$op'" 'harness refusal must name the unsupported adapter'
   done
-  pass 'T3 harness admission refuses every non-T3 adapter and launch-time typing refuses without a thread read'
+  pass 'T3 harness admission follows the adapter table and launch-time typing refuses without a thread read'
 }
 
 test_busy_classify_trusts_native_idle_and_busy() {
@@ -1585,6 +1611,196 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   pass "fm-spawn.sh --backend t3code: leases the slot, launches the thread on it, records metadata, sends the launch brief"
 }
 
+# t3_launch_field <js over the launch call's arguments a>: one field of the
+# case's last t3_thread_launch request.
+t3_launch_field() {
+  t3_request "$(t3_log_line_of 'r.tool === "t3_thread_launch"')" "(a => $1)(r.arguments)"
+}
+
+# A grok worker on a T3 whose instance advertises per-thread environment and
+# instructions: the pane facts and the channel statement ride the launch, and
+# no per-directory file or pane-shaped wiring is written, global hooks included.
+test_spawn_grok_worker_rides_thread_channels() {
+  local id out rc home
+  id=$(t3_uid t3grokz1)
+  t3_case spawn-grok-thread
+  t3_world_set 'w.threadFacts = true'
+  t3_worker_setup "$id"
+  home="$CASE_DIR/grok-user-home"
+  mkdir -p "$home"
+  out=$(SPAWN_HOME=$home t3_worker_spawn "$id" grok --model grok-4.7-build-fast --effort low); rc=$?
+  expect_code 0 "$rc" "a grok scout on a T3 with per-thread facts should spawn"$'\n'"$out"
+  assert_contains "$out" "spawned $id harness=grok kind=scout" "the spawn summary names the grok harness"
+  [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_send" ] || fail "spawn must launch then send the brief, got '$(t3_dispatch_types)'"
+  [ "$(t3_launch_field 'a.modelSelection')" = '{"instanceId":"grok","model":"grok-4.7-build-fast","options":[{"id":"reasoningEffort","value":"low"}]}' ] \
+    || fail "the launch must carry the grok selection, got '$(t3_launch_field 'a.modelSelection')'"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "the thread environment must carry FM_TASK_ID"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_INBOX')" = "$CASE_DIR/state/$id.inbox" ] || fail "the thread environment must carry the steering inbox"
+  [ "$(t3_launch_field 'a.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] || fail "the thread environment must select the installed Git hook"
+  [ "$(t3_launch_field 'Object.keys(a.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
+    || fail "the thread environment holds exactly the pane launch facts, got '$(t3_launch_field 'Object.keys(a.environment)')'"
+  assert_contains "$(t3_launch_field 'a.instructions')" "first-party task instructions" "the channel statement rides the launch instructions"
+  assert_not_contains "$(t3_launch_field 'a.instructions')" "link_pull_request" "the Claude-only pull-request clause never reaches a grok worker"
+  assert_absent "$WORKER_WT/.claude/settings.local.json" "a thread-channel worker writes no Claude settings"
+  assert_absent "$WORKER_WT/CLAUDE.local.md" "a thread-channel worker gets no CLAUDE.local.md"
+  assert_absent "$WORKER_WT/.codex/config.toml" "a thread-channel worker writes no Codex config"
+  assert_absent "$WORKER_WT/.fm-grok-turnend" "no pane-shaped turn-end pointer is written for a T3 grok worker"
+  assert_absent "$home/.grok" "no global per-user grok hook is installed for a T3 grok worker"
+  assert_absent "$CASE_DIR/state/$id.busy-gen" "no pane busy contract is armed for a T3 grok worker"
+  assert_grep "harness=grok" "$CASE_DIR/state/$id.meta" "meta records the grok harness"
+  assert_contains "$(t3_request "$(t3_log_line_of 'r.tool === "t3_thread_send"')" 'r.arguments.message')" "FIRSTMATE_OP: v1 launch-brief:" "the brief is the first message"
+  pass "fm-spawn.sh --backend t3code grok: environment and channel statement ride the launch, with no per-directory or pane-shaped wiring"
+}
+
+# A claude worker moves onto the thread channels too, keeping only its
+# verified worktree busy hooks.
+test_spawn_claude_worker_rides_thread_channels() {
+  local id out rc settings
+  id=$(t3_uid t3claudethr1)
+  t3_case spawn-claude-thread
+  t3_world_set 'w.threadFacts = true; w.serverVersion = "0.1.5"'
+  t3_worker_setup "$id"
+  out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a claude scout on a T3 with per-thread facts should spawn"$'\n'"$out"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "a claude thread environment must carry FM_TASK_ID"
+  assert_contains "$(t3_launch_field 'a.instructions')" "You are a task worker launched by Firstmate" "the channel statement rides the launch instructions"
+  assert_not_contains "$(t3_launch_field 'a.instructions')" "predates T3" "a server at or past the verified build gets no pull-request clause"
+  settings="$WORKER_WT/.claude/settings.local.json"
+  assert_present "$settings" "the claude busy hooks stay in the worktree"
+  [ "$(t3_json_field "$settings" 'Object.keys(d.hooks).sort().join(" ")')" = "SessionEnd Stop StopFailure UserPromptSubmit" ] || fail "the claude busy hooks must be armed"
+  [ "$(t3_json_field "$settings" 'd.env')" = undefined ] || fail "the environment rides the thread, not the settings file"
+  assert_absent "$WORKER_WT/CLAUDE.local.md" "the channel statement rides the thread, not CLAUDE.local.md"
+  pass "fm-spawn.sh --backend t3code claude: on a T3 with per-thread facts the environment and statement ride the launch and only the busy hooks stay in the worktree"
+}
+
+# A harness without any channel is refused before anything is leased, and so
+# is an instance that cannot run full-access.
+test_spawn_refuses_harness_without_a_channel_or_full_access() {
+  local id out rc
+  id=$(t3_uid t3grokz2)
+  t3_case spawn-grok-upstream
+  t3_worker_setup "$id"
+  out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
+  expect_code 1 "$rc" "a grok worker on a T3 without per-thread environment must refuse"$'\n'"$out"
+  assert_contains "$out" "does not advertise threadEnvironment" "the refusal names the missing capability"
+  [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
+  t3_world_set 'w.threadFacts = true; w.providers = [{ providerInstanceId: "grok", driverKind: "grok", constraints: [], runtimeModes: ["approval-required", "auto"], models: [{ id: "grok-4.7", options: [] }] }]'
+  : > "$LOG"
+  out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
+  expect_code 1 "$rc" "a grok worker on an instance without full-access must refuse"$'\n'"$out"
+  assert_contains "$out" "not full-access" "the refusal names the missing full-access mode"
+  [ -z "$(t3_dispatch_types)" ] || fail "the full-access refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the full-access refusal must come before the slot is leased"
+  t3_world_set 'w.providers = [{ providerInstanceId: "grok", driverKind: "grok", constraints: [], threadEnvironment: true, threadInstructions: false, models: [{ id: "grok-4.7", options: [] }] }]'
+  : > "$LOG"
+  out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
+  expect_code 1 "$rc" "a grok worker with an environment but no instructions channel must refuse"$'\n'"$out"
+  assert_contains "$out" "does not advertise threadInstructions" "the refusal names the missing instructions channel"
+  [ -z "$(t3_dispatch_types)" ] || fail "the instructions refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+  assert_absent "$CASE_DIR/state/$id.meta" "a refused spawn records nothing"
+  pass "fm-spawn.sh --backend t3code: a harness with no channel, or an instance without full-access, is refused before any mutation"
+}
+
+# T3 records full-access but reports running the driver lower: the thread is
+# archived and the lease returned.
+test_spawn_effective_downgrade_returns_lease() {
+  local id out rc
+  id=$(t3_uid t3downgrade)
+  t3_case spawn-downgrade
+  t3_world_set 'w.threadFacts = true; w.bindEffectiveRuntimeMode = "approval-required"'
+  t3_worker_setup "$id"
+  out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
+  expect_code 1 "$rc" "a thread T3 runs below full access must abort spawn"$'\n'"$out"
+  assert_contains "$out" "effectiveRuntimeMode approval-required" "the abort names the effective mode"
+  [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_organize" ] || fail "the downgraded thread must be archived, got '$(t3_dispatch_types)'"
+  [ "$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')" -gt \
+    "$(t3_log_line_of 'r.tool === "t3_thread_organize"')" ] || fail "the lease must return after the archive"$'\n'"$out"
+  assert_absent "$CASE_DIR/state/$id.meta" "a refused spawn records nothing"
+  pass "fm-spawn.sh --backend t3code: a thread T3 runs below full access is archived and its lease returned"
+}
+
+# A secondmate on the thread channels carries its launch prefix in the thread
+# environment, with no FM_SUPERVISOR_TARGET (its own id is not known before
+# launch: its daemon finds it by home), and the home's settings stay its own.
+test_spawn_secondmate_rides_thread_environment() {
+  local id home out read_env
+  id=$(t3_uid t3smthr1)
+  t3_case spawn-secondmate-thread
+  t3_world_set 'w.threadFacts = true'
+  home="$CASE_DIR/sm-home"
+  make_t3_secondmate_home "$home" "$id"
+  mkdir -p "$home/.claude"
+  printf '{"permissions":{"allow":["Bash(ls:*)"]}}\n' > "$home/.claude/settings.local.json"
+  out=$(spawn_t3_secondmate "$id" "$home" claude claude-sonnet-5)
+  expect_code 0 $? "a claude secondmate on a T3 with per-thread facts should spawn"$'\n'"$out"
+  read_env() { t3_launch_field "a.environment[\"$1\"]"; }
+  [ "$(read_env FM_HOME)" = "$home" ] || fail "the thread environment carries FM_HOME"
+  [ "$(read_env FM_SUPERVISOR_BACKEND)" = t3code ] || fail "the thread environment carries FM_SUPERVISOR_BACKEND"
+  [ "$(read_env FM_SUPERVISION_MODEL)" = autoarm ] || fail "the thread environment carries the claude supervision model"
+  [ "$(read_env FM_SUPERVISOR_TARGET)" = undefined ] || fail "a thread-environment secondmate cannot carry its own not-yet-assigned thread id"
+  [ "$(read_env FM_TASK_ID)" = undefined ] || fail "a secondmate is not a task worker"
+  [ "$(t3_launch_field 'a.instructions')" = undefined ] || fail "a secondmate never receives the task-worker statement"
+  [ "$(t3_json_field "$home/.claude/settings.local.json" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]}}' ] \
+    || fail "the home's own settings must stay untouched"
+  pass "fm-spawn.sh --backend t3code --secondmate: the launch prefix rides the thread environment and the home's settings stay its own"
+}
+
+# A forge=external ship's Git hook entry is its push guard, so a codex ship
+# whose per-directory config Codex may ignore is refused, not warned.
+test_spawn_external_forge_codex_refuses_untrusted_project() {
+  local id out rc
+  id=$(t3_uid t3extz1)
+  t3_case spawn-external-codex
+  t3_worker_setup "$id"
+  printf -- '- spawn-project [direct-PR forge=external] - fixture (added 2026-01-01)\n' > "$CASE_DIR/data/projects.md"
+  printf '%s\n' '# Task' '## Captain'"'"'s intent' 'Ship through the review tool.' '' '## Firstmate spec' 'Exercise the external forge refusal.' '' \
+    'Delivery contract: mode=direct-PR forge=external' "Ship branch: fm/$id" > "$CASE_DIR/data/$id/brief.md"
+  # shellcheck disable=SC2016 # Backticks are literal adapter text.
+  printf '%s\n' 'Run `review-tool upload --draft`.' > "$CONFIG/external-review.md"
+  mkdir -p "$CASE_DIR/codex-home"
+  out=$(CODEX_HOME="$CASE_DIR/codex-home" t3_worker_ship_spawn "$id" codex --model gpt-5.6-sol --mode direct-PR --yolo off); rc=$?
+  expect_code 1 "$rc" "a forge=external codex ship in an untrusted project must refuse"$'\n'"$out"
+  assert_contains "$out" "push guard rides the .codex/config.toml" "the refusal names the push guard"
+  [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
+  pass "fm-spawn.sh --backend t3code: a forge=external codex ship whose push guard Codex may ignore is refused before any mutation"
+}
+
+# t3_worker_ship_spawn <id> <harness> [spawn-arg ...]: t3_worker_spawn as a ship.
+t3_worker_ship_spawn() {
+  local id=$1 harness=$2 fb
+  shift 2
+  fb=$(make_treehouse_fakebin "$CASE_DIR")
+  HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$WORKER_WT" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CASE_DIR/state" FM_DATA_OVERRIDE="$CASE_DIR/data" FM_CONFIG_OVERRIDE="$CONFIG" \
+    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$WORKER_PROJ" "$harness" --backend t3code "$@" 2>&1
+}
+
+# Teardown's kill stops a worker's delegated threads with Stop and refuses
+# the close on a server without Stop while one still runs.
+test_kill_stops_delegated_threads() {
+  local call
+  t3_case kill-children
+  t3_world "$(t3_thread_json thread-live running false)"
+  t3_world_set 'w.threads.child = { ...w.threads["thread-live"], threadId: "child", parentThreadId: "thread-live", relationshipToParent: "subagent", activeRunId: "run-c",
+    runs: [{ runId: "run-c", status: "running", requestedAt: "2026-10-31T00:00:00Z", startedAt: "2026-10-31T00:00:00Z", completedAt: null }] }'
+  t3_run 'fm_backend_t3code_kill thread-live' || fail "kill of a worker with a running child should succeed with Stop"
+  [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] || fail "kill must Stop, then archive, got '$(t3_dispatch_types)'"
+  call=$(t3_log_line_of 'r.tool === "t3_thread_interrupt"')
+  [ "$(t3_request "$call" 'r.arguments.stop')" = true ] || fail "kill must send stop:true where the schema declares it"
+  [ "$(t3_json_field "$T3_FAKE_WORLD" 'd.threads.child.activeRunId')" = null ] || fail "Stop must end the delegated thread's run"
+  t3_world "$(t3_thread_json thread-live completed false)"
+  t3_world_set 'w.noStop = true; w.threads.child = { ...w.threads["thread-live"], threadId: "child", parentThreadId: "thread-live", relationshipToParent: "subagent", status: "running", activeRunId: "run-c",
+    runs: [{ runId: "run-c", status: "running", requestedAt: "2026-10-31T00:00:00Z", startedAt: "2026-10-31T00:00:00Z", completedAt: null }] }'
+  : > "$LOG"
+  FM_T3CODE_ARCHIVE_TIMEOUT_MS=300 t3_run 'fm_backend_t3code_kill thread-live' 2>"$CASE_DIR/kill.err" && fail "a kill on a server without Stop must fail while a delegated thread runs"
+  assert_contains "$(cat "$CASE_DIR/kill.err")" "delegated thread(s) child still run" "the failure names the running child"
+  pass "fm_backend_t3code_kill: Stop ends a worker's delegated threads, and without Stop a running child leaves the close unproven"
+}
+
 # t3_markdown_backlog <data-dir> [id title]...: a pinned markdown backlog in
 # <data-dir>, addressed from its parent as fm-spawn.sh addresses a home's.
 t3_markdown_backlog() {
@@ -1973,11 +2189,11 @@ test_spawn_abort_returns_lease_only_after_archive() {  # <ok|fail>
   id=$(t3_uid "t3abortz$archive")
   t3_case "spawn-abort-$archive"
   [ "$archive" = ok ] || t3_world_set 'w.failTools = { t3_thread_organize: { code: "boom", message: "archive failed" } }'
-  # A regular file where the Claude hooks go aborts the spawn after the
-  # thread exists and before its record is published.
+  # An untracked CLAUDE.local.md where the channel statement goes aborts the
+  # spawn after the thread exists and before T3 accepts its launch brief.
   t3_worker_setup "$id"
-  printf 'blocker\n' > "$WORKER_WT/.claude"
-  printf '.claude\n' >> "$(git -C "$WORKER_WT" rev-parse --git-path info/exclude)"
+  printf 'blocker\n' > "$WORKER_WT/CLAUDE.local.md"
+  printf 'CLAUDE.local.md\n' >> "$(git -C "$WORKER_WT" rev-parse --git-path info/exclude)"
   out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   [ "$rc" -ne 0 ] || fail "the blocked spawn should abort"$'\n'"$out"
   return_line=$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')
@@ -3506,3 +3722,10 @@ test_t3_done_then_run_interrupted_during_the_event_wait_reports
 test_t3_done_then_a_different_run_completes_surfaces_the_turn_end
 test_teardown_waits_for_a_running_turn_then_refuses_or_proceeds
 test_teardown_force_interrupts_a_running_turn
+test_spawn_grok_worker_rides_thread_channels
+test_spawn_claude_worker_rides_thread_channels
+test_spawn_refuses_harness_without_a_channel_or_full_access
+test_spawn_effective_downgrade_returns_lease
+test_spawn_secondmate_rides_thread_environment
+test_spawn_external_forge_codex_refuses_untrusted_project
+test_kill_stops_delegated_threads

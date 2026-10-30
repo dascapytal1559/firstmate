@@ -3199,6 +3199,10 @@ test_discover_supervisor_t3code_after_env_tmux_and_herdr() {
     fi
     [ "$out" = firstmate:0 ] || fail "without explicit T3 selection the tmux fallback must stand"
     [ ! -s "$dir/calls" ] || fail "without explicit T3 selection the adapter must not be consulted"
+    out=$(FM_SUPERVISOR_TARGET='' FM_SUPERVISOR_BACKEND=t3code TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_target) \
+      || fail "FM_SUPERVISOR_BACKEND=t3code, which a T3 secondmate's thread environment carries, must select T3 discovery"
+    [ "$out" = thread-captain ] || fail "FM_SUPERVISOR_BACKEND=t3code must resolve the home's live thread, got '$out'"
+    : > "$dir/calls"
     printf '\n t3code \n' > "$dir/config/backend"
     [ "$(fm_backend_name)" = t3code ] || fail "spawns must read the padded config/backend as t3code"
     out=$(FM_SUPERVISOR_TARGET='' FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_target) \

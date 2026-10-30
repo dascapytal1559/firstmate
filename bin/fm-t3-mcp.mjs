@@ -33,23 +33,38 @@
 //   fm-t3-mcp.mjs project-read --project <id>
 //     That project's record (defaultModelSelection included); exit 3 with
 //     code project_not_found when T3 lists no live project with that id.
-//   fm-t3-mcp.mjs resolve-selection --harness <claude|codex> --instance <id>
-//       --model <slug|default> --effort <level|default> [--project <id>]
+//   fm-t3-mcp.mjs harness --harness <name>
+//     The HARNESSES adapter-table row for that harness (driverKind, default
+//     instanceId, effortOption, agentId), read locally with no server call;
+//     exit 4 (harness_unsupported) for a harness T3 cannot run.
+//   fm-t3-mcp.mjs resolve-selection --harness <name> [--instance <id>]
+//       --model <slug|default> --effort <level|default> [--project <id> | --root <abs-path>]
 //     The model selection a launch sends, resolved against T3's own catalog
-//     (orchestrator_capabilities): the instance must exist, be usable, and run
-//     the harness's driver (claude: claudeAgent, codex: codex); the model must
-//     be one that instance lists; model default takes the project's default
-//     selection, which must name the same instance. A non-default effort
-//     replaces only the driver's reasoning option (claude: effort, codex:
-//     reasoningEffort) and keeps every other default option; every option is
-//     then checked against that model's descriptors. Exit 4 refuses.
+//     (orchestrator_capabilities): the instance (the row's default without
+//     --instance) must exist, be usable, run the harness's driver, report the
+//     row's ACP registry agentId when the row names one, and list full-access
+//     among its runtimeModes when it lists any; the model must be one that
+//     instance lists; model default takes the default selection of the
+//     project (by id, or the live project rooted at --root, read only),
+//     which must name the same instance. A non-default effort must be one of
+//     EFFORT_WORDS and is sent as the catalog value of that name on the row's
+//     effort option (or the model's one EFFORT_OPTION_IDS option), replacing
+//     only that option and keeping every other default option; every option
+//     is then checked against that model's descriptors. The result also
+//     carries the instance's threadEnvironment and threadInstructions
+//     capabilities (false unless the catalog says true). Exit 4 refuses.
 //   fm-t3-mcp.mjs launch --project <id> --title <title> --model-selection <json>
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
+//       [--environment-file <json-file>] [--instructions-file <file>]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
-//     own checkout). Reads the thread and its configuration back and
-//     archives and refuses it unless T3 bound exactly that workspace, full
-//     access, instance, model, and every requested option value; a refused
+//     own checkout). --environment-file (a JSON object of shell-variable names
+//     to strings) and --instructions-file ride as the launch's per-thread
+//     environment and instructions. Reads the thread and its configuration
+//     back and archives and refuses it unless T3 bound exactly that
+//     workspace, full access (and effectiveRuntimeMode full-access when the
+//     read reports one), instance, model, every requested option value, and
+//     the given environment and instructions; a refused
 //     thread that does not then read back archived with no active run exits
 //     1, because it may still be live. A read-back that fails also archives
 //     and exits 1, since the thread exists but its binding is unproven. T3's
@@ -126,9 +141,19 @@
 //     error.
 //   fm-t3-mcp.mjs archive --thread <id> [--timeout-ms <n>]
 //     t3_thread_organize archive, then read back until the thread reports
-//     archived:true and activeRunId:null (closed=true). A thread the verified
-//     server no longer has is already closed (missing=true). A close the
-//     read-back does not prove within the timeout exits 1 (close_unproven).
+//     archived:true and activeRunId:null and no delegated (subagent) thread
+//     below it, at any depth, has an active status (closed=true). A thread
+//     the verified server no longer has is already closed (missing=true). A
+//     close the read-back does not prove within the timeout exits 1
+//     (close_unproven, naming any delegated thread still active).
+//   fm-t3-mcp.mjs close --thread <id> [--timeout-ms <n>]
+//     The teardown kill: closed at once for a missing thread or an archived
+//     one with no active run and no active delegated thread below it;
+//     otherwise an active run, or an active delegated thread, is stopped
+//     with t3_thread_interrupt stop:true where that tool's tools/list schema
+//     declares stop (T3's Stop: the turn, the queue, and every delegated
+//     task), else the run alone with a plain interrupt, and the thread is
+//     then archived with archive's proof.
 //   fm-t3-mcp.mjs thread-for-root --root <abs-path>
 //     The one unarchived, worktree-less thread with an active run on the live
 //     project rooted at <root>, across every t3_thread_list page; a fork
@@ -241,12 +266,34 @@ const ACCESS_CEILINGS = ["full-access"];
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const ACTIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"];
 const READ_LIMIT_MAX = 100;
-// Each Firstmate harness runs on one T3 driver, whose reasoning option id is
-// part of that driver's protocol; the values come from T3's catalog.
-const DRIVERS = {
-  claude: { driverKind: "claudeAgent", effortOption: "effort" },
-  codex: { driverKind: "codex", effortOption: "reasoningEffort" },
+// The one harness adapter table: each Firstmate harness T3 can run, the T3
+// driver it runs on, the provider instance it uses unless
+// config/t3code-instances names another, the model option that carries
+// Firstmate's effort (null: the single option the model's catalog offers among
+// EFFORT_OPTION_IDS), and, for the ACP registry driver, the registry agent the
+// instance must report. Every other harness is refused.
+export const HARNESSES = {
+  claude: { driverKind: "claudeAgent", instanceId: "claudeAgent", effortOption: "effort" },
+  codex: { driverKind: "codex", instanceId: "codex", effortOption: "reasoningEffort" },
+  grok: { driverKind: "grok", instanceId: "grok", effortOption: "reasoningEffort" },
+  pi: { driverKind: "pi", instanceId: "pi", effortOption: "thinking" },
+  muse: { driverKind: "muse", instanceId: "muse", effortOption: "reasoningEffort" },
+  opencode: { driverKind: "opencode", instanceId: "opencode", effortOption: "variant" },
+  agy: { driverKind: "antigravity", instanceId: "antigravity", effortOption: null },
+  cursor: { driverKind: "cursor", instanceId: "cursor", effortOption: null },
+  gemini: { driverKind: "acpRegistry", instanceId: "gemini", effortOption: null, agentId: "gemini" },
+  kimi: { driverKind: "acpRegistry", instanceId: "kimi", effortOption: null, agentId: "kimi" },
+  devin: { driverKind: "acpRegistry", instanceId: "devin", effortOption: null, agentId: "devin" },
 };
+// Firstmate's effort words. Each is sent as the catalog value of the same
+// name, and a word the model's catalog does not list is refused rather than
+// mapped onto a neighbouring level.
+const EFFORT_WORDS = ["low", "medium", "high", "xhigh", "max", "ultra"];
+// The option ids a catalog names its reasoning level by, for a driver whose
+// option is dynamic.
+const EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "thought_level", "thinking", "reasoning", "variant"];
+// A name a thread environment may set; T3 checks names and caps sizes again.
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REPEATABLE = new Set(["option", "thread", "escalated"]);
 // Every MCP session this invocation opened, ended when the verb returns.
 const SESSIONS = new Set();
@@ -558,11 +605,21 @@ export async function gate(session, cred) {
     );
   }
   session.toolFamilies = families;
+  session.toolSchemas = new Map((listed?.tools ?? []).map((t) => [t.name, t.inputSchema ?? {}]));
   return { serverVersion: version, environmentId, serverVersionReported: envRead?.serverVersion ?? null, tools: [...names].sort(), toolFamilies: families };
 }
 
-// A thread's recorded binding (modelSelection, runtimeMode), read through the
-// configuration family the gate found.
+// Whether the server's tools/list schema for <tool> declares <property>: T3
+// drops an argument a peer's schema lacks, so an optional field that matters
+// is sent only where it is declared.
+function toolOffers(session, tool, property) {
+  const props = session.toolSchemas?.get(tool)?.properties;
+  return Boolean(props && typeof props === "object" && Object.hasOwn(props, property));
+}
+
+// A thread's recorded binding (modelSelection, runtimeMode, and on a server
+// with per-thread facts environment, instructions, effectiveRuntimeMode), read
+// through the configuration family the gate found.
 function threadConfiguration(session, threadId) {
   if (session.toolFamilies?.configuration === "earlier") return session.call("t3_thread_configuration", { threadId });
   return session.call("t3_thread_configure", { threadId });
@@ -861,26 +918,76 @@ function optionProblem(model, option) {
   return values.includes(option.value) ? null : `option '${option.id}' value '${option.value}' is not one of ${values.join(", ")} for model ${model.id}`;
 }
 
+// The adapter-table row for <harness>, refusing every harness T3 cannot run.
+function harnessRow(harness) {
+  const row = Object.hasOwn(HARNESSES, harness) ? HARNESSES[harness] : null;
+  if (!row) throw new Refusal("harness_unsupported", `backend=t3code runs only the ${Object.keys(HARNESSES).join(", ")} harnesses, not '${harness}'`);
+  return row;
+}
+
+// harness: the adapter-table row, read locally with no server call.
+async function harnessVerb(flags) {
+  const harness = need(flags, "harness");
+  return { ok: true, harness, ...harnessRow(harness) };
+}
+
+// The option that carries Firstmate's effort on <model>: the row's fixed id,
+// or the single EFFORT_OPTION_IDS option the catalog lists for that model.
+function effortOptionId(row, model, harness) {
+  if (row.effortOption) return row.effortOption;
+  const offered = (model.options ?? []).map((d) => d.id).filter((id) => EFFORT_OPTION_IDS.includes(id));
+  if (offered.length === 1) return offered[0];
+  throw new Refusal(
+    "effort_unsupported",
+    offered.length
+      ? `model ${model.id} offers several effort options (${offered.join(", ")}) for harness '${harness}', so Firstmate cannot tell which one carries effort; pass --effort default`
+      : `model ${model.id} offers no effort option for harness '${harness}'; pass --effort default`,
+  );
+}
+
 async function resolveSelection(flags) {
   const harness = need(flags, "harness");
-  const driver = DRIVERS[harness];
-  if (!driver) throw new Refusal("harness_unsupported", `backend=t3code supports only the claude and codex harnesses, not '${harness}'`);
-  const instanceId = need(flags, "instance");
+  const row = harnessRow(harness);
+  const instanceId = flags.instance || row.instanceId;
   const wantModel = need(flags, "model");
   const effort = need(flags, "effort");
+  if (effort !== "default" && !EFFORT_WORDS.includes(effort)) usage(`--effort must be default or one of ${EFFORT_WORDS.join(", ")}`);
   const { session } = await verifiedSession(flags);
   const caps = await session.call("orchestrator_capabilities", {});
   const provider = (caps?.providers ?? []).find((p) => p.providerInstanceId === instanceId);
   if (!provider) throw new Refusal("instance_unknown", `T3 has no provider instance '${instanceId}' (config/t3code-instances maps the ${harness} harness to it)`);
-  if (provider.driverKind !== driver.driverKind) {
-    throw new Refusal("driver_mismatch", `T3 instance '${instanceId}' runs the ${provider.driverKind} driver, not ${driver.driverKind}, so it cannot host the ${harness} harness; fix config/t3code-instances`);
+  if (provider.driverKind !== row.driverKind) {
+    throw new Refusal("driver_mismatch", `T3 instance '${instanceId}' runs the ${provider.driverKind} driver, not ${row.driverKind}, so it cannot host the ${harness} harness; fix config/t3code-instances`);
+  }
+  if (row.agentId && provider.agentId !== row.agentId) {
+    throw new Refusal(
+      "agent_mismatch",
+      `T3 instance '${instanceId}' ${provider.agentId ? `runs the ACP registry agent '${provider.agentId}'` : "does not report which ACP registry agent it runs"}, not '${row.agentId}', so it cannot host the ${harness} harness`,
+    );
   }
   if ((provider.constraints ?? []).length) throw new Refusal("instance_unavailable", `T3 instance '${instanceId}' cannot run threads: ${provider.constraints.join(" ")}`);
+  // T3 records full-access on the thread but runs a driver that does not
+  // declare it at a lower mode, where a worker parks on approvals /mcp cannot
+  // answer. An instance that declares no modes supports every mode.
+  if (Array.isArray(provider.runtimeModes) && !provider.runtimeModes.includes("full-access")) {
+    throw new Refusal(
+      "full_access_unsupported",
+      `T3 instance '${instanceId}' runs only ${provider.runtimeModes.join(", ") || "no runtime modes"}, not full-access, so a ${harness} worker there would park on approvals Firstmate cannot answer`,
+    );
+  }
   let base = { instanceId, model: wantModel };
   if (wantModel === "default") {
-    const projectId = need(flags, "project");
-    const project = (await liveProjects(session)).find((p) => p.id === projectId);
-    if (!project) throw new Refusal("project_not_found", `T3 lists no live project ${projectId}`);
+    let project;
+    if (flags.project) {
+      project = (await liveProjects(session)).find((p) => p.id === flags.project);
+      if (!project) throw new Refusal("project_not_found", `T3 lists no live project ${flags.project}`);
+    } else {
+      const rootPath = flags.root;
+      if (!rootPath || !path.isAbsolute(rootPath)) usage("--model default needs --project <id> or an absolute --root");
+      project = await projectForRoot(session, rootPath);
+      if (!project) throw new Refusal("project_not_found", `T3 has no project rooted at ${rootPath} yet, so it has no default model; pass --model with a slug from the T3 model catalog`);
+    }
+    const projectId = project.id;
     const def = project.defaultModelSelection;
     if (!def) throw new Refusal("no_default_model", `T3 project ${projectId} has no default model; pass --model with a slug from the T3 model catalog`);
     if (def.instanceId !== instanceId) {
@@ -892,7 +999,7 @@ async function resolveSelection(flags) {
   if (!model) throw new Refusal("model_unknown", `T3 instance '${instanceId}' does not list model '${base.model}'; pass --model with a slug from its catalog`);
   let options = base.options;
   if (effort !== "default") {
-    const chosen = { id: driver.effortOption, value: effort };
+    const chosen = { id: effortOptionId(row, model, harness), value: effort };
     const problem = optionProblem(model, chosen);
     if (problem) throw new Refusal("effort_unsupported", `backend=t3code cannot pass effort '${effort}' to harness '${harness}': ${problem}`);
     const kept = options ?? [];
@@ -902,17 +1009,57 @@ async function resolveSelection(flags) {
     const problem = optionProblem(model, option);
     if (problem) throw new Refusal("option_unsupported", `the selection for harness '${harness}' is not valid in T3's catalog: ${problem}`);
   }
-  return { ok: true, driverKind: provider.driverKind, selection: { instanceId, model: base.model, ...(options !== undefined ? { options } : {}) } };
+  return {
+    ok: true,
+    driverKind: provider.driverKind,
+    selection: { instanceId, model: base.model, ...(options !== undefined ? { options } : {}) },
+    threadEnvironment: provider.threadEnvironment === true,
+    threadInstructions: provider.threadInstructions === true,
+  };
 }
 
-// What a launch must read back: the workspace, full access, and exactly the
-// requested instance, model, and option values.
-function bindingProblems(t, config, selection, worktree) {
+// --environment-file: a JSON object of environment names to string values.
+function launchEnvironment(flags) {
+  const file = flags["environment-file"];
+  if (file === undefined) return null;
+  let env;
+  try {
+    env = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    usage(`--environment-file ${file} must hold JSON`);
+  }
+  if (!env || typeof env !== "object" || Array.isArray(env)) usage("--environment-file must hold a JSON object of names to strings");
+  for (const [name, value] of Object.entries(env)) {
+    if (!ENV_NAME.test(name) || typeof value !== "string") usage(`--environment-file entry '${name}' must be a shell variable name with a string value`);
+  }
+  return env;
+}
+
+function launchInstructions(flags) {
+  const file = flags["instructions-file"];
+  if (file === undefined) return null;
+  const text = readFileSync(file, "utf8");
+  if (!text.trim()) usage(`--instructions-file ${file} is empty`);
+  return text;
+}
+
+const sameEnvironment = (a, b) =>
+  Boolean(b) && typeof b === "object" && !Array.isArray(b) && Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, v]) => b[k] === v);
+
+// What a launch must read back: the workspace, full access (and the effective
+// mode T3 runs the driver at, when it reports one), exactly the requested
+// instance, model, and option values, and the thread environment and
+// instructions it was given.
+function bindingProblems(t, config, selection, worktree, environment, instructions) {
   const problems = [];
   if (worktree ? realOrRaw(t.worktreePath ?? "") !== realOrRaw(worktree) : (t.worktreePath ?? null) !== null) {
     problems.push(`worktreePath ${t.worktreePath ?? "none"}`);
   }
   if (t.runtimeMode !== "full-access" || config?.runtimeMode !== "full-access") problems.push(`runtimeMode ${config?.runtimeMode ?? t.runtimeMode ?? "none"}`);
+  const effective = config?.effectiveRuntimeMode;
+  if (effective !== undefined && effective !== null && effective !== "full-access") problems.push(`effectiveRuntimeMode ${effective}`);
+  if (environment && !sameEnvironment(environment, config?.environment)) problems.push(`environment ${config?.environment === undefined ? "not bound" : "differs"}`);
+  if (instructions !== null && config?.instructions !== instructions) problems.push(`instructions ${config?.instructions === undefined ? "not bound" : "differ"}`);
   const bound = config?.modelSelection ?? {};
   if (t.providerInstanceId !== selection.instanceId || bound.instanceId !== selection.instanceId) problems.push(`provider ${bound.instanceId ?? t.providerInstanceId ?? "none"}`);
   if (bound.model !== selection.model) problems.push(`model ${bound.model ?? "none"}`);
@@ -928,6 +1075,8 @@ async function launch(flags) {
   if (worktree !== undefined && !path.isAbsolute(worktree)) usage("--worktree must be an absolute path");
   const selection = modelSelection(flags);
   const message = flags["message-file"] ? readMessage(flags) : null;
+  const environment = launchEnvironment(flags);
+  const instructions = launchInstructions(flags);
   let session;
   let g;
   try {
@@ -946,6 +1095,8 @@ async function launch(flags) {
     runtimeMode: "full-access",
     interactionMode: "default",
     workspaceStrategy,
+    ...(environment ? { environment } : {}),
+    ...(instructions !== null ? { instructions } : {}),
     ...(message ? { message } : {}),
   };
   let out;
@@ -974,12 +1125,12 @@ async function launch(flags) {
       { threadId: out.threadId },
     );
   }
-  const problems = bindingProblems(t, config, selection, worktree);
+  const problems = bindingProblems(t, config, selection, worktree, environment, instructions);
   if (problems.length) {
     const archived = await archiveLaunched();
     throw new Refusal(
       "binding_mismatch",
-      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"} and model selection at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
+      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
       archived ? 4 : 1,
       { threadId: out.threadId },
     );
@@ -1110,15 +1261,95 @@ async function interrupt(flags) {
   const threadId = need(flags, "thread");
   const timeoutMs = positiveInt(flags, "timeout-ms", 10_000, 600_000);
   const { session } = await verifiedSession(flags);
-  const requested = await session.call("t3_thread_interrupt", { threadId, clientRequestId: `fm-interrupt-${Date.now()}-${randomBytes(4).toString("hex")}` });
-  if (requested?.status === "no_active_run") return { ok: true, threadId, requested: requested.status, cancel: "not-running" };
+  return interruptThread(session, threadId, timeoutMs, false);
+}
+
+// One t3_thread_interrupt and the wait on exactly the run T3 named. With stop
+// (only where the tool's schema declares it), T3 stops the thread as its Stop
+// button does: it interrupts the running turn, holds queued messages, and
+// stops every task the thread delegated.
+async function interruptThread(session, threadId, timeoutMs, stop) {
+  const requested = await session.call("t3_thread_interrupt", {
+    threadId,
+    ...(stop ? { stop: true } : {}),
+    clientRequestId: `fm-interrupt-${Date.now()}-${randomBytes(4).toString("hex")}`,
+  });
+  const base = { ok: true, threadId, stop };
+  if (requested?.status === "no_active_run") return { ...base, requested: requested.status, cancel: "not-running" };
   const runId = requested?.runId ?? null;
-  const base = { ok: true, threadId, runId, requested: requested?.status ?? null };
+  Object.assign(base, { runId, requested: requested?.status ?? null });
   if (!runId) return { ...base, cancel: "unconfirmed" };
   if (TERMINAL_RUN.has(requested.status)) return { ...base, status: requested.status, timedOut: false, cancel: "confirmed" };
   const waited = await waitRun(session, threadId, runId, timeoutMs);
   const done = waited?.runId === runId && waited?.timedOut !== true && TERMINAL_RUN.has(waited?.status);
   return { ...base, waitedRunId: waited?.runId ?? null, status: waited?.status ?? null, timedOut: waited?.timedOut === true, cancel: done ? "confirmed" : "unconfirmed" };
+}
+
+// The ids of every delegated (subagent) thread below <threadId> whose status
+// is active, at any depth. T3 lists active threads with their parent; a parent
+// link through a thread that is not itself active is followed with a read.
+// The listing covers every project where t3_thread_list declares allProjects,
+// else the thread's own project, where T3 puts a delegated task by default.
+async function activeDescendants(session, threadId, projectId) {
+  const scope = toolOffers(session, "t3_thread_list", "allProjects") ? { allProjects: true } : { projectId };
+  const parentOf = new Map();
+  let cursor;
+  for (let page = 0; page < 1000; page++) {
+    const listed = await session.call("t3_thread_list", { ...scope, statuses: ACTIVE_STATUSES, includeSubagents: true, limit: 100, ...(cursor !== undefined ? { cursor } : {}) });
+    for (const item of listed?.threads ?? []) {
+      if (item.relationshipToParent === "subagent") parentOf.set(item.threadId, item.parentThreadId ?? null);
+    }
+    if (listed?.nextCursor === null || listed?.nextCursor === undefined) break;
+    cursor = listed.nextCursor;
+  }
+  const active = [...parentOf.keys()];
+  const below = [];
+  for (const id of active) {
+    let parent = parentOf.get(id);
+    for (let depth = 0; parent && parent !== threadId && depth < 64; depth++) {
+      if (!parentOf.has(parent)) {
+        let t = null;
+        try {
+          t = threadOf(await session.call("t3_thread_read", { threadId: parent, limit: 1, runLimit: 1 }));
+        } catch (err) {
+          if (!isNotFound(err)) throw err;
+        }
+        parentOf.set(parent, t?.relationshipToParent === "subagent" ? (t.parentThreadId ?? null) : null);
+      }
+      parent = parentOf.get(parent);
+    }
+    if (parent === threadId) below.push(id);
+  }
+  return below;
+}
+
+// close: the teardown kill. A thread the verified server lacks is closed; an
+// archived thread with no active run and no active delegated thread below it
+// is already the end state. Otherwise any active run, and every active
+// delegated task, is stopped (t3_thread_interrupt stop where the server's
+// schema offers it, else a plain interrupt of the thread's own run), and the
+// thread is archived with archive's proof, which also requires no delegated
+// thread below it to be active.
+async function close(flags) {
+  const threadId = need(flags, "thread");
+  const timeoutMs = positiveInt(flags, "timeout-ms", ARCHIVE_TIMEOUT_MS, 600_000);
+  const { session } = await verifiedSession(flags);
+  let t;
+  try {
+    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  } catch (err) {
+    if (isNotFound(err)) return { ok: true, threadId, closed: true, missing: true };
+    throw err;
+  }
+  const archived = t.archived === true || Boolean(t.archivedAt);
+  const activeRun = (t.activeRunId ?? null) !== null;
+  const children = await activeDescendants(session, threadId, t.projectId);
+  if (archived && !activeRun && !children.length) return { ok: true, threadId, closed: true, archived: true, activeRunId: null, status: t.status ?? null };
+  const stop = toolOffers(session, "t3_thread_interrupt", "stop");
+  let interrupted = null;
+  if (activeRun || (stop && children.length)) interrupted = await interruptThread(session, threadId, Math.min(timeoutMs, 10_000), stop);
+  const out = await archiveThread(session, threadId, timeoutMs);
+  return { ...out, ...(interrupted ? { stop, cancel: interrupted.cancel } : {}) };
 }
 
 function threadOf(out) {
@@ -1268,7 +1499,9 @@ async function archive(flags) {
 }
 
 // t3_thread_organize archive, then the read-back that proves the close:
-// archived:true and activeRunId:null, or a thread the server no longer has.
+// archived:true and activeRunId:null with no active delegated thread below
+// it (archive does not stop delegated tasks), or a thread the server no
+// longer has.
 async function archiveThread(session, threadId, timeoutMs) {
   try {
     await session.call("t3_thread_organize", { threadId, action: "archive" });
@@ -1279,16 +1512,24 @@ async function archiveThread(session, threadId, timeoutMs) {
   }
   const deadline = Date.now() + timeoutMs;
   let t = {};
+  let children = [];
   for (;;) {
     t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
     const archived = t.archived === true || Boolean(t.archivedAt);
     if (archived && (t.activeRunId ?? null) === null) {
-      return { ok: true, threadId, closed: true, archived: true, activeRunId: null, status: t.status ?? null };
+      children = await activeDescendants(session, threadId, t.projectId);
+      if (!children.length) return { ok: true, threadId, closed: true, archived: true, activeRunId: null, status: t.status ?? null };
     }
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Refusal("close_unproven", `thread ${threadId} did not read back archived with no active run within ${timeoutMs} ms (archived=${t.archived === true || Boolean(t.archivedAt)}, activeRunId=${t.activeRunId ?? null})`, 1, { thread: t });
+  const childNote = children.length ? `, and delegated thread(s) ${children.join(", ")} still run; stop them in T3 Code` : "";
+  throw new Refusal(
+    "close_unproven",
+    `thread ${threadId} did not read back archived with no active run within ${timeoutMs} ms (archived=${t.archived === true || Boolean(t.archivedAt)}, activeRunId=${t.activeRunId ?? null})${childNote}`,
+    1,
+    { thread: t, activeChildren: children },
+  );
 }
 
 // Every thread T3 lists for a project with the given statuses, across pages,
@@ -1334,6 +1575,7 @@ const VERBS = {
   state,
   "project-ensure": projectEnsure,
   "project-read": projectRead,
+  harness: harnessVerb,
   "resolve-selection": resolveSelection,
   launch,
   send,
@@ -1345,6 +1587,7 @@ const VERBS = {
   respond,
   watch,
   archive,
+  close,
   "thread-for-root": threadForRoot,
 };
 

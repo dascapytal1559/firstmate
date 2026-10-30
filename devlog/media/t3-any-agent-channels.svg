@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="400" viewBox="0 0 960 400" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="960" height="400" fill="#ffffff"/>
+  <text x="24" y="32" font-size="18" font-weight="bold" fill="#222">How a T3 worker gets its environment and its "the brief is first-party" statement</text>
+  <text x="24" y="54" fill="#555">Firstmate reads the T3 catalog for the chosen provider instance, then picks one channel per fact before anything is leased.</text>
+
+  <rect x="24" y="80" width="280" height="96" rx="8" fill="#eef6ee" stroke="#4a8a4a"/>
+  <text x="40" y="106" font-weight="bold" fill="#2f5f2f">Fork T3: per-thread facts</text>
+  <text x="40" y="128" fill="#333">environment and instructions</text>
+  <text x="40" y="146" fill="#333">ride t3_thread_launch, read back</text>
+  <text x="40" y="164" fill="#333">and proven bound</text>
+
+  <rect x="340" y="80" width="280" height="96" rx="8" fill="#f4f1e8" stroke="#9a8a4a"/>
+  <text x="356" y="106" font-weight="bold" fill="#6a5a1a">Upstream T3: no per-thread facts</text>
+  <text x="356" y="128" fill="#333">claude: .claude/settings.local.json</text>
+  <text x="356" y="146" fill="#333">        + CLAUDE.local.md</text>
+  <text x="356" y="164" fill="#333">codex: .codex/config.toml (trust)</text>
+
+  <rect x="656" y="80" width="280" height="96" rx="8" fill="#f8ecec" stroke="#a04a4a"/>
+  <text x="672" y="106" font-weight="bold" fill="#7a2a2a">Refused before anything is leased</text>
+  <text x="672" y="128" fill="#333">any other harness on upstream T3</text>
+  <text x="672" y="146" fill="#333">an instance without full-access</text>
+  <text x="672" y="164" fill="#333">forge=external codex, untrusted</text>
+
+  <text x="24" y="216" font-weight="bold" fill="#222">Harnesses the one adapter table admits</text>
+  <text x="24" y="240" fill="#333">claude, codex, grok, pi, muse, opencode, agy, cursor, and ACP-registry gemini, kimi, devin</text>
+  <text x="24" y="262" fill="#555">Each row: T3 driver, default instance, effort option. Effort words map only onto catalog values of the same name (Grok refuses max).</text>
+
+  <text x="24" y="302" font-weight="bold" fill="#222">Teardown</text>
+  <text x="24" y="326" fill="#333">Stop (t3_thread_interrupt stop: true) ends the worker's turn, its queue, and every task it delegated;</text>
+  <text x="24" y="346" fill="#333">the close is proven only when the thread is archived with no run and no delegated thread still running.</text>
+  <text x="24" y="380" fill="#888">Live proof on Grok and the other new rows is still to come; today's evidence is the portable suites against the fake T3.</text>
+</svg>

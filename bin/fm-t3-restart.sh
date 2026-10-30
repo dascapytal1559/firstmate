@@ -27,7 +27,9 @@
 #     current claim is `working:`, `paused:`, or nothing yet, and whose thread
 #     the server still has, it writes the marker below and sends the worker a
 #     recovery steer through bin/fm-send.sh (a durable inbox record whose T3
-#     doorbell reopens its session), then records the new identity only when
+#     doorbell reopens its session, or steers the run T3's own restart
+#     continuation already resumed, where the steer's re-check and fresh
+#     status line still apply), then records the new identity only when
 #     every steer was recorded, so a rerun retries exactly the workers whose
 #     steer failed. A worker whose
 #     claim is an open decision, a captain-held wait, or a terminal line is
@@ -133,7 +135,7 @@ write_marker() {  # <marker> <offset> <doorbell>
 }
 
 AT=$(date -u +%Y-%m-%dT%H:%MZ)
-STEER="Firstmate: the T3 server restarted (seen at $AT) and ended your session; this message reopened it. Anything that lived only in that session is gone: background commands, waits, monitors, and any command that was still running. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
+STEER="Firstmate: the T3 server restarted (seen at $AT) and ended your session, so anything that lived only in it is gone: background commands, waits, monitors, and any command that was still running. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
 
 echo "t3-restart: the T3 server restarted (was $RECORDED, now $CURRENT); it ended every T3 session, this one included."
 FAILED=0

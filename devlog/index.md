@@ -77,3 +77,28 @@ This entry is step two, the Firstmate half:
 This lands after the fork side is installed, because until the fork recognises crew by their launching client, a card without the `fm-` title would fall out of the crew tree.
 The picture above is the scout's mockup, not a screenshot: no worker has launched with these titles yet.
 The evidence is the T3 backend suite with new cases for the backlog title (quotes and accented text decoded, the 96-character cut, the fallback) and for a spawn whose thread carries that title while its record still reads `window=fm-<id>`.
+
+## 3. Any agent can be a T3 worker, not only Claude and Codex (31 October 2026)
+
+![Per fact, Firstmate picks the thread channel on the fork's T3, the Claude or Codex folder files on upstream T3, or a refusal before anything is leased](media/t3-any-agent-channels.svg)
+
+The ask:
+
+> so far we only support Codex or Claude, right? We should really be able to support orchestration across any agent. Neither Firstmate or T three code s themselves stop this. So we have to figure out w why it's stopping us and what we can do to change that.
+>
+> Any agent build, yeah, let's go the full path
+
+The investigation found the limit was Firstmate's own: three hard refusals, and under them folder-file tricks that only Claude and Codex read, standing in for a per-thread environment and per-thread instructions that T3 did not have.
+"The full path" is two changes: the fork's T3 gains those two per-thread fields, and Firstmate switches to them.
+This entry is the Firstmate half:
+
+- One adapter table now decides which harnesses T3 can run: claude, codex, grok, pi, muse, opencode, agy, cursor, and the ACP-registry gemini, kimi, and devin, each with its T3 driver, default instance, and effort option.
+- Where the T3 instance advertises the new fields, the worker's environment and its "the brief is first-party" statement ride the thread launch, for every harness, and Firstmate reads them back to prove they bound.
+  Upstream T3 keeps today's Claude and Codex folder files; any other harness there is refused rather than launched half-wired.
+- An instance that cannot run full-access is refused, and so is a thread T3 says it runs lower, because such a worker would stall on approvals Firstmate cannot answer.
+- No pane-style hook files are written for the new harnesses, global ones such as Grok's included; T3's own thread status already tells Firstmate when a worker is busy or done.
+- Teardown now uses T3's Stop, so a worker's own delegated T3 tasks stop with it instead of running on in a returned slot.
+- A Codex ship on an external review forge is refused, not just warned, when its push guard could be ignored.
+
+Nothing has run live yet: the evidence is the T3 backend and helper suites against the fake T3, with new cases for a Grok worker with no hook files, a server with and without the new fields, a downgraded instance, and a worker that owns a running child.
+The first live proof is one cheap Grok scout once the fork's half is installed.

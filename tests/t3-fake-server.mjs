@@ -26,7 +26,17 @@
 //     {action}. The fake serves both generations; tools/list offers the
 //     earlier one by default and CURRENT_TOOLS when the world sets toolset
 //     "current", and a tools/call for a tool tools/list does not offer is
-//     refused, as T3 refuses it.
+//     refused, as T3 refuses it;
+//   - tools/list declares t3_thread_interrupt's `stop` and t3_thread_list's
+//     `allProjects` in their input schemas, and a peer from before `stop`
+//     (world noStop) drops it and interrupts the run alone; with stop, the
+//     latest active run and every active delegated (subagent) thread below
+//     the thread are interrupted, as T3's Stop does;
+//   - a fork's per-thread facts (world threadFacts): orchestrator_capabilities
+//     reports threadEnvironment and threadInstructions per provider, a launch
+//     binds its `environment` and `instructions`, and the configuration read
+//     returns them with effectiveRuntimeMode; upstream T3 (no threadFacts)
+//     drops both fields and reads back neither.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -39,7 +49,9 @@
 //   tools (array of names; default all), toolset ("current": the T3 0.1.3
 //   tool names instead of the earlier default), revoked (every /mcp call is 401),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
-//   bindRuntimeMode, bindModel, bindOptions (override what a launch binds),
+//   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
+//   bindInstructions, bindEffectiveRuntimeMode (override what a launch binds),
+//   threadFacts, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -82,6 +94,17 @@ const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS 
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
+// Input schemas for the tools whose optional fields the helper gates on.
+const TOOL_SCHEMAS = {
+  t3_thread_interrupt: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "threadId", "runId", "reason", ...(w.noStop ? [] : ["stop"]), "clientRequestId"].map((k) => [k, {}])),
+  }),
+  t3_thread_list: () => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "projectId", "allProjects", "statuses", "titleContains", "settled", "snoozed", "includeSubagents", "cursor", "limit"].map((k) => [k, {}])),
+  }),
+};
 const FAKE_PROVIDERS = [
   {
     providerInstanceId: "claudeAgent", driverKind: "claudeAgent", displayName: "Claude", constraints: [],
@@ -95,7 +118,19 @@ const FAKE_PROVIDERS = [
       id, label: id, options: [select("reasoningEffort", ["low", "medium", "high", "xhigh"]), select("serviceTier", ["default", "priority"])],
     })),
   },
+  // The live Grok catalog entry (docs/verification/runtime-backends.md).
+  {
+    providerInstanceId: "grok", driverKind: "grok", displayName: "Grok", constraints: [],
+    runtimeModes: ["approval-required", "auto", "full-access"],
+    models: ["grok-4.7", "grok-4.7-build-fast"].map((id) => ({
+      id, options: [{ id: "reasoningEffort", values: ["xhigh", "high", "medium", "low"], default: "high" }],
+    })),
+  },
 ];
+// The catalog as served: with threadFacts every provider that does not say
+// otherwise advertises both per-thread capabilities.
+const servedProviders = (w) =>
+  (w.providers ?? FAKE_PROVIDERS).map((p) => (w.threadFacts ? { threadEnvironment: true, threadInstructions: true, ...p } : p));
 
 const caseDir = () => readFileSync(args["case-file"], "utf8").trim();
 const worldFile = () => path.join(caseDir(), "world.json");
@@ -136,7 +171,7 @@ const now = () => new Date().toISOString();
 const pendingRequests = (t) => (t.runtimeRequests ?? []).filter((r) => r.status === "pending");
 
 function detail(t) {
-  const { items, runs, runtimeRequests, modelSelection, ...rest } = t;
+  const { items, runs, runtimeRequests, modelSelection, environment, instructions, ...rest } = t;
   if (runtimeRequests) rest.pendingRequestCount = pendingRequests(t).length;
   return rest;
 }
@@ -198,6 +233,22 @@ function listItem(x) {
   };
 }
 
+// Every delegated (subagent) thread below <id>, at any depth.
+function descendants(threads, id) {
+  const out = [];
+  const queue = [id];
+  while (queue.length) {
+    const parent = queue.shift();
+    for (const x of Object.values(threads)) {
+      if (x.parentThreadId === parent && x.relationshipToParent === "subagent") {
+        out.push(x);
+        queue.push(x.threadId);
+      }
+    }
+  }
+  return out;
+}
+
 // Returns [result, changed].
 async function callTool(w, name, a) {
   const fail = (w.failTools ?? {})[name];
@@ -209,7 +260,7 @@ async function callTool(w, name, a) {
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
     case "orchestrator_capabilities":
-      return [ok({ parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: w.providers ?? FAKE_PROVIDERS }), false];
+      return [ok({ parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w) }), false];
     case "t3_project_list":
       return [ok({ projects, nextCursor: null }), false];
     case "t3_project_create": {
@@ -234,6 +285,10 @@ async function callTool(w, name, a) {
         branch: ws.branch ?? null, worktreePath: w.bindWorktree ?? (ws.type === "existing_worktree" ? ws.worktreePath : null),
         parentThreadId: null, relationshipToParent: null, pendingRequestCount: 0, archived: false, items: [], runs: [],
       };
+      if (w.threadFacts) {
+        if (a.environment !== undefined || w.bindEnvironment !== undefined) n.environment = w.bindEnvironment ?? a.environment;
+        if (a.instructions !== undefined || w.bindInstructions !== undefined) n.instructions = w.bindInstructions ?? a.instructions;
+      }
       threads[id] = n;
       if (a.message) startRun(n, a.message);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];
@@ -267,7 +322,7 @@ async function callTool(w, name, a) {
       if ((a.limit ?? 0) > 100) return [err("invalid_request", "limit must be <= 100"), false];
       const wanted = a.statuses ? new Set(a.statuses) : null;
       const list = Object.values(threads)
-        .filter((x) => x.projectId === a.projectId && (!wanted || wanted.has(x.status)))
+        .filter((x) => (a.allProjects === true || x.projectId === a.projectId) && (!wanted || wanted.has(x.status)))
         .filter((x) => a.includeSubagents !== false || x.relationshipToParent !== "subagent");
       const cursor = a.cursor ?? 0;
       const page = list.slice(cursor, cursor + (a.limit ?? 50));
@@ -283,12 +338,31 @@ async function callTool(w, name, a) {
     case "t3_thread_configuration": {
       if (!t) return [notFound(a.threadId), false];
       const modelSelection = t.modelSelection ?? { instanceId: t.providerInstanceId, model: t.model };
-      return [ok({ threadId: t.threadId, modelSelection, runtimeMode: t.runtimeMode, interactionMode: t.interactionMode ?? "default" }), false];
+      const facts = w.threadFacts
+        ? { environment: t.environment ?? {}, instructions: t.instructions ?? null, effectiveRuntimeMode: w.bindEffectiveRuntimeMode ?? t.runtimeMode }
+        : {};
+      return [ok({ threadId: t.threadId, modelSelection, runtimeMode: t.runtimeMode, interactionMode: t.interactionMode ?? "default", ...facts }), false];
     }
     case "t3_thread_wait":
       return [await waitRun(a), false];
     case "t3_thread_interrupt": {
       if (!t) return [notFound(a.threadId), false];
+      if (a.stop === true && !w.noStop) {
+        // T3's Stop: the running turn, whichever run it is, and every active
+        // delegated thread below this one.
+        let changed = false;
+        for (const child of descendants(threads, t.threadId)) {
+          const childRun = latestActiveRun(child);
+          if (childRun) {
+            childRun.stopRequested = "interrupt";
+            changed = true;
+          }
+        }
+        const run = latestActiveRun(t);
+        if (!run) return [ok({ threadId: t.threadId, runId: null, status: "no_active_run" }), changed];
+        run.stopRequested = "interrupt";
+        return [ok({ threadId: t.threadId, runId: run.runId, status: "interrupt_requested" }), true];
+      }
       const explicit = a.runId === undefined ? undefined : (t.runs ?? []).find((r) => r.runId === a.runId);
       if (a.runId !== undefined && !explicit) return [err("run_not_found", `Run ${a.runId} is not in thread ${a.threadId}.`), false];
       if (explicit && TERMINAL.has(explicit.status)) return [ok({ threadId: t.threadId, runId: explicit.runId, status: explicit.status }), false];
@@ -386,7 +460,7 @@ async function mcp(req, res) {
     res.writeHead(202);
     return res.end();
   } else if (msg.method === "tools/list") {
-    result = { tools: offeredTools(w).map((name) => ({ name, inputSchema: { type: "object" } })) };
+    result = { tools: offeredTools(w).map((name) => ({ name, inputSchema: TOOL_SCHEMAS[name]?.(w) ?? { type: "object" } })) };
   } else if (msg.method === "tools/call" && !offeredTools(w).includes(msg.params.name)) {
     result = err("unknown_tool", `Tool ${msg.params.name} not found`);
   } else if (msg.method === "tools/call") {
