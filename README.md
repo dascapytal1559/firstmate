@@ -1,6 +1,7 @@
 ## About this fork
 
 A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`.
+Works with [this T3 Code fork](https://github.com/dascapytal1559/t3code), which hosts firstmate and its workers.
 The rest of this README is upstream's.
 
 - Firstmate hears a finished worker in seconds, not after a 30-second wait.
