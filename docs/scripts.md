@@ -95,7 +95,6 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | Detect a T3 server restart and steer the T3 workers it ended                          |
-| `fm-t3-restart-nudge.sh` | Outside launchd nudge that tells a T3-hosted main the server restarted                |
 | `fm-t3-main-pretool-check.sh` | PreToolUse guard for a T3 home's main: the restart reminder and the credential seatbelt |
 | `fm-t3code-codex-env.sh` | Manage the T3 environment overlay on tracked Codex project configuration              |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |

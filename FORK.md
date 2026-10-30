@@ -49,7 +49,7 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
 FirstMate notices the restart at its next start and nudges each interrupted worker to check what is still running and report again.
-A small helper outside T3 Code reminds a FirstMate running inside T3 Code to restart its session once the server is back.
+The T3 Code fork tells a FirstMate running inside it that the server restarted, so FirstMate restarts its session once the server is back.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
 ## Current T3 Code releases

@@ -46,8 +46,6 @@
 # claim as unknown. The worker's next status line is its answer.
 #
 # The record of the last handled identity is <state>/.t3code-server-start.
-# bin/fm-t3-restart-nudge.sh keeps its own record, so the outside nudge never
-# consumes this one.
 #
 # Every verb exits 0; usage errors exit 2. Bash 3.2 compatible.
 set -u

@@ -3378,58 +3378,6 @@ test_t3_main_guard_restart_reminder() {
   pass "t3code main guard: a dead lock holder gets one session-start reminder at the first tool call"
 }
 
-# The outside nudge sends the main exactly one operational message per restart.
-test_t3_restart_nudge_sends_once_per_restart() {
-  local out home state main=mcp:bb000001-0000-4000-8000-000000000001 text
-  command -v lsof >/dev/null 2>&1 || { echo "skip - t3code restart nudge: lsof absent"; return 0; }
-  t3_case restart-nudge completed
-  t3_world "$(t3_thread_json "$main" completed false)"
-  home="$CASE_DIR/home"; state="$home/state"
-  mkdir -p "$state"
-  nudge() { FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$CONFIG" "$ROOT/bin/fm-t3-restart-nudge.sh" run --thread "$main" 2>&1; }
-  out=$(nudge)
-  assert_equals "" "$out" "the first pass records the server and sends nothing"
-  [ -z "$(t3_sent_threads)" ] || fail "no restart, no message"
-  nudge >/dev/null
-  [ -z "$(t3_sent_threads)" ] || fail "the same server, still no message"
-  t3_fake_restart "$TMP_ROOT/server"
-  t3_world_set 'w.failTools = { t3_thread_send: { code: "orchestration_error", message: "lost" } }'
-  if nudge >/dev/null; then fail "an unconfirmed send is not reported as sent"; fi
-  assert_present "$state/.t3-restart-nudge-pending" "an unconfirmed nudge stays pending"
-  t3_world_set 'w.failTools = {}'
-  out=$(nudge)
-  assert_contains "$out" "told $main that the T3 server restarted" "the next pass delivers the nudge: $out"
-  out=$(nudge)
-  assert_equals "" "$out" "a delivered nudge is not repeated"
-  [ "$(t3_fake_calls t3_thread_send | node -e 'const ids=new Set(require("fs").readFileSync(0,"utf8").trim().split("\n").filter(Boolean).map((l)=>JSON.parse(l).clientRequestId)); process.stdout.write(String(ids.size))')" = 1 ] \
-    || fail "the retry reuses the first attempt's request id"
-  text=$(t3_fake_calls t3_thread_send | tail -n 1 | node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(a.message ?? a.text ?? JSON.stringify(a))')
-  assert_contains "$text" "Firstmate operational input waiting" "the nudge is Firstmate operational input, never a captain message"
-  assert_contains "$(cat "$state"/operational-inbox/*.msg)" "bin/fm-session-start.sh" "its record tells the main to run session start"
-  pass "t3code restart nudge: one operational message per restart, retried under one request id"
-}
-
-# install renders the launchd template and uninstall removes it, with no
-# launchctl when told not to load.
-test_t3_restart_nudge_install_renders_template() {
-  local dir="$TMP_ROOT/nudge-agents" home="$TMP_ROOT/nudge-home" plist
-  [ "$(uname -s)" = Darwin ] || { echo "skip - t3code restart nudge install: macOS only"; return 0; }
-  mkdir -p "$home/state"
-  plist=$(FM_HOME="$home" "$ROOT/bin/fm-t3-restart-nudge.sh" install --thread mcp:main-1 --interval 45 \
-    --launch-agents-dir "$dir" --no-load) || fail "install --no-load should succeed: $plist"
-  assert_present "$plist" "install writes the plist"
-  if command -v plutil >/dev/null 2>&1; then
-    plutil -lint "$plist" >/dev/null || fail "the rendered plist must be valid: $(plutil -lint "$plist")"
-  fi
-  assert_grep "<string>$home</string>" "$plist" "the job runs with this home"
-  assert_grep '<string>mcp:main-1</string>' "$plist" "the job names the main thread"
-  assert_grep '<integer>45</integer>' "$plist" "the job uses the interval"
-  if grep -q '@[A-Z_]*@' "$plist"; then fail "every template field is filled"; fi
-  FM_HOME="$home" "$ROOT/bin/fm-t3-restart-nudge.sh" uninstall --launch-agents-dir "$dir" --no-load || fail "uninstall should succeed"
-  assert_absent "$plist" "uninstall removes the plist"
-  pass "t3code restart nudge: install renders the launchd template for this home and uninstall removes it"
-}
-
 # --- surfaced-turn proofs on the T3 backend (docs/watcher-continuity.md
 # "Signal coalescing and the terminal fast path") ------------------------------
 
@@ -3825,10 +3773,8 @@ test_housekeeping_removes_the_iterated_stale_marker
 test_t3_restart_inert_without_t3
 test_t3_main_guard_keeps_the_token_out_of_the_transcript
 test_t3_main_guard_restart_reminder
-test_t3_restart_nudge_install_renders_template
 test_t3_restart_recovery
 test_t3_restart_failed_ring_retries
-test_t3_restart_nudge_sends_once_per_restart
 test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change
 test_t3_done_then_same_run_completed_turn_end_absorbed
 test_t3_done_then_run_failed_reports_the_bad_ending_once
