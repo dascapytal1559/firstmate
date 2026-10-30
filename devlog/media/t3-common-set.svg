@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="960" height="470" fill="#ffffff"/>
+  <text x="24" y="32" font-size="18" font-weight="bold" fill="#222">The common set: agents Firstmate has as a harness and this T3 fork can run</text>
+  <text x="24" y="54" fill="#555">Where each of the 11 stands after this change, and what still stands between it and a live worker.</text>
+
+  <rect x="24" y="76" width="216" height="372" rx="8" fill="#eef6ee" stroke="#4a8a4a"/>
+  <text x="40" y="102" font-weight="bold" fill="#2f5f2f">Passed live, 31 October</text>
+  <text x="40" y="130" fill="#333">claude  (claude-haiku-5-5)</text>
+  <text x="40" y="152" fill="#333">codex   (gpt-6-luna)</text>
+  <text x="40" y="174" fill="#333">grok    (grok-4.7-build-fast)</text>
+  <text x="40" y="196" fill="#333">pi      (openai-codex/gpt-6-luna)</text>
+  <text x="40" y="232" fill="#555">Each read its own task id</text>
+  <text x="40" y="250" fill="#555">from its environment, saw the</text>
+  <text x="40" y="268" fill="#555">brief as first-party, finished,</text>
+  <text x="40" y="286" fill="#555">and was cleaned up.</text>
+
+  <rect x="256" y="76" width="328" height="372" rx="8" fill="#eaf0f8" stroke="#4a6a9a"/>
+  <text x="272" y="102" font-weight="bold" fill="#2a4a7a">This change (Firstmate)</text>
+  <text x="272" y="130" font-weight="bold" fill="#333">cursor</text>
+  <text x="272" y="150" fill="#333">now the ACP registry's cursor agent,</text>
+  <text x="272" y="168" fill="#333">one process per thread, not T3's</text>
+  <text x="272" y="186" fill="#333">in-process driver (no thread env)</text>
+  <text x="272" y="218" font-weight="bold" fill="#333">gemini, kimi, devin, cursor</text>
+  <text x="272" y="238" fill="#333">instance found by its agent, whatever</text>
+  <text x="272" y="256" fill="#333">T3 named it (acpRegistry_gemini_cli);</text>
+  <text x="272" y="274" fill="#333">none or two of one agent: refused</text>
+  <text x="272" y="306" font-weight="bold" fill="#333">gemini</text>
+  <text x="272" y="326" fill="#333">thread trusts the workspace, as the</text>
+  <text x="272" y="344" fill="#333">pane launch does</text>
+  <text x="272" y="376" font-weight="bold" fill="#333">every agent</text>
+  <text x="272" y="396" fill="#333">a model outside T3's short list is</text>
+  <text x="272" y="414" fill="#333">searched for, not refused</text>
+
+  <rect x="600" y="76" width="336" height="176" rx="8" fill="#f4f1e8" stroke="#9a8a4a"/>
+  <text x="616" y="102" font-weight="bold" fill="#6a5a1a">Waits on the T3 fork</text>
+  <text x="616" y="130" fill="#333">opencode: one shared server per</text>
+  <text x="616" y="148" fill="#333">instance, so no thread environment</text>
+  <text x="616" y="166" fill="#333">until T3 sends OpenCode's own</text>
+  <text x="616" y="184" fill="#333">per-session environment</text>
+
+  <rect x="600" y="268" width="336" height="180" rx="8" fill="#f6eef6" stroke="#8a4a8a"/>
+  <text x="616" y="294" font-weight="bold" fill="#5a2a5a">Waits on the captain's setup</text>
+  <text x="616" y="322" fill="#333">agy, muse: enable and sign in</text>
+  <text x="616" y="344" fill="#333">cursor, gemini, kimi, devin: add the</text>
+  <text x="616" y="362" fill="#333">ACP registry instance and sign in</text>
+  <text x="616" y="394" fill="#555">Then one cheap live scout each.</text>
+</svg>

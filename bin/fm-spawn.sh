@@ -5909,6 +5909,9 @@ spawn_t3code_env_assemble() {
   if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     T3CODE_ENV+=("FM_TASK_ID=$ID")
   fi
+  # Gemini refuses an untrusted folder; the variable, unlike --skip-trust,
+  # still loads project skills, as the pane launch relies on.
+  [ "$HARNESS" != gemini ] || T3CODE_ENV+=(GEMINI_CLI_TRUST_WORKSPACE=true)
   if [ -n "$SPAWN_TRACEPARENT" ] && { [ "$T3CODE_ENV_CHANNEL" = thread ] || spawn_record_traceparent; }; then
     T3CODE_ENV+=("TRACEPARENT=$SPAWN_TRACEPARENT")
   fi

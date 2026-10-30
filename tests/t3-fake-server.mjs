@@ -36,7 +36,11 @@
 //     reports threadEnvironment and threadInstructions per provider, a launch
 //     binds its `environment` and `instructions`, and the configuration read
 //     returns them with effectiveRuntimeMode; upstream T3 (no threadFacts)
-//     drops both fields and reads back neither.
+//     drops both fields and reads back neither;
+//   - orchestrator_capabilities lists a short set of models per provider and
+//     counts the rest in omittedModels (a provider's `omitted` models), and
+//     its declared `search` argument (absent under world noSearch) instead
+//     lists every model whose id or label contains the text, with no count.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -100,6 +104,10 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "runId", "reason", ...(w.noStop ? [] : ["stop"]), "clientRequestId"].map((k) => [k, {}])),
   }),
+  orchestrator_capabilities: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", ...(w.noSearch ? [] : ["search"])].map((k) => [k, {}])),
+  }),
   t3_thread_list: () => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "allProjects", "statuses", "titleContains", "settled", "snoozed", "includeSubagents", "cursor", "limit"].map((k) => [k, {}])),
@@ -128,9 +136,18 @@ const FAKE_PROVIDERS = [
   },
 ];
 // The catalog as served: with threadFacts every provider that does not say
-// otherwise advertises both per-thread capabilities.
-const servedProviders = (w) =>
-  (w.providers ?? FAKE_PROVIDERS).map((p) => (w.threadFacts ? { threadEnvironment: true, threadInstructions: true, ...p } : p));
+// otherwise advertises both per-thread capabilities. A search lists every
+// matching model, the omitted ones included; otherwise omitted models are
+// only counted.
+const servedProviders = (w, search) =>
+  (w.providers ?? FAKE_PROVIDERS).map(({ omitted = [], ...p }) => {
+    const all = [...(p.models ?? []), ...omitted];
+    const needle = typeof search === "string" && !w.noSearch ? search.toLowerCase() : null;
+    const served = needle !== null
+      ? { ...p, models: all.filter((m) => `${m.id} ${m.label ?? ""}`.toLowerCase().includes(needle)) }
+      : { ...p, ...(omitted.length ? { omittedModels: omitted.length } : {}) };
+    return w.threadFacts ? { threadEnvironment: true, threadInstructions: true, ...served } : served;
+  });
 
 const caseDir = () => readFileSync(args["case-file"], "utf8").trim();
 const worldFile = () => path.join(caseDir(), "world.json");
@@ -260,7 +277,7 @@ async function callTool(w, name, a) {
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
     case "orchestrator_capabilities":
-      return [ok({ parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w) }), false];
+      return [ok({ parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search) }), false];
     case "t3_project_list":
       return [ok({ projects, nextCursor: null }), false];
     case "t3_project_create": {

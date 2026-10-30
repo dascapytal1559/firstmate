@@ -128,3 +128,35 @@ The choices worth knowing:
   No prompt was sent, so no model was paid for, and nothing from his real T3 appears.
 - Both are framed like the handoff chart: one title stating the result, one headline, the picture, a one-line source.
 - The pictures live once, under `docs/media/fork/`, and this entry links to them rather than keeping a second copy.
+
+## 4. The common set: every agent both sides already run (31 October 2026)
+
+![Of the 11 agents Firstmate has and this T3 fork can run, four passed live today; this change readies Cursor, Gemini, Kimi, and Devin on the Firstmate side, OpenCode waits on the fork, and the rest wait on setup](media/t3-common-set.svg)
+
+The ask, and the correction a moment later:
+
+> Yeah, we just wanna support every like we wanna support the union set between First Mate and T three code
+>
+> Actually I don't know if it's a union set, but it's more like the common set
+>
+> (31 October 2026)
+
+That is 11 agents.
+Claude, Codex, Grok, and Pi already pass live as Firstmate workers in T3: each scout read its own task id from its environment, saw its brief as first-party, finished, and was cleaned up.
+OpenCode and T3's own Cursor driver were refused, because neither can give a thread its own environment.
+
+This entry is the Firstmate half of the plan:
+
+- Cursor now runs as the ACP registry's `cursor` agent (`cursor-agent acp`), which T3 starts as one process per thread with that thread's environment.
+  T3's in-process Cursor driver could only ever be refused.
+- An ACP registry worker (Cursor, Gemini, Kimi, Devin) runs on whichever T3 instance reports that agent, whatever T3 named it.
+  T3 names a new one after the agent, such as `acpRegistry_gemini_cli`, which the old table would have refused every time.
+  An explicit instance mapping still wins, and two instances of one agent are refused rather than guessed.
+- A Gemini thread trusts its workspace through its environment, as the pane launch already does.
+- A model outside the short list T3 shows for an instance is now looked up in T3's full catalog before it is refused.
+  That is the bug today's live checks hit with Codex `gpt-5.6-luna` and OpenCode `kimi-code/k3`.
+
+The evidence is the T3 helper and backend suites against the fake T3.
+The new cases cover a registry instance found by agent, the none and two-of-one-agent refusals, Cursor refusing T3's in-process driver, a Gemini spawn carrying the trust variable, and an omitted model found by search but a near-miss slug refused.
+Today's four live passes are now in the verification record.
+The remaining agents need the fork's OpenCode change or the captain's setup first, then one cheap live scout each.

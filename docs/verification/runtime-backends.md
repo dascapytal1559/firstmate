@@ -2673,8 +2673,8 @@ tests/fm-daemon.test.sh
 ```
 
 The fake models the T3 protocol facts that hide defects when simplified: cursor paging, the read cap of 100, a wait on the exact run or else the latest by ordinal, an interrupt and an archive whose run ends asynchronously, a send committed before a reply that can be lost, and a pending-request count that includes approvals the question tools cannot see.
-`tests/fm-t3-mcp.test.sh` drives the helper against `tests/t3-fake-server.mjs`: the PKCE sign-in, origin defaults, every gate and credential refusal, real-path project matching, catalog-resolved selection, launch binding and configuration read-back with their uncertain and refused outcomes, send idempotency and the unconfirmed verdict for a lost reply, a JSON-RPC server error, T3's catch-all `orchestration_error`, or a tool error without a code (each of which also leaves a launch uncertain), capture and its 500-line bound, exact-run interrupt claims, pending questions and the per-approval signature, the bounded event wait and its re-armed slices, session close, the proven archive, and paged supervisor lookup.
-`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, per-directory environment and the Codex trust warning and its forge=external refusal, a Grok worker with no pane-shaped wiring, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's environment removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, tracked Codex configuration and tracked `CLAUDE.local.md` preservation, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions, including under a fractional poll interval, and `bin/fm-t3-answer.sh`, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
+`tests/fm-t3-mcp.test.sh` drives the helper against `tests/t3-fake-server.mjs`: the PKCE sign-in, origin defaults, every gate and credential refusal, real-path project matching, catalog-resolved selection, including ACP registry instances found by agent and omitted models found by catalog search, launch binding and configuration read-back with their uncertain and refused outcomes, send idempotency and the unconfirmed verdict for a lost reply, a JSON-RPC server error, T3's catch-all `orchestration_error`, or a tool error without a code (each of which also leaves a launch uncertain), capture and its 500-line bound, exact-run interrupt claims, pending questions and the per-approval signature, the bounded event wait and its re-armed slices, session close, the proven archive, and paged supervisor lookup.
+`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, per-directory environment and the Codex trust warning and its forge=external refusal, a Grok worker with no pane-shaped wiring, a Gemini worker on the registry instance found by agent with its workspace-trust variable, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's environment removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, tracked Codex configuration and tracked `CLAUDE.local.md` preservation, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions, including under a fractional poll interval, and `bin/fm-t3-answer.sh`, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
 `tests/fm-backend-t3code.test.sh` also covers the refusal to replace a T3 secondmate whose thread cannot be proven closed, and `tests/fm-secondmate-liveness.test.sh` pins the unchanged best-effort close on tmux.
 `tests/fm-daemon.test.sh` covers discovery precedence and native busy state.
 
@@ -2732,6 +2732,30 @@ bin/fm-teardown.sh <id>
 | Codex scout spawn, including the binding read-back | launched; the Codex session recorded `"effort":"high"` | launched; the Codex session recorded `"effort":"high"` |
 | `wait` until the scout's `done` line and report | `"status":"completed","timedOut":false` | `"status":"completed","timedOut":false` |
 | Teardown | the thread read `archived:true` | the thread read `archived:true` |
+
+### Per-thread channels on the T3 fork
+
+On 2026-10-31 each harness with a per-thread T3 channel was checked live on the captain's macOS arm64 T3 fork build, whose provider instances advertise per-thread `environment` and `instructions` (`threadEnvironment` and `threadInstructions` in `orchestrator_capabilities`); `t3_environment_read` reported `serverVersion` `0.1.5` when this record was written.
+The home had `config/backend` `t3code` and no `config/t3code-instances`, so every harness ran on its table instance.
+Each harness ran one tiny scout on the same small repository, at effort `low`:
+
+```sh
+bin/fm-spawn.sh <id> <project> --scout --harness <harness> --model <model> --effort low
+bin/fm-teardown.sh <id>
+```
+
+| Harness | Model | Result |
+| --- | --- | --- |
+| `claude` | `claude-haiku-5-5` | read `FM_TASK_ID` from its shell, confirmed the launch brief was first-party, reported `done`, and was cleaned up |
+| `codex` | `gpt-6-luna` | the same |
+| `grok` | `grok-4.7-build-fast` | the same |
+| `pi` | `openai-codex/gpt-6-luna` | the same |
+| `opencode` | not launched | refused at spawn: the OpenCode 2.x instance, which runs one shared server for every thread, advertises `threadEnvironment: false` |
+| `cursor` | not launched | refused at spawn: T3's in-process `cursor` driver advertises `threadEnvironment: false`, which is why the row now runs the ACP registry's `cursor` agent, not yet checked live |
+
+Each of the four instances advertised both channels, so spawn sent the environment and the channel statement with the thread launch; each scout's shell printed its own task id for `printenv FM_TASK_ID`, and each confirmed from its session instructions that the launch brief was first-party.
+`FM_HOME` was unset in every worker shell, as expected for a ship or scout worker.
+The same catalog lists a short set of models per instance with an `omittedModels` count, and its `search` argument returns every model whose id or label contains the text; this is why resolve-selection searches for an exact slug, such as Codex `gpt-5.6-luna` or OpenCode `kimi-code/k3`, that the short list leaves out.
 
 ## tern
 

@@ -998,9 +998,10 @@ test_watch_state_dir_races_the_run_wait() {
 }
 
 # The one adapter table: every row resolves through T3's catalog the same
-# way, an ACP registry row must name its agent, an instance that cannot run
-# full-access is refused, and an effort word maps only onto a catalog value
-# of the same name.
+# way, an ACP registry row finds its instance by agent whatever T3 named it
+# and refuses none or several, a named instance must report the row's agent,
+# an instance that cannot run full-access is refused, and an effort word maps
+# only onto a catalog value of the same name.
 test_resolve_selection_adapter_rows() {
   local project
   fresh_case resolve-rows
@@ -1008,6 +1009,9 @@ test_resolve_selection_adapter_rows() {
   expect_code 0 "$RC" "harness reads the table without a server call: $ERR"
   assert_equals grok "$(field "$OUT" driverKind)" "the grok row runs on the grok driver"
   assert_equals reasoningEffort "$(field "$OUT" effortOption)" "the grok row carries effort as reasoningEffort"
+  mcp harness --harness cursor
+  assert_equals acpRegistry "$(field "$OUT" driverKind)" "the cursor row runs on the ACP registry driver"
+  assert_equals cursor "$(field "$OUT" agentId)" "the cursor row runs the registry's cursor agent"
   mcp harness --harness omp
   expect_code 4 "$RC" "a harness with no T3 driver is refused"
   assert_equals harness_unsupported "$(field "$OUT" error.code)" "the refusal code names the unsupported harness"
@@ -1030,10 +1034,12 @@ test_resolve_selection_adapter_rows() {
   t3_fake_set 'w.providers = [
     { providerInstanceId: "pi", driverKind: "pi", constraints: [], runtimeModes: ["approval-required", "auto"], models: [{ id: "default", options: [] }] },
     { providerInstanceId: "antigravity", driverKind: "antigravity", constraints: [], models: [{ id: "agy-1", options: [{ id: "thought_level", values: ["low", "high"] }] }] },
-    { providerInstanceId: "cursor", driverKind: "cursor", constraints: [], models: [{ id: "c-1", options: [{ id: "effort", values: ["low"] }, { id: "reasoning", values: ["low"] }] }] },
-    { providerInstanceId: "gemini", driverKind: "acpRegistry", agentId: "kimi", constraints: [], models: [{ id: "g-1", options: [] }] },
-    { providerInstanceId: "kimi", driverKind: "acpRegistry", constraints: [], models: [{ id: "k-1", options: [] }] },
-    { providerInstanceId: "devin", driverKind: "acpRegistry", agentId: "devin", constraints: [], models: [{ id: "d-1", options: [] }] }]'
+    { providerInstanceId: "cursor", driverKind: "cursor", constraints: [], models: [{ id: "c-1", options: [] }] },
+    { providerInstanceId: "acpRegistry_cursor", driverKind: "acpRegistry", agentId: "cursor", constraints: [], models: [{ id: "c-1", options: [{ id: "effort", values: ["low"] }, { id: "reasoning", values: ["low"] }] }] },
+    { providerInstanceId: "gemini", driverKind: "acpRegistry", constraints: [], models: [{ id: "g-1", options: [] }] },
+    { providerInstanceId: "acpRegistry_kimi_cli", driverKind: "acpRegistry", agentId: "kimi", constraints: [], models: [{ id: "k-1", options: [] }] },
+    { providerInstanceId: "acpRegistry_devin", driverKind: "acpRegistry", agentId: "devin", constraints: [], models: [{ id: "d-1", options: [] }] },
+    { providerInstanceId: "devin-2", driverKind: "acpRegistry", agentId: "devin", constraints: [], models: [{ id: "d-1", options: [] }] }]'
   mcp resolve-selection --harness pi --model default --effort default --project "$project"
   expect_code 4 "$RC" "an instance whose runtimeModes lack full-access is refused"
   assert_equals full_access_unsupported "$(field "$OUT" error.code)" "the refusal names the missing full-access mode"
@@ -1046,16 +1052,71 @@ test_resolve_selection_adapter_rows() {
   assert_contains "$ERR" "several effort options (effort, reasoning)" "the refusal names the candidate options"
   mcp resolve-selection --harness cursor --model c-1 --effort default --project "$project"
   expect_code 0 "$RC" "the same model with no effort override resolves: $ERR"
+  assert_equals acpRegistry_cursor "$(field "$OUT" selection.instanceId)" "cursor runs on the registry's cursor agent, never T3's in-process cursor driver"
+  assert_equals acpRegistry "$(field "$OUT" driverKind)" "the cursor selection reports the ACP registry driver"
+  mcp resolve-selection --harness cursor --instance cursor --model c-1 --effort default --project "$project"
+  expect_code 4 "$RC" "a cursor harness mapped onto T3's in-process cursor driver is refused"
+  assert_equals driver_mismatch "$(field "$OUT" error.code)" "the refusal names the driver mismatch"
+  mcp resolve-selection --harness kimi --model k-1 --effort default --project "$project"
+  expect_code 0 "$RC" "an ACP registry instance is found by its agent, whatever T3 named it: $ERR"
+  assert_equals acpRegistry_kimi_cli "$(field "$OUT" selection.instanceId)" "the kimi row binds the instance that reports the kimi agent"
   mcp resolve-selection --harness gemini --model g-1 --effort default --project "$project"
-  expect_code 4 "$RC" "an ACP registry instance running another agent is refused"
+  expect_code 4 "$RC" "an instance named after the harness that reports no agent is not taken as that agent's"
+  assert_equals instance_unknown "$(field "$OUT" error.code)" "the refusal says no instance runs the agent"
+  assert_contains "$ERR" "no ACP registry instance running the 'gemini' agent" "the refusal names the missing agent"
+  assert_contains "$ERR" "config/t3code-instances" "the refusal names the explicit mapping"
+  mcp resolve-selection --harness gemini --instance acpRegistry_kimi_cli --model k-1 --effort default --project "$project"
+  expect_code 4 "$RC" "a named ACP registry instance running another agent is refused"
   assert_equals agent_mismatch "$(field "$OUT" error.code)" "the refusal names the agent mismatch"
   assert_contains "$ERR" "runs the ACP registry agent 'kimi', not 'gemini'" "the refusal names both agents"
-  mcp resolve-selection --harness kimi --model k-1 --effort default --project "$project"
-  expect_code 4 "$RC" "an ACP registry instance that does not report its agent is refused"
+  mcp resolve-selection --harness gemini --instance gemini --model g-1 --effort default --project "$project"
+  expect_code 4 "$RC" "a named ACP registry instance that does not report its agent is refused"
   assert_contains "$ERR" "does not report which ACP registry agent it runs" "the refusal says the agent is unverifiable"
   mcp resolve-selection --harness devin --model d-1 --effort default --project "$project"
-  expect_code 0 "$RC" "an ACP registry instance reporting the row's agent resolves: $ERR"
-  pass "fm-t3-mcp resolve-selection: every adapter row resolves through T3's catalog; agent, full-access, and effort mapping refuse what they cannot prove"
+  expect_code 4 "$RC" "two instances running the row's agent are refused rather than guessed"
+  assert_equals instance_ambiguous "$(field "$OUT" error.code)" "the refusal names the ambiguity"
+  assert_contains "$ERR" "(acpRegistry_devin, devin-2)" "the refusal names every candidate"
+  mcp resolve-selection --harness devin --instance devin-2 --model d-1 --effort default --project "$project"
+  expect_code 0 "$RC" "config/t3code-instances settles which instance of an agent runs the harness: $ERR"
+  assert_equals devin-2 "$(field "$OUT" selection.instanceId)" "the named instance is the one bound"
+  pass "fm-t3-mcp resolve-selection: every adapter row resolves through T3's catalog; registry instances are found by agent; agent, ambiguity, full-access, and effort mapping refuse what they cannot prove"
+}
+
+# T3 lists a short set of models per instance and counts the rest in
+# omittedModels; an exact slug outside that set is searched for before it is
+# refused, and only an exact id from the search counts.
+test_resolve_selection_searches_omitted_models() {
+  local project searches
+  fresh_case resolve-omitted
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  t3_fake_set 'w.providers = [
+    { providerInstanceId: "codex", driverKind: "codex", constraints: [],
+      models: [{ id: "gpt-6-luna", options: [{ id: "reasoningEffort", values: ["low", "medium"] }] }],
+      omitted: ["gpt-5.6-luna", "gpt-5.6-luna-pro"].map((id) => ({ id, options: [{ id: "reasoningEffort", values: ["low", "medium", "high"] }] })) },
+    { providerInstanceId: "opencode", driverKind: "opencode", constraints: [], runtimeModes: ["approval-required", "full-access"],
+      models: [{ id: "opencode/big-pickle" }],
+      omitted: [{ id: "kimi-code/k3", label: "Kimi K3", options: [{ id: "variant", values: ["low", "high"] }] }] }]'
+  mcp resolve-selection --harness codex --model gpt-5.6-luna --effort high --project "$project"
+  expect_code 0 "$RC" "a model outside the short list is found by searching the catalog: $ERR"
+  assert_equals '{"instanceId":"codex","model":"gpt-5.6-luna","options":[{"id":"reasoningEffort","value":"high"}]}' "$(field "$OUT" selection)" \
+    "the searched model's own option descriptors carry the effort"
+  assert_contains "$(t3_fake_calls orchestrator_capabilities)" '{"search":"gpt-5.6-luna"}' "the catalog is searched for the exact slug"
+  mcp resolve-selection --harness opencode --model kimi-code/k3 --effort high --project "$project"
+  expect_code 0 "$RC" "an omitted OpenCode model is found the same way: $ERR"
+  assert_equals kimi-code/k3 "$(field "$OUT" selection.model)" "the searched slug is the bound model"
+  searches=$(t3_fake_calls orchestrator_capabilities | grep -c search)
+  mcp resolve-selection --harness codex --model gpt-6-luna --effort low --project "$project"
+  expect_code 0 "$RC" "a listed model resolves: $ERR"
+  assert_equals "$searches" "$(t3_fake_calls orchestrator_capabilities | grep -c search)" "a model in the short list needs no search"
+  mcp resolve-selection --harness codex --model gpt-5.6 --effort default --project "$project"
+  expect_code 4 "$RC" "a slug the search matches only as a substring is refused"
+  assert_equals model_unknown "$(field "$OUT" error.code)" "the refusal names the unknown model"
+  t3_fake_set 'w.noSearch = true'
+  mcp resolve-selection --harness codex --model gpt-5.6-luna --effort default --project "$project"
+  expect_code 4 "$RC" "a T3 that does not declare search refuses an unlisted model"
+  assert_equals model_unknown "$(field "$OUT" error.code)" "the refusal names the unknown model"
+  pass "fm-t3-mcp resolve-selection: an exact slug among T3's omitted models is found by catalog search, a substring match or a T3 without search is refused"
 }
 
 # --model default reads the project rooted at --root without creating it.
@@ -1198,6 +1259,7 @@ test_resolve_selection_uses_t3_catalog
 test_resolve_selection_accepts_current_catalog_values
 test_launch_reads_back_full_configuration
 test_resolve_selection_adapter_rows
+test_resolve_selection_searches_omitted_models
 test_resolve_selection_by_root_is_read_only
 test_launch_binds_thread_environment_and_instructions
 test_close_stops_delegated_threads

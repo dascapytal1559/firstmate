@@ -8,7 +8,7 @@ Firstmate drives the server only through its Orchestrator V2 `/mcp` endpoint, si
 ## Setup
 
 Pick T3 Code when you already run the T3 Code app and want each task to be a visible T3 thread working in a Treehouse worktree, and each secondmate a visible T3 thread working in its own home.
-T3 Code runs the harnesses that have a T3 driver: `claude`, `codex`, `grok`, `pi`, `muse`, `opencode`, `agy`, `cursor`, and the ACP-registry `gemini`, `kimi`, and `devin`; every other harness, and a raw launch command, is refused at spawn.
+T3 Code runs the harnesses that have a T3 driver: `claude`, `codex`, `grok`, `pi`, `muse`, `opencode`, `agy`, and the ACP-registry `cursor`, `gemini`, `kimi`, and `devin`; every other harness, and a raw launch command, is refused at spawn.
 Every harness except `claude` and `codex` also needs a T3 server whose provider instance advertises per-thread environment and instructions ([worker environment and channel statement](#worker-environment-and-channel-statement)).
 
 Prerequisites:
@@ -69,9 +69,9 @@ Revoke it with `t3 auth session revoke <id>` and delete `config/t3code-token` wh
 
 ### Provider instances and models
 
-The `HARNESSES` table in `bin/fm-t3-mcp.mjs` is the one harness adapter table: for each harness it names the T3 driver, the default provider instance, the model option that carries effort, and, for the ACP registry driver, the registry agent.
+The `HARNESSES` table in `bin/fm-t3-mcp.mjs` is the one harness adapter table: for each harness it names the T3 driver, the model option that carries effort, and either the default provider instance or, for the ACP registry driver, the registry agent.
 
-| Harness | T3 driver | Default instance | Effort option |
+| Harness | T3 driver | Instance | Effort option |
 |---|---|---|---|
 | `claude` | `claudeAgent` | `claudeAgent` | `effort` |
 | `codex` | `codex` | `codex` | `reasoningEffort` |
@@ -80,13 +80,16 @@ The `HARNESSES` table in `bin/fm-t3-mcp.mjs` is the one harness adapter table: f
 | `muse` | `muse` | `muse` | `reasoningEffort` |
 | `opencode` | `opencode` | `opencode` | `variant` |
 | `agy` | `antigravity` | `antigravity` | the model's one effort option in the catalog |
-| `cursor` | `cursor` | `cursor` | the model's one effort option in the catalog |
-| `gemini`, `kimi`, `devin` | `acpRegistry`, which must report that `agentId` | the harness name | the model's one effort option in the catalog |
+| `cursor`, `gemini`, `kimi`, `devin` | `acpRegistry` | the one instance whose `agentId` is the harness name | the model's one effort option in the catalog |
 
-`config/t3code-instances` overrides the default instance, one `harness=instanceId` line each.
+An ACP registry harness runs on whichever instance reports its registry agent, whatever T3 named it (T3 names a new one after the agent's label, such as `acpRegistry_gemini_cli`); spawn refuses when no instance runs that agent, and when several do.
+`cursor` runs as the registry's `cursor` agent (`cursor-agent acp`), one process per thread, because T3's own `cursor` driver hosts Cursor's SDK inside the T3 server, which gives a thread no environment of its own.
+A `gemini` thread's environment also carries `GEMINI_CLI_TRUST_WORKSPACE=true`, as the pane launch does.
+`config/t3code-instances` names the instance a harness runs on instead, one `harness=instanceId` line each, which also settles a registry agent with several instances.
 Spawn resolves the selection against T3's own catalog (`orchestrator_capabilities`) before anything is leased: the instance must exist, be usable, run the harness's driver, report the expected registry `agentId` for an ACP registry harness, and list `full-access` among its `runtimeModes` when it lists any, so a mapping onto another driver's or agent's instance, or onto an instance T3 would silently run below full access, is refused.
-The file is part of the primary's inherited local material, so every secondmate home receives the primary's mapping and its own T3 workers launch on the same provider instances; a home without the file falls back to the table's defaults, which need not name a configured account.
-A task's `--model` must be a model that instance lists in T3's catalog.
+The file is part of the primary's inherited local material, so every secondmate home receives the primary's mapping and its own T3 workers launch on the same provider instances; a home without the file falls back to the table, which need not name a configured account.
+A task's `--model` must be a model that instance has in T3's catalog.
+T3 lists a short set of models per instance and counts the rest as omitted, so a slug outside that set is looked up with the catalog's search and must match a model id exactly.
 `--model default` uses the default model of the T3 project already rooted at the task's project, read without creating it, only when its instance matches the selected one; otherwise it refuses and asks for an explicit `--model`.
 `--effort` rides as the row's effort option, and its word (`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`) must be a value the catalog lists for that model under the same name: Firstmate never maps it onto a neighbouring level, so for example Grok refuses `max`.
 A model that offers several candidate effort options is refused rather than guessed.
@@ -324,7 +327,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Active limits
 
 - T3 Code remains experimental; its harnesses are the [adapter table](#provider-instances-and-models), and every harness but `claude` and `codex` needs a T3 with per-thread environment and instructions.
-  Only `claude` and `codex` have dated live evidence on this backend ([`verification/runtime-backends.md`](verification/runtime-backends.md#t3-code)); the other rows are covered by the portable suites only.
+  `claude`, `codex`, `grok`, and `pi` have dated live evidence on this backend ([`verification/runtime-backends.md`](verification/runtime-backends.md#t3-code)); the other rows are covered by the portable suites only.
 - T3 starts every agent at `full-access` with its provider instance's account and environment, so a spawn refuses any posture setting that asks for less (`config/claude-permission-mode` other than `bypass`, `config/codex-approval-mode=approve-for-me`, or `config/codex-permission-mode=restricted`), `config/launch-env-allowlist`, `config/crew-exclude-tools`, a worker account pin, and a raw launch command; select the account through `config/t3code-instances` instead.
 - T3 owns the Claude provider command, so Firstmate cannot add its command-line prompt-suggestion, feedback-draft, or attribution controls; configure equivalent provider-instance settings in T3 when those policies are required.
   Unless `config/keep-ai-trailers` is present, the per-worktree environment selects Firstmate's Git commit hook to strip known AI trailers, including on T3 workers.

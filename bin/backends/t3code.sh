@@ -23,8 +23,9 @@
 # Config (gitignored config/ of the active home):
 #   t3code-token      the mcp-client credential the captain's
 #                     `bin/fm-t3-mcp.mjs login` writes, mode 0600
-#   t3code-instances  optional `harness=instanceId` lines overriding the
-#                     default instance of bin/fm-t3-mcp.mjs's HARNESSES table
+#   t3code-instances  optional `harness=instanceId` lines naming the instance
+#                     a harness runs on, in place of the instance
+#                     bin/fm-t3-mcp.mjs resolve-selection finds itself
 
 # T3 has no composer, but the shared submit dispatcher in bin/fm-backend.sh
 # prepares and reads the composer dialog sink around every adapter, so this
@@ -104,16 +105,18 @@ fm_backend_t3code_harness_field() {  # <harness> <field>
   node "$FM_BACKEND_T3CODE_HELPER" harness --harness "$1" | fm_backend_t3code_json_get "$2"
 }
 
+# fm_backend_t3code_instance_id <harness>: the instance config/t3code-instances
+# names for <harness> (the last matching line wins), or nothing when it names
+# none, leaving the choice to resolve-selection.
 fm_backend_t3code_instance_id() {  # <harness>
-  local harness=$1 file line value
-  value=$(fm_backend_t3code_harness_field "$harness" instanceId) || return 1
+  local harness=$1 file line value='' named=0
   file="$(fm_backend_t3code_config_dir)/t3code-instances"
   if [ -f "$file" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in "$harness="*) value=${line#*=} ;; esac
+      case "$line" in "$harness="*) value=${line#*=} named=1 ;; esac
     done < "$file"
   fi
-  [ -n "$value" ] || { echo "error: $file maps harness '$harness' to an empty instance id" >&2; return 1; }
+  [ "$named" = 0 ] || [ -n "$value" ] || { echo "error: $file maps harness '$harness' to an empty instance id" >&2; return 1; }
   printf '%s' "$value"
 }
 
@@ -127,9 +130,11 @@ fm_backend_t3code_instance_id() {  # <harness>
 # project rooted at <project-path>, which must already exist.
 fm_backend_t3code_resolve() {  # <harness> <model> <effort> <project-path>
   local harness=$1 model=${2:-default} effort=${3:-default} project=$4 instance real out
+  local -a named=()
   instance=$(fm_backend_t3code_instance_id "$harness") || return 1
+  [ -z "$instance" ] || named=(--instance "$instance")
   real=$(cd "$project" 2>/dev/null && pwd -P) || { echo "error: project path $project is not a directory" >&2; return 1; }
-  out=$(fm_backend_t3code_mcp resolve-selection --harness "$harness" --instance "$instance" \
+  out=$(fm_backend_t3code_mcp resolve-selection --harness "$harness" ${named[@]+"${named[@]}"} \
     --model "$model" --effort "$effort" --root "$real") || return 1
   printf '%s' "$out" | node -e '
 const d = JSON.parse(require("fs").readFileSync(0, "utf8"));

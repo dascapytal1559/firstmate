@@ -1653,6 +1653,28 @@ test_spawn_grok_worker_rides_thread_channels() {
   pass "fm-spawn.sh --backend t3code grok: environment and channel statement ride the launch, with no per-directory or pane-shaped wiring"
 }
 
+# A gemini worker with no config/t3code-instances runs on the ACP registry
+# instance that reports the gemini agent, whatever T3 named it, and its thread
+# environment trusts the workspace as the pane launch does.
+test_spawn_gemini_worker_finds_registry_instance_by_agent() {
+  local id out rc
+  id=$(t3_uid t3geminiz1)
+  t3_case spawn-gemini-thread
+  t3_world_set 'w.threadFacts = true; w.providers = [
+    { providerInstanceId: "gemini", driverKind: "acpRegistry", agentId: "kimi", constraints: [], models: [{ id: "gemini-3-flash", options: [] }] },
+    { providerInstanceId: "acpRegistry_gemini_cli", driverKind: "acpRegistry", agentId: "gemini", constraints: [], models: [{ id: "gemini-3-flash", options: [] }] }]'
+  t3_worker_setup "$id"
+  rm -f "$CONFIG/t3code-instances"
+  out=$(t3_worker_spawn "$id" gemini --model gemini-3-flash); rc=$?
+  expect_code 0 "$rc" "a gemini scout on a T3 registry instance should spawn"$'\n'"$out"
+  [ "$(t3_launch_field 'a.modelSelection')" = '{"instanceId":"acpRegistry_gemini_cli","model":"gemini-3-flash"}' ] \
+    || fail "the launch must bind the instance that reports the gemini agent, got '$(t3_launch_field 'a.modelSelection')'"
+  [ "$(t3_launch_field 'a.environment.GEMINI_CLI_TRUST_WORKSPACE')" = true ] || fail "a gemini thread environment must trust the workspace"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "a gemini thread environment must carry FM_TASK_ID"
+  assert_grep "harness=gemini" "$CASE_DIR/state/$id.meta" "meta records the gemini harness"
+  pass "fm-spawn.sh --backend t3code gemini: the registry instance is found by agent and the thread environment trusts the workspace"
+}
+
 # A claude worker moves onto the thread channels too, keeping only its
 # verified worktree busy hooks.
 test_spawn_claude_worker_rides_thread_channels() {
@@ -3723,6 +3745,7 @@ test_t3_done_then_a_different_run_completes_surfaces_the_turn_end
 test_teardown_waits_for_a_running_turn_then_refuses_or_proceeds
 test_teardown_force_interrupts_a_running_turn
 test_spawn_grok_worker_rides_thread_channels
+test_spawn_gemini_worker_finds_registry_instance_by_agent
 test_spawn_claude_worker_rides_thread_channels
 test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease

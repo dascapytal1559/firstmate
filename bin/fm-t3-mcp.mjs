@@ -34,17 +34,21 @@
 //     That project's record (defaultModelSelection included); exit 3 with
 //     code project_not_found when T3 lists no live project with that id.
 //   fm-t3-mcp.mjs harness --harness <name>
-//     The HARNESSES adapter-table row for that harness (driverKind, default
-//     instanceId, effortOption, agentId), read locally with no server call;
-//     exit 4 (harness_unsupported) for a harness T3 cannot run.
+//     The HARNESSES adapter-table row for that harness (driverKind,
+//     effortOption, and either a default instanceId or an ACP registry
+//     agentId), read locally with no server call; exit 4
+//     (harness_unsupported) for a harness T3 cannot run.
 //   fm-t3-mcp.mjs resolve-selection --harness <name> [--instance <id>]
 //       --model <slug|default> --effort <level|default> [--project <id> | --root <abs-path>]
 //     The model selection a launch sends, resolved against T3's own catalog
-//     (orchestrator_capabilities): the instance (the row's default without
-//     --instance) must exist, be usable, run the harness's driver, report the
-//     row's ACP registry agentId when the row names one, and list full-access
-//     among its runtimeModes when it lists any; the model must be one that
-//     instance lists; model default takes the default selection of the
+//     (orchestrator_capabilities): the instance (without --instance, the
+//     row's default, or for an ACP registry row the one instance of any name
+//     that reports its agentId, refusing none or several) must exist, be
+//     usable, run the harness's driver, report the row's ACP registry agentId
+//     when the row names one, and list full-access among its runtimeModes
+//     when it lists any; the model must be one that instance lists, searched
+//     for by its exact slug when the short list omits models and the tool
+//     declares search; model default takes the default selection of the
 //     project (by id, or the live project rooted at --root, read only),
 //     which must name the same instance. A non-default effort must be one of
 //     EFFORT_WORDS and is sent as the catalog value of that name on the row's
@@ -267,11 +271,15 @@ const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted",
 const ACTIVE_STATUSES = ["preparing", "queued", "starting", "running", "waiting"];
 const READ_LIMIT_MAX = 100;
 // The one harness adapter table: each Firstmate harness T3 can run, the T3
-// driver it runs on, the provider instance it uses unless
-// config/t3code-instances names another, the model option that carries
-// Firstmate's effort (null: the single option the model's catalog offers among
-// EFFORT_OPTION_IDS), and, for the ACP registry driver, the registry agent the
-// instance must report. Every other harness is refused.
+// driver it runs on, the model option that carries Firstmate's effort (null:
+// the single option the model's catalog offers among EFFORT_OPTION_IDS), and
+// either the provider instance it uses or, for the ACP registry driver, the
+// registry agent its instance must report, whatever T3 named that instance
+// (harnessInstance). config/t3code-instances names another instance. Cursor
+// runs as the registry's `cursor` agent (`cursor-agent acp`), one process per
+// thread, because T3's own cursor driver hosts Cursor's SDK inside the T3
+// server, which gives a thread no environment of its own. Every other harness
+// is refused.
 export const HARNESSES = {
   claude: { driverKind: "claudeAgent", instanceId: "claudeAgent", effortOption: "effort" },
   codex: { driverKind: "codex", instanceId: "codex", effortOption: "reasoningEffort" },
@@ -280,10 +288,10 @@ export const HARNESSES = {
   muse: { driverKind: "muse", instanceId: "muse", effortOption: "reasoningEffort" },
   opencode: { driverKind: "opencode", instanceId: "opencode", effortOption: "variant" },
   agy: { driverKind: "antigravity", instanceId: "antigravity", effortOption: null },
-  cursor: { driverKind: "cursor", instanceId: "cursor", effortOption: null },
-  gemini: { driverKind: "acpRegistry", instanceId: "gemini", effortOption: null, agentId: "gemini" },
-  kimi: { driverKind: "acpRegistry", instanceId: "kimi", effortOption: null, agentId: "kimi" },
-  devin: { driverKind: "acpRegistry", instanceId: "devin", effortOption: null, agentId: "devin" },
+  cursor: { driverKind: "acpRegistry", effortOption: null, agentId: "cursor" },
+  gemini: { driverKind: "acpRegistry", effortOption: null, agentId: "gemini" },
+  kimi: { driverKind: "acpRegistry", effortOption: null, agentId: "kimi" },
+  devin: { driverKind: "acpRegistry", effortOption: null, agentId: "devin" },
 };
 // Firstmate's effort words. Each is sent as the catalog value of the same
 // name, and a word the model's catalog does not list is refused rather than
@@ -945,17 +953,61 @@ function effortOptionId(row, model, harness) {
   );
 }
 
+// The provider instance <harness> runs on: the one --instance names (from
+// config/t3code-instances); else, for an ACP registry row, the one instance of
+// any name that runs its registry agent, since T3 names a new registry
+// instance after the agent's label (acpRegistry_gemini_cli), refusing none or
+// several rather than guessing; else the row's own instance.
+function harnessInstance(providers, row, harness, named) {
+  if (named || !row.agentId) {
+    const instanceId = named || row.instanceId;
+    const provider = providers.find((p) => p.providerInstanceId === instanceId);
+    if (!provider) {
+      throw new Refusal(
+        "instance_unknown",
+        `T3 has no provider instance '${instanceId}' (${named ? "config/t3code-instances maps the" : "the default instance of the"} ${harness} harness)`,
+      );
+    }
+    return provider;
+  }
+  const matches = providers.filter((p) => p.driverKind === row.driverKind && p.agentId === row.agentId);
+  if (!matches.length) {
+    throw new Refusal(
+      "instance_unknown",
+      `T3 has no ACP registry instance running the '${row.agentId}' agent the ${harness} harness needs; add one in T3 Code under Settings, Providers, ACP Registry, or name an instance in config/t3code-instances`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Refusal(
+      "instance_ambiguous",
+      `T3 has several ACP registry instances running the '${row.agentId}' agent (${matches.map((p) => p.providerInstanceId).join(", ")}); name the one the ${harness} harness uses in config/t3code-instances`,
+    );
+  }
+  return matches[0];
+}
+
+// The catalog entry for <slug> on <provider>. T3 lists a short set of models
+// per instance and counts the rest in omittedModels; its search argument
+// matches every model, so an exact slug outside the short set is looked up
+// there before it is refused, where the tool declares search.
+async function catalogModel(session, provider, slug) {
+  const listed = (provider.models ?? []).find((m) => m.id === slug);
+  if (listed || !(provider.omittedModels > 0) || !toolOffers(session, "orchestrator_capabilities", "search")) return listed;
+  const found = await session.call("orchestrator_capabilities", { search: slug });
+  const same = (found?.providers ?? []).find((p) => p.providerInstanceId === provider.providerInstanceId);
+  return (same?.models ?? []).find((m) => m.id === slug);
+}
+
 async function resolveSelection(flags) {
   const harness = need(flags, "harness");
   const row = harnessRow(harness);
-  const instanceId = flags.instance || row.instanceId;
   const wantModel = need(flags, "model");
   const effort = need(flags, "effort");
   if (effort !== "default" && !EFFORT_WORDS.includes(effort)) usage(`--effort must be default or one of ${EFFORT_WORDS.join(", ")}`);
   const { session } = await verifiedSession(flags);
   const caps = await session.call("orchestrator_capabilities", {});
-  const provider = (caps?.providers ?? []).find((p) => p.providerInstanceId === instanceId);
-  if (!provider) throw new Refusal("instance_unknown", `T3 has no provider instance '${instanceId}' (config/t3code-instances maps the ${harness} harness to it)`);
+  const provider = harnessInstance(caps?.providers ?? [], row, harness, flags.instance);
+  const instanceId = provider.providerInstanceId;
   if (provider.driverKind !== row.driverKind) {
     throw new Refusal("driver_mismatch", `T3 instance '${instanceId}' runs the ${provider.driverKind} driver, not ${row.driverKind}, so it cannot host the ${harness} harness; fix config/t3code-instances`);
   }
@@ -991,11 +1043,11 @@ async function resolveSelection(flags) {
     const def = project.defaultModelSelection;
     if (!def) throw new Refusal("no_default_model", `T3 project ${projectId} has no default model; pass --model with a slug from the T3 model catalog`);
     if (def.instanceId !== instanceId) {
-      throw new Refusal("default_instance_mismatch", `T3 project ${projectId} defaults to instance ${def.instanceId}, but config/t3code-instances selects ${instanceId}; pass --model explicitly`);
+      throw new Refusal("default_instance_mismatch", `T3 project ${projectId} defaults to instance ${def.instanceId}, but the ${harness} harness runs on instance ${instanceId}; pass --model explicitly`);
     }
     base = { instanceId, model: def.model, ...(def.options !== undefined ? { options: def.options } : {}) };
   }
-  const model = (provider.models ?? []).find((m) => m.id === base.model);
+  const model = await catalogModel(session, provider, base.model);
   if (!model) throw new Refusal("model_unknown", `T3 instance '${instanceId}' does not list model '${base.model}'; pass --model with a slug from its catalog`);
   let options = base.options;
   if (effort !== "default") {
