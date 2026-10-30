@@ -301,6 +301,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "FORK.md",
+      "audience": "public-product"
+    },
+    {
       "path": "GROK_BOT.md",
       "audience": "public-product"
     },

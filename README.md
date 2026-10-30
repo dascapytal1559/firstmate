@@ -1,14 +1,15 @@
 ## About this fork
 
-This is a fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main` and adds the following on top.
+A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`.
 The rest of this README is upstream's.
 
-- Any T3 Code agent whose provider offers per-thread environment and instructions can work as a firstmate worker on the T3 Code backend, with both bound to its own thread; Claude, Codex, Grok, and Pi are verified, and agents without per-thread environment, such as OpenCode 2 and Cursor, are refused ([worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement)).
-- A T3 Code worker is refused unless it runs with full access, and cleanup stops its thread with T3's own Stop instead of killing it.
-- Firstmate keeps working with current T3 Code releases (0.1.3 and later), whose tool names and model option lists changed ([capability gate](docs/t3code-backend.md#capability-gate)).
-- After a T3 Code server restart, firstmate notices it and nudges every interrupted worker to carry on, and an outside helper reminds a firstmate running inside T3 Code to restart its session ([server restart](docs/t3code-backend.md#server-restart)).
-- New T3 Code projects and worker threads get readable titles: the folder name and the task's title rather than internal ids.
-- A finished, failed, or blocked worker reaches firstmate right away instead of after a 30-second delay, and cleanup waits for a worker's running turn rather than cutting it off ([signal coalescing](docs/watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path)).
+- Firstmate hears a finished worker in seconds, not after a 30-second wait.
+- Any T3 Code agent with per-thread settings can be a worker, not only Claude and Codex.
+- T3 Code workers show readable project and task titles.
+- T3 Code workers run with full access, stop cleanly, and recover after a T3 Code restart.
+- Works with T3 Code 0.1.3 and later.
+
+Details and pictures: [FORK.md](FORK.md).
 
 <h1 align="center">firstmate</h1>
 <p align="center">

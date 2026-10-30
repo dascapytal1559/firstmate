@@ -102,3 +102,29 @@ This entry is the Firstmate half:
 
 Nothing has run live yet: the evidence is the T3 backend and helper suites against the fake T3, with new cases for a Grok worker with no hook files, a server with and without the new fields, a downgraded instance, and a worker that owns a running child.
 The first live proof is one cheap Grok scout once the fork's half is installed.
+
+## 4. One picture per fork feature, and a README that says less (31 October 2026)
+
+![Worker cards in T3's sidebar: before, fm-recipe-box over fm-recipe-box-print-view; after, recipe-box over Print view for one recipe](../docs/media/fork/readable-crew-titles.png)
+
+The ask, pointing at the instant-handoff chart:
+
+> this is like super tight like one picture um super succinct no no garbage no no filler ... if we can produce a picture like this or a picture for every fork that would be great
+>
+> I also want each fork repo to get a full-blown fork.md ... which then frees up the the fork features in the main readme to be as simple as possible, like just dead simple.
+>
+> (31 October 2026)
+
+What was built:
+
+- `FORK.md` at the repository root, one section per fork feature: what it does, why, and a picture where one shows it.
+- Three features got a picture: the instant-handoff chart, the readable crew titles above as a before and after, and one crew with Claude, Codex, Grok, and Pi workers side by side.
+- Server-restart recovery, the full-access and clean-stop rule, and T3 0.1.3 support have nothing visible to show, so they have none.
+- The README's fork section went from six long bullets to five short lines and a link to `FORK.md`.
+
+The choices worth knowing:
+
+- Both T3 pictures are real screenshots, not mockups, taken from the installed fork T3 run as three throwaway servers with made-up projects (`recipe-box`, `trail-notes`, `budget-sheet`) and idle worker threads launched by Firstmate's own T3 client.
+  No prompt was sent, so no model was paid for, and nothing from his real T3 appears.
+- Both are framed like the handoff chart: one title stating the result, one headline, the picture, a one-line source.
+- The pictures live once, under `docs/media/fork/`, and this entry links to them rather than keeping a second copy.
