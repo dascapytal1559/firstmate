@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="330" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">Each thread names who it works for</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Before: T3 guessed the main and its crew from the folder name and fm- titles. After: every launch records its parent.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="92" width="270" height="110" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="116" font-weight="600">Before</text>
+    <text x="40" y="140">folder is named firstmate?</text>
+    <text x="40" y="160">newest thread with no worktree?</text>
+    <text x="40" y="180">title starts with fm-? label firstmate?</text>
+
+    <rect x="340" y="92" width="200" height="56" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="356" y="116" font-weight="600">Main thread</text>
+    <text x="356" y="136" fill="#57606a">the captain's firstmate</text>
+
+    <rect x="600" y="92" width="160" height="44" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="616" y="119">worker: crew of main</text>
+
+    <rect x="600" y="160" width="160" height="56" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="616" y="184">secondmate:</text>
+    <text x="616" y="204">crew of main</text>
+
+    <rect x="790" y="160" width="150" height="56" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="806" y="184">its worker:</text>
+    <text x="806" y="204">crew of secondmate</text>
+
+    <path d="M540 114 L600 114" stroke="#54aeff" stroke-width="2" fill="none"/>
+    <path d="M560 114 L560 188 L600 188" stroke="#54aeff" stroke-width="2" fill="none"/>
+    <path d="M760 188 L790 188" stroke="#54aeff" stroke-width="2" fill="none"/>
+
+    <text x="340" y="256" fill="#57606a">Firstmate sends parentThreadId only where T3 offers it, and refuses a thread that does not read back as crew of exactly that parent.</text>
+    <text x="340" y="278" fill="#57606a">Stop and archive stay separate: lineage only groups threads, it grants nothing on the parent.</text>
+  </g>
+</svg>

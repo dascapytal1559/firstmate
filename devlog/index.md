@@ -180,3 +180,23 @@ The fork's T3 is gaining a way to answer these over Firstmate's connection; this
 
 The evidence is the T3 helper and backend suites against the fake T3, with new cases for an approval waking Firstmate with its command, an allow, a deny with feedback, an already-answered approval, and a T3 without the feature.
 Nothing has run live yet; the first live proof is one approval on a worker once the fork's half is installed.
+
+## 7. Crew threads name their coordinator (31 October 2026)
+
+![The main thread with a worker and a secondmate as its crew, and the secondmate's worker as the secondmate's crew, replacing the old guesses from folder names and fm- titles](media/t3-crew-lineage.svg)
+
+The ask:
+
+> I want you to kind of go over my changes for T3 code and first mate like our fork changes ... think about the direction or the architecture or the approach ... whether or not it could be done sort of more elegantly because we've kind of like bolted on layers after layers of sort of changes ...
+
+The architecture review found one place where the seam was wrong: T3's sidebar found Firstmate's main and crew by guessing from the folder name, the newest thread without a worktree, and `fm-` titles, and each Firstmate title change broke it.
+Its first recommendation was one recorded field instead: each thread names the thread it works for when it is launched.
+This entry is the Firstmate half; the fork's T3 is gaining the field in parallel.
+
+- Every thread Firstmate launches in T3 names the thread running the Firstmate that spawned it: a worker under the main or under its secondmate, and a secondmate under the main.
+- The parent is sent only where T3 offers the field, and a thread that does not read back as crew of exactly that parent is archived and refused, like any other wrong binding.
+- On a T3 without the field, when Firstmate is not running in T3, or when the home has several live threads, the thread launches as before with no parent, so nothing stops working.
+- The optional step of pinning the main at session start was left out: it would add a network call to every session start for a purely visual gain.
+
+The evidence is the T3 helper suite (45 passing, with a new case for a parent bound, a wrong lineage, a wrong parent, an unknown parent, and a T3 without the field) and the T3 backend suite (119 passing, with new spawn cases for the home's main, an explicit target, an older T3, and a home with two live threads).
+Nothing has run live yet; the first live proof is one spawn once the fork's T3 half is installed.
