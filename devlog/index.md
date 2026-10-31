@@ -243,3 +243,23 @@ The thread id and the installed T3 were both fine: the live T3 read the worker u
 
 The evidence is a new regression that adds one Herdr worker beside a T3 worker with a pending `rm` approval: it fails on the old watcher (no wake) and passes now (a wake on the first cycle, never repeated, Herdr's wait still run).
 Replaying the watcher against copies of this home's live task records showed the same thing: before, only the two Herdr workers were handed to the wait; after, all five T3 workers are read first.
+
+## 10. A quiet T3 restart wakes Firstmate too (31 October 2026)
+
+![Before: T3 restarted at 09:47Z with no worker running, no note was sent, and Firstmate slept until the captain wrote at 10:18Z; after: each session start pins Firstmate's own thread, and T3 sends it one note after any restart](media/t3-quiet-restart-pin.svg)
+
+Entry 8 moved the restart wake into T3, but its note only goes to a main whose crew had a run cut by the restart.
+On 31 October T3 restarted at 09:47Z with nothing running, so no note went out, and the outside poller entry 8 removed could no longer cover it; Firstmate stayed asleep until the captain wrote at 10:18Z.
+Firstmate proposed having T3 also send the main a short note after any restart, with a test, and the captain said:
+
+> Yeah, go ahead on your proposed fix of send the main session a short note.
+
+The fix has two halves built side by side, against one agreed interface: a thread can be pinned as its project's coordinator, and after every server start T3 sends each pinned coordinator exactly one note, listing any cut crew runs or saying in one line that there were none.
+This is the Firstmate half:
+
+- Every session start now pins this home's own T3 thread as its project's coordinator, the same thread the away daemon finds (the one live, worktree-less thread running in the home), so a secondmate pins its own thread too.
+- It only does so when T3 says it supports the pin; an older T3 is asked nothing more, and nothing is printed.
+- Pinning again each session start is harmless, and a pin that cannot be made (no thread found, two candidates, T3 unreachable) never stops session start.
+
+The evidence is new fake-server cases for the pin (pinned and read back, an earlier coordinator unpinned, repeated, skipped on a T3 without the feature) and for session start's restart recovery (silent, repeated, skipped when the home's thread is ambiguous or T3 lacks the feature), which fails without the pin; the T3 helper and T3 backend suites pass (47 and 119), along with the linters and the documentation check.
+The quiet-restart note only arrives once the T3 half lands in the fork.

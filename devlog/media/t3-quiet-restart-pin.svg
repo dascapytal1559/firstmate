@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="330" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A quiet T3 restart wakes Firstmate too</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">31 October: T3 restarted at 09:47Z with no worker running; Firstmate slept until the captain wrote at 10:18Z.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="98" font-weight="600">Before</text>
+    <rect x="24" y="108" width="200" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="132">09:47Z T3 restarts,</text>
+    <text x="40" y="152">no worker mid-run</text>
+    <rect x="270" y="108" width="300" height="70" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="286" y="132">T3's note goes only to a coordinator</text>
+    <text x="286" y="152">whose crew had a run cut: no note</text>
+    <rect x="616" y="108" width="320" height="70" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="632" y="132">10:18Z the captain writes; alerts that</text>
+    <text x="632" y="152">came in meanwhile waited about 30 minutes</text>
+
+    <text x="24" y="218" font-weight="600">After</text>
+    <rect x="24" y="228" width="200" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="252">each session start pins</text>
+    <text x="40" y="272">Firstmate's own thread</text>
+    <rect x="270" y="228" width="300" height="70" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="286" y="252">any restart: T3 sends the pinned thread</text>
+    <text x="286" y="272">one note, even when nothing was cut</text>
+    <rect x="616" y="228" width="320" height="70" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="632" y="252">Firstmate runs session start at once</text>
+    <text x="632" y="272">and is back on watch</text>
+  </g>
+
+  <g stroke="#57606a" stroke-width="2" fill="none">
+    <path d="M224 143 L266 143" marker-end="url(#a)"/>
+    <path d="M570 143 L612 143" marker-end="url(#a)" stroke-dasharray="5 4"/>
+    <path d="M224 263 L266 263" marker-end="url(#a)"/>
+    <path d="M570 263 L612 263" marker-end="url(#a)"/>
+  </g>
+  <text x="24" y="320" font-size="12" fill="#57606a">Source: fm-t3-mcp.mjs pin-coordinator, run by bin/fm-t3-restart.sh recover at every session start; the T3 half is built in the fork.</text>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
+  </defs>
+</svg>
