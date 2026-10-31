@@ -2674,38 +2674,13 @@ tests/fm-daemon.test.sh
 
 The fake models the T3 protocol facts that hide defects when simplified: cursor paging, the read cap of 100, a wait on the exact run or else the latest by ordinal, an interrupt and an archive whose run ends asynchronously, a send committed before a reply that can be lost, and a pending-request count that includes approvals the question tools cannot see.
 `tests/fm-t3-mcp.test.sh` drives the helper against `tests/t3-fake-server.mjs`: the PKCE sign-in, origin defaults, every gate and credential refusal, real-path project matching, catalog-resolved selection, including ACP registry instances found by agent and omitted models found by catalog search, launch binding and configuration read-back with their uncertain and refused outcomes, send idempotency and the unconfirmed verdict for a lost reply, a JSON-RPC server error, T3's catch-all `orchestration_error`, or a tool error without a code (each of which also leaves a launch uncertain), capture and its 500-line bound, exact-run interrupt claims, pending questions and the per-approval signature, the bounded event wait and its re-armed slices, session close, the proven archive, and paged supervisor lookup.
-`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, per-directory environment and the Codex trust warning and its forge=external refusal, a Grok worker with no pane-shaped wiring, a Gemini worker on the registry instance found by agent with its workspace-trust variable, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's environment removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, tracked Codex configuration and tracked `CLAUDE.local.md` preservation, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions and of approvals with their detail, including under a fractional poll interval, `bin/fm-t3-answer.sh`, and `bin/fm-t3-approve.sh` with and without approval responses, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
+`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, the refusal of an instance without them for every harness, a Grok worker with no pane-shaped wiring, a Gemini worker on the registry instance found by agent with its workspace-trust variable, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's credential-link removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions and of approvals with their detail, including under a fractional poll interval, `bin/fm-t3-answer.sh`, and `bin/fm-t3-approve.sh` with and without approval responses, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
 `tests/fm-backend-t3code.test.sh` also covers the refusal to replace a T3 secondmate whose thread cannot be proven closed, and `tests/fm-secondmate-liveness.test.sh` pins the unchanged best-effort close on tmux.
 `tests/fm-daemon.test.sh` covers discovery precedence and native busy state.
 
-The tracked Codex configuration guard is independent of the transport and passed on 2026-09-15 with `codex-cli 0.154.0` and Python 3.14.7.
-It proves the project model survives, `FM_TASK_ID` reaches `command/exec`, ordinary staging and commits retain the original configuration blob, and teardown restores the original CRLF bytes and Git flag.
-It capability-skips when Codex is absent and fails on absence when explicitly requested:
+### Transport-independent adapter evidence
 
-```sh
-FM_T3_CODEX_CONFIG_LIVE=1 bin/fm-test-run.sh tests/fm-backend-t3code.test.sh
-```
-
-```text
-ok - codex-cli 0.154.0: project config retained; shell FM_TASK_ID=t3codextrk2
-```
-
-### Per-directory environment evidence
-
-Adapter smokes on 2026-09-15, through the pre-V2 transport, established the transport-independent facts this backend still relies on.
-Claude and Codex both received per-directory environment through their native project configuration.
-Claude required the task-worker statement in the worktree's git-excluded `CLAUDE.local.md` to accept the encoded launch brief.
-A Codex mid-turn steer joined the running turn.
-
-On 2026-10-22, on T3 0.1.0 with codex-cli 0.163.0, a Codex scout spawned on a loopback lab server into a project its Codex configuration did not trust ran without `FM_TASK_ID`, `FM_TASK_INBOX`, `GOTMPDIR`, or the hook entry, although its leased worktree's `.codex/config.toml` held them.
-The same spawn, from the same code, into a project whose main checkout that configuration trusts printed all four from its leased worktree:
-
-```text
-FM_TASK_ID=[lab10] FM_TASK_INBOX=[<lab>/home/state/lab10.inbox] GIT_CONFIG_VALUE_0=[<lab>/home/state/lab10.git-hooks] GOTMPDIR=[/tmp/fm-lab10/gotmp]
-```
-
-Codex's own `config/read` on a leased worktree, through `codex app-server` with an isolated `CODEX_HOME`, gives the same split: the project layer is listed either way, but its values apply only when the worktree, or the main checkout it belongs to, is trusted; a trusted parent directory does not count.
-Write order is not the cause: T3 starts a thread's Codex session with `thread/start` at the thread's first turn (`apps/server/src/orchestration-v2/ProviderTurnStartService.ts:656` calling `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts:6571` at tag v0.1.0), after spawn has written the file.
+Adapter smokes on 2026-09-15, through the pre-V2 transport, established that a Codex mid-turn steer joins the running turn, which this backend still relies on.
 
 ### Tool names in 0.1.3 and later
 

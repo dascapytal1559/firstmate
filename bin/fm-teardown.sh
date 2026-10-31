@@ -2881,7 +2881,7 @@ remove_firstmate_home() {  # <home> <label> <task-id> <backend>
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
   [ -n "$abs_home_path" ] || return 0
-  # A T3 secondmate's home carries the environment its spawn wrote there.
+  # A T3 secondmate's home carries the credential link its spawn wrote there.
   # Remove it after home validation and before returning its pooled Git index.
   if [ "$backend" = t3code ]; then
     { fm_backend_source t3code && fm_backend_t3code_home_env_cleanup "$abs_home_path"; } || return 1
@@ -3531,11 +3531,6 @@ cleanup_firstmate_home_children() {
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" \
           "$child_wt/.opencode/plugins/fm-busy-state.js" \
           "$child_wt/.fm-grok-turnend" "$child_wt/.fm-kimi-turnend"
-        if [ "$child_backend" = t3code ]; then
-          "$SCRIPT_DIR/fm-t3code-codex-env.sh" cleanup "$child_wt" || return 1
-          git -C "$child_wt" ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1 \
-            || rm -f "$child_wt/CLAUDE.local.md"
-        fi
         if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
           teardown_scrub_scratch_copy "$child_wt" || return 1
           child_pool_slot=0
@@ -3918,16 +3913,11 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
       git -C "$WT" branch -D "$branch" >/dev/null 2>&1 || true
     fi
   fi
-  # Remove our hook and environment files so a reused pool worktree cannot fire
-  # signals for a dead task or hand a t3code env block or channel statement to
-  # its next holder.
+  # Remove our hook files so a reused pool worktree cannot fire signals for a
+  # dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
   remove_harness_worktree_wiring "$WT"
-  if [ "$BACKEND" = t3code ]; then
-    "$SCRIPT_DIR/fm-t3code-codex-env.sh" cleanup "$WT" || exit 1
-    git -C "$WT" ls-files --error-unmatch CLAUDE.local.md >/dev/null 2>&1 || rm -f "$WT/CLAUDE.local.md"
-  fi
   # Kills remaining processes in the worktree (including the agent), resets, returns
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks

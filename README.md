@@ -5,7 +5,7 @@ Works with [this T3 Code fork](https://github.com/dascapytal1559/t3code), which 
 The rest of this README is upstream's.
 
 - Firstmate hears a finished worker in seconds, not after a 30-second wait.
-- Any T3 Code agent with per-thread settings can be a worker, not only Claude and Codex.
+- Any T3 Code agent can be a worker, not only Claude and Codex, through the T3 Code fork's per-thread settings.
 - T3 Code workers show readable project and task titles.
 - T3 Code workers run with full access, stop cleanly, and recover after a T3 Code restart.
 - Works with T3 Code 0.1.3 and later.

@@ -26,7 +26,7 @@ On the T3 Code backend, FirstMate used to run only Claude and Codex workers.
 Every worker needs its own environment and a note that its instructions really come from FirstMate, and only Claude and Codex could be given those through files in their folder.
 Where a T3 Code build supports per-thread environment and instructions, FirstMate now sends both with the thread itself and reads them back to prove they took.
 That opens the backend to every agent whose T3 Code driver takes those settings; Claude, Codex, Grok, and Pi are verified live; Cursor, Gemini, Kimi, and Devin go through the ACP registry, found by agent; and OpenCode 2 is refused until the T3 fork's per-session environment is installed.
-On a T3 Code without per-thread settings, Claude and Codex keep the folder files, and any other agent is refused before anything starts rather than launched half-wired.
+FirstMate now requires the T3 Code fork, which has those settings: a T3 Code without them is refused for every agent, Claude and Codex included, before anything starts, and the folder files are gone.
 Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement).
 
 ## Readable project and task titles

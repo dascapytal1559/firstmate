@@ -104,10 +104,10 @@ This is a deliberate, source-owned choice:
   On pane backends, if the pre-launch carrier export fails, Firstmate omits the `traceparent=` metadata claim and still launches the task.
   If a pane backend reports that failed trace input could not be cleared, Firstmate refuses to append the launch command rather than risk launching with an unknown partial carrier.
   If recording the carrier fails after a pane export, Firstmate unsets `TRACEPARENT` in the launch command and still launches the task, so the child never receives an identity absent from its metadata.
-  T3 Code on its per-directory fallback records the carrier before including it in the [worker environment](t3code-backend.md#worker-environment-and-channel-statement), so a recording failure omits the carrier; on the thread environment the carrier rides the launch and is recorded right after the task record is published, so a recording failure refuses the launch before the thread runs; an environment installation failure refuses the launch either way.
+  On T3 Code the carrier rides the thread's launch [worker environment](t3code-backend.md#worker-environment-and-channel-statement) and is recorded right after the task record is published, so a recording failure refuses the launch before the thread runs.
 - **Metadata-only.**
   The value lives in the task's launch environment and in `state/<id>.meta`.
-  The [T3 environment contract](t3code-backend.md#per-directory-fallback) owns its overlay cleanup; teardown removes task state as before, and no schema migration is needed.
+  On T3 Code it lives only in the thread's own launch environment, so nothing is written into the worktree; teardown removes task state as before, and no schema migration is needed.
 
 ## Relationship to OpenTelemetry and later increments
 

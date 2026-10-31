@@ -62,8 +62,10 @@ SPAWN_HOME="$TMP_ROOT/user-home"
 mkdir -p "$SPAWN_HOME"
 
 # t3_case <name> [thread-status] -> sets CASE_DIR, CONFIG, LOG, REPO
-# The default world has one project rooted at $REPO with a Claude default
-# model, one thread `thread-live` in the given V2 status, and a credential.
+# The default world is the T3 Code fork's: every provider advertises
+# threadEnvironment and threadInstructions (threadFacts), with one project
+# rooted at $REPO with a Claude default model, one thread `thread-live` in
+# the given V2 status, and a credential.
 t3_case() {
   local name=$1 status=${2:-completed}
   CASE_DIR="$TMP_ROOT/$name"
@@ -90,7 +92,7 @@ t3_thread_json() {  # <id> <status> <archived true|false>
 # keeps the case's accepted credentials.
 t3_world() {
   FM_T3_THREADS="[$(IFS=,; printf '%s' "$*")]" FM_T3_REPO="$REPO" t3_fake_set '
-w = { tokens: w.tokens || [],
+w = { tokens: w.tokens || [], threadFacts: true,
   projects: [{ id: "proj-1", title: "repo", workspaceRoot: process.env.FM_T3_REPO, deletedAt: null,
     defaultModelSelection: { instanceId: "claudeAgent", model: "claude-sonnet-5" } }],
   threads: Object.fromEntries(JSON.parse(process.env.FM_T3_THREADS).map((t) => [t.threadId, t])) };'
@@ -218,75 +220,6 @@ process.stdout.write(v === undefined ? "undefined" : typeof v === "string" ? v :
 ' "$1" "$2"
 }
 
-# The TOML cases need a Python with tomllib (3.11+), chosen the way
-# bin/fm-t3code-codex-env.sh chooses it; a case that needs one and finds none
-# reports itself skipped instead of passing vacuously.
-T3_PYTHON=
-for t3_python_candidate in python3 python3.14 python3.13 python3.12 python3.11; do
-  if command -v "$t3_python_candidate" >/dev/null 2>&1 && "$t3_python_candidate" -c 'import tomllib' >/dev/null 2>&1; then
-    T3_PYTHON=$t3_python_candidate
-    break
-  fi
-done
-t3_require_tomllib() {  # <case-name>
-  [ -z "$T3_PYTHON" ] || return 0
-  printf 'note: %s skipped: no Python 3.11+ (tomllib) interpreter on PATH\n' "$1"
-  return 1
-}
-
-# Parse the emitted configuration as TOML, as Codex does.
-t3_toml_env() {  # <file> <NAME>
-  "$T3_PYTHON" - "$1" "$2" <<'PYTHON'
-import sys, tomllib
-with open(sys.argv[1], "rb") as stream:
-    env = tomllib.load(stream)["shell_environment_policy"]["set"]
-print(env.get(sys.argv[2], "undefined"), end="")
-PYTHON
-}
-
-# A token-free guard against changes in Codex's real project config loader and
-# shell environment. The subshell confines fm_live_gate's capability skip.
-t3_verify_live_codex_env() (  # <worktree> <task-id> <isolated-codex-home>
-  fm_live_gate default-on FM_T3_CODEX_CONFIG_LIVE codex "$T3_PYTHON"
-  "$T3_PYTHON" - "$1" "$2" "$3" <<'PYTHON'
-import json, os, pathlib, selectors, subprocess, sys
-worktree, task, home = sys.argv[1:]
-home = pathlib.Path(home)
-home.mkdir()
-(home / "config.toml").write_text(f"[projects.{json.dumps(worktree)}]\ntrust_level = \"trusted\"\n")
-version = subprocess.check_output(["codex", "--version"], text=True).strip()
-with (home / "stderr.log").open("w") as errors:
-    server = subprocess.Popen(["codex", "app-server", "--stdio"], cwd=worktree,
-        env=dict(os.environ, CODEX_HOME=str(home)), stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=errors, text=True)
-    try:
-        def request(number, method, params):
-            server.stdin.write(json.dumps(dict(id=number, method=method, params=params)) + "\n")
-            server.stdin.flush()
-            with selectors.DefaultSelector() as selector:
-                selector.register(server.stdout, selectors.EVENT_READ)
-                while selector.select(20):
-                    response = json.loads(server.stdout.readline())
-                    if response.get("id") == number:
-                        assert "error" not in response, (version, response)
-                        return response["result"]
-            raise TimeoutError(f"{version}: {method}")
-        request(1, "initialize", {"clientInfo": {"name": "fm-config-test", "version": "1"}})
-        result = request(2, "config/read", {"cwd": worktree, "includeLayers": True})
-        assert result["config"]["model"] == "gpt-5.6-sol", (version, result)
-        assert result["config"]["shell_environment_policy"]["set"]["FM_TASK_ID"] == task, version
-        result = request(3, "command/exec", {"cwd": worktree,
-            "command": ["/usr/bin/printenv", "FM_TASK_ID"], "timeoutMs": 10000,
-            "sandboxPolicy": {"type": "dangerFullAccess"}})
-        assert result == {"exitCode": 0, "stdout": task + "\n", "stderr": ""}, (version, result)
-        print(f"ok - {version}: project config retained; shell FM_TASK_ID={task}")
-    finally:
-        server.terminate()
-        server.wait(timeout=10)
-PYTHON
-)
-
-
 test_missing_credential_names_signin() {
   local out status
   t3_case missing-token
@@ -378,13 +311,12 @@ test_model_selection_table() {
   out=$(t3_selection grok grok-4.7 max 2>&1) && fail "grok max must be refused: its catalog lists no max"
   assert_contains "$out" "xhigh, high, medium, low" "the grok max refusal must list the catalog's values"
   out=$(t3_run 'fm_backend_t3code_resolve claude claude-sonnet-5 default "$1"' "$REPO")
-  [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}'$'\t''none'$'\t''none' ] \
-    || fail "an instance that advertises no per-thread facts resolves to channels none/none, got '$out'"
-  t3_world_set 'w.threadFacts = true'
-  out=$(t3_run 'fm_backend_t3code_resolve claude claude-sonnet-5 default "$1"' "$REPO")
   [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}'$'\t''thread'$'\t''thread' ] \
     || fail "an instance that advertises threadEnvironment and threadInstructions resolves to thread/thread, got '$out'"
   t3_world_set 'delete w.threadFacts'
+  out=$(t3_run 'fm_backend_t3code_resolve claude claude-sonnet-5 default "$1"' "$REPO")
+  [ "$out" = '{"instanceId":"claudeAgent","model":"claude-sonnet-5"}'$'\t''none'$'\t''none' ] \
+    || fail "an instance that advertises no per-thread facts resolves to channels none/none, got '$out'"
   t3_world_set 'w.projects[0].defaultModelSelection = { instanceId: "codex", model: "gpt-5.6-sol", options: [{ id: "reasoningEffort", value: "low" }, { id: "serviceTier", value: "priority" }] }'
   printf 'codex=codex\n' > "$CONFIG/t3code-instances"
   out=$(t3_selection codex default high)
@@ -1291,256 +1223,99 @@ test_control_relaunch_refused_before_any_dispatch() {
   pass "fm-control.sh relaunch backend=t3code: refused before anything is stopped, by the control plane and by the launch owner"
 }
 
-test_spawn_codex_refuses_tracked_codex_config() {
-  local proj wt data state id out rc fb
-  id=$(t3_uid t3codextrk1)
-  t3_case spawn-codex-tracked
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$proj/.codex" "$data/$id" "$state" "$CASE_DIR/home/state"
-  printf '[shell_environment_policy]\ninherit = "all"\n' > "$proj/.codex/config.toml"
-  git -C "$proj" add .codex/config.toml
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm "track codex config"
-  write_spawn_brief "$data" "$id"
-  touch "$state/.last-watcher-beat"
-  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-  fb=$(make_treehouse_fakebin "$CASE_DIR")
-  out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
-  expect_code 1 "$rc" "a codex t3code spawn must refuse a project that tracks .codex/config.toml"$'\n'"$out"
-  assert_contains "$out" ".codex/config.toml" "the refusal must name the tracked file"
-  assert_contains "$out" "[shell_environment_policy]" "the refusal must name the policy table"
-  [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
-  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
-  assert_absent "$state/$id.meta" "a refused spawn records nothing"
-  pass "fm-spawn.sh --backend t3code codex: refuses to overwrite a project's tracked .codex/config.toml before any mutation"
-}
-
-test_spawn_codex_preserves_tracked_codex_config() {
-  local proj wt data state id out rc fb neutral original
-  t3_require_tomllib test_spawn_codex_preserves_tracked_codex_config || return 0
-  id=$(t3_uid t3codextrk2)
-  t3_task_id "$id"
-  t3_case spawn-codex-tracked-compatible
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$proj/.codex" "$data/$id" "$state" "$CASE_DIR/home/state"
-  original="$CASE_DIR/original.toml"
-  printf '# Project settings, preserved verbatim\r\nmodel = "gpt-5.6-sol"\r\n[features]\r\n# shell_environment_policy in a comment is harmless\r\nweb_search_request = true' > "$original"
-  cp "$original" "$proj/.codex/config.toml"
-  git -C "$proj" add .codex/config.toml
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm "track codex config"
-  git -C "$proj" push -q origin main
-  git -C "$wt" merge --ff-only -q main
-  write_spawn_brief "$data" "$id"
-  touch "$state/.last-watcher-beat"
-  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-  fb=$(make_treehouse_fakebin "$CASE_DIR")
-  out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
-  expect_code 0 "$rc" "a codex t3code spawn must accept compatible tracked configuration"$'\n'"$out"
-  [ "$(t3_toml_env "$wt/.codex/config.toml" FM_TASK_ID)" = "$id" ] || fail "tracked config must deliver FM_TASK_ID"
-  "$T3_PYTHON" - "$original" "$wt/.codex/config.toml" <<'CHECK'
-import pathlib, sys, tomllib
-original, installed = (pathlib.Path(p).read_bytes() for p in sys.argv[1:])
-assert installed.startswith(original), "project bytes must remain an unchanged prefix"
-assert tomllib.loads(installed.decode())["model"] == "gpt-5.6-sol"
-CHECK
-  expect_code 0 $? "merged config must be valid TOML and retain the project settings"
-  t3_verify_live_codex_env "$wt" "$id" "$CASE_DIR/codex-home" || fail "installed Codex failed the tracked configuration guard"
-  [ -z "$(git -C "$proj" status --porcelain -- .codex/config.toml)" ] || fail "the primary checkout must not inherit the overlay"
-  [ "$(git -C "$proj" ls-files -v -- .codex/config.toml)" = "H .codex/config.toml" ] || fail "skip-worktree must stay private to the leased worktree"
-  [ -z "$(git -C "$wt" status --porcelain -- .codex/config.toml)" ] || fail "the environment overlay must not appear as a tracked edit"
-  printf 'worker change\n' > "$wt/worker.txt"
-  git -C "$wt" add -A
-  git -C "$wt" -c user.name=t -c user.email=t@example.invalid commit -qam "worker change"
-  git -C "$wt" show HEAD:.codex/config.toml > "$CASE_DIR/committed.toml"
-  cmp -s "$original" "$CASE_DIR/committed.toml" || fail "git add -A and commit -a must not commit the environment overlay"
-  printf 'report\n' > "$data/$id/report.md"
-  printf 'decisions_reviewed=1\ndecision_keys=\n' >> "$state/$id.meta"
-  neutral=$(neutral_fm_root "$CASE_DIR/neutral")
-  # The launch turn is over before cleanup; a running turn is its own case.
-  t3_end_all_runs
-  out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$neutral" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 ); rc=$?
-  expect_code 0 "$rc" "teardown must restore the tracked config"$'\n'"$out"
-  cmp -s "$original" "$wt/.codex/config.toml" || fail "cleanup must restore the exact tracked bytes"
-  [ -z "$(git -C "$wt" status --porcelain -- .codex/config.toml)" ] || fail "cleanup must leave the tracked config clean"
-  "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$wt" || fail "repeated cleanup must succeed"
-  cmp -s "$original" "$wt/.codex/config.toml" || fail "repeated cleanup changed tracked bytes"
-  printf '\n# visible after cleanup\n' >> "$wt/.codex/config.toml"
-  [ -n "$(git -C "$wt" status --porcelain -- .codex/config.toml)" ] || fail "cleanup must restore ordinary Git tracking"
-  pass "fm-spawn.sh backend=t3code: compatible tracked Codex config launches, stays out of commits, and survives cleanup"
-}
-
-test_tracked_codex_overlay_recovery() {
-  local proj out rc original unicode_value
-  t3_require_tomllib test_tracked_codex_overlay_recovery || return 0
-  t3_case codex-overlay-recovery
-  proj="$CASE_DIR/project"
-  fm_git_init_commit "$proj"
-  mkdir "$proj/.codex"
-  original="$CASE_DIR/original.toml"
-  printf 'model = "gpt-5.6-sol"\n' > "$original"
-  cp "$original" "$proj/.codex/config.toml"
-  git -C "$proj" add .codex/config.toml
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm config
-  unicode_value=$'space "quote" \\ path-🧭\nnext line'
-  "$ROOT/bin/fm-t3code-codex-env.sh" install "$proj" FM_TASK_ID=recovery "FM_HOME=$unicode_value" || fail "install recovery overlay"
-  [ "$(t3_toml_env "$proj/.codex/config.toml" FM_HOME)" = "$unicode_value" ] || fail "TOML encoding must preserve Unicode, quotes, backslashes, and newlines"
-  printf '\n# worker edit\n' >> "$proj/.codex/config.toml"
-  cp "$proj/.codex/config.toml" "$CASE_DIR/edited.toml"
-  out=$("$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" 2>&1); rc=$?
-  expect_code 1 "$rc" "cleanup must refuse unexpected configuration edits"
-  assert_contains "$out" "configuration changed" "cleanup must explain the conflict"
-  cmp -s "$CASE_DIR/edited.toml" "$proj/.codex/config.toml" || fail "refused cleanup must preserve edits"
-  # Simulate interruption after restoring the file but before restoring Git flags.
-  cp "$original" "$proj/.codex/config.toml"
-  "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" || fail "interrupted restoration must converge"
-  [ "$(git -C "$proj" ls-files -v -- .codex/config.toml)" = "H .codex/config.toml" ] || fail "recovered cleanup must clear skip-worktree"
-  cmp -s "$original" "$proj/.codex/config.toml" || fail "recovery must preserve original bytes"
-  # TOML syntax, rather than textual spelling, determines policy ownership.
-  for policy in '["shell_environment_policy"]' 'shell_environment_policy.set.FOO = "bar"' 'shell_environment_policy = { set = { FOO = "bar" } }'; do
-    printf '%s\n' "$policy" > "$proj/.codex/config.toml"
-    out=$("$ROOT/bin/fm-t3code-codex-env.sh" check "$proj" 2>&1); rc=$?
-    expect_code 1 "$rc" "every TOML spelling of a project policy must refuse"
-    assert_contains "$out" "[shell_environment_policy]" "policy conflict must name the table"
+# Without per-thread environment and instructions (upstream T3) every harness
+# is refused before anything is leased, claude and codex included, a
+# secondmate as much as a worker, and the project's own Claude and Codex
+# files stay exactly as found.
+test_spawn_refuses_t3_without_thread_channels() {
+  local harness model id out rc home
+  for harness in claude codex; do
+    case "$harness" in claude) model=claude-sonnet-5 ;; codex) model=gpt-5.6-sol ;; esac
+    id=$(t3_uid "t3nochanz$harness")
+    t3_case "spawn-no-channels-$harness"
+    t3_world_set 'delete w.threadFacts'
+    t3_worker_setup "$id"
+    mkdir -p "$WORKER_PROJ/.codex"
+    printf 'model = "project-model"\n' > "$WORKER_PROJ/.codex/config.toml"
+    printf 'project instructions\n' > "$WORKER_PROJ/CLAUDE.local.md"
+    git -C "$WORKER_PROJ" add .codex/config.toml CLAUDE.local.md
+    git -C "$WORKER_PROJ" -c user.name=t -c user.email=t@example.invalid commit -qm "project agent files"
+    out=$(t3_worker_spawn "$id" "$harness" --model "$model"); rc=$?
+    expect_code 1 "$rc" "a $harness worker on a T3 without per-thread channels must refuse"$'\n'"$out"
+    assert_contains "$out" "does not advertise threadEnvironment and threadInstructions" "the $harness refusal names both missing capabilities"
+    assert_contains "$out" "use the T3 Code fork" "the $harness refusal names the fix"
+    [ -z "$(t3_dispatch_types)" ] || fail "the $harness refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+    [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the $harness refusal must come before the slot is leased"
+    assert_absent "$CASE_DIR/state/$id.meta" "a refused $harness spawn records nothing"
+    [ "$(cat "$WORKER_PROJ/.codex/config.toml")" = 'model = "project-model"' ] || fail "a refused $harness spawn changed the project's Codex config"
+    [ "$(cat "$WORKER_PROJ/CLAUDE.local.md")" = 'project instructions' ] || fail "a refused $harness spawn changed the project's CLAUDE.local.md"
+    [ -z "$(git -C "$WORKER_PROJ" status --porcelain)" ] || fail "a refused $harness spawn left the project dirty: $(git -C "$WORKER_PROJ" status --porcelain)"
+    id=$(t3_uid "t3nochansmz$harness")
+    home="$CASE_DIR/sm-home"
+    make_t3_secondmate_home "$home" "$id"
+    : > "$LOG"
+    out=$(spawn_t3_secondmate "$id" "$home" "$harness" "$model"); rc=$?
+    expect_code 1 "$rc" "a $harness secondmate on a T3 without per-thread channels must refuse"$'\n'"$out"
+    assert_contains "$out" "use the T3 Code fork" "the $harness secondmate refusal names the fix"
+    [ -z "$(t3_dispatch_types)" ] || fail "the $harness secondmate refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
+    [ ! -e "$home/config/t3code-token" ] || fail "a refused $harness secondmate spawn must not link the credential into the home"
+    assert_absent "$CASE_DIR/home/state/$id.meta" "a refused $harness secondmate spawn records nothing"
   done
-  pass "tracked Codex overlay: edited files survive refusal, interrupted restoration recovers, quoted and dotted policy keys refuse"
+  pass "fm-spawn.sh --backend t3code: a T3 without per-thread environment and instructions is refused for claude and codex workers and secondmates before any mutation"
 }
-
-test_spawn_claude_refuses_tracked_claude_local_md() {
-  local proj wt data state id out rc fb
+# The channel statement rides the thread, so a claude worker never writes
+# CLAUDE.local.md: one the project tracks, or a symlink in the leased
+# worktree, stays exactly as found.
+test_spawn_claude_leaves_project_claude_local_md_alone() {
+  local id out rc target
   id=$(t3_uid t3claudetrk1)
   t3_case spawn-claude-tracked
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
-  printf 'project instructions\n' > "$proj/CLAUDE.local.md"
-  git -C "$proj" add CLAUDE.local.md
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm "track local instructions"
-  write_spawn_brief "$data" "$id"
-  touch "$state/.last-watcher-beat"
-  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-  fb=$(make_treehouse_fakebin "$CASE_DIR")
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --scout --model claude-sonnet-5 --backend t3code 2>&1 ); rc=$?
-  expect_code 1 "$rc" "a claude t3code spawn must refuse a project that tracks CLAUDE.local.md"$'\n'"$out"
-  assert_contains "$out" "tracks CLAUDE.local.md" "the refusal must name the tracked file"
-  [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
-  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
-  assert_absent "$state/$id.meta" "a refused spawn records nothing"
-  pass "fm-spawn.sh --backend t3code claude: refuses to overwrite a project's tracked CLAUDE.local.md before any mutation"
-}
-
-test_spawn_claude_refuses_worktree_symlink() {
-  local proj wt data state id out rc fb target exclude
+  t3_worker_setup "$id"
+  # Spawn freshens the slot onto origin's branch, which tracks the file.
+  printf 'project instructions\n' > "$WORKER_PROJ/CLAUDE.local.md"
+  git -C "$WORKER_PROJ" add CLAUDE.local.md
+  git -C "$WORKER_PROJ" -c user.name=t -c user.email=t@example.invalid -c core.hooksPath=/dev/null commit -qm "track local instructions"
+  git -C "$WORKER_PROJ" push -q origin HEAD
+  out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a claude t3code spawn must launch in a slot whose project tracks CLAUDE.local.md"$'\n'"$out"
+  [ "$(cat "$WORKER_WT/CLAUDE.local.md")" = 'project instructions' ] || fail "the project's tracked CLAUDE.local.md must stay as found"
+  [ -z "$(git -C "$WORKER_WT" status --porcelain -- CLAUDE.local.md)" ] || fail "the tracked CLAUDE.local.md must stay unmodified"
+  assert_contains "$(t3_launch_field 'a.instructions')" "task worker launched by Firstmate" "the channel statement rides the launch instructions"
   id=$(t3_uid t3claudelink)
-  t3_task_id "$id"
   t3_case spawn-claude-symlink
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
+  t3_worker_setup "$id"
   target="$CASE_DIR/project-instructions"
   printf 'keep these instructions\n' > "$target"
-  ln -s "$target" "$wt/CLAUDE.local.md"
-  exclude=$(git -C "$wt" rev-parse --git-path info/exclude)
-  printf 'CLAUDE.local.md\n' >> "$exclude"
-  write_spawn_brief "$data" "$id"
-  touch "$state/.last-watcher-beat"
-  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-  fb=$(make_treehouse_fakebin "$CASE_DIR")
-  out=$( HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --scout --model claude-sonnet-5 --backend t3code 2>&1 ); rc=$?
-  expect_code 1 "$rc" "a symlinked worktree channel must refuse"
-  assert_contains "$out" "CLAUDE.local.md already exists" "refusal must name the channel"
-  [ "$(cat "$target")" = 'keep these instructions' ] || fail "symlink target was changed"
-  [ -L "$wt/CLAUDE.local.md" ] || fail "symlink must remain after refused spawn"
-  pass "Claude channel refuses a symlink in the leased worktree without following it"
+  ln -s "$target" "$WORKER_WT/CLAUDE.local.md"
+  printf 'CLAUDE.local.md\n' >> "$(git -C "$WORKER_WT" rev-parse --git-path info/exclude)"
+  out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a claude t3code spawn must launch beside a symlinked CLAUDE.local.md"$'\n'"$out"
+  [ "$(cat "$target")" = 'keep these instructions' ] || fail "the symlink's target must be left untouched"
+  [ -L "$WORKER_WT/CLAUDE.local.md" ] || fail "the symlink must remain"
+  pass "fm-spawn.sh --backend t3code claude: a tracked or symlinked CLAUDE.local.md stays as found while the statement rides the thread"
 }
-
-test_untracked_codex_config_is_preserved() {
-  local proj out rc
-  t3_case untracked-codex
-  proj="$CASE_DIR/project"
-  fm_git_init_commit "$proj"
-  mkdir -p "$proj/.codex"
-  printf 'model = "captain-model"\n' > "$proj/.codex/config.toml"
-  out=$("$ROOT/bin/fm-t3code-codex-env.sh" check "$proj" 2>&1); rc=$?
-  expect_code 1 "$rc" "pre-existing untracked Codex config must refuse"
-  assert_contains "$out" "untracked configuration already exists" "refusal must explain ownership"
-  "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" || fail "cleanup must leave a pre-existing config alone"
-  [ "$(cat "$proj/.codex/config.toml")" = 'model = "captain-model"' ] || fail "cleanup changed the captain's config"
-  printf '# Generated by Firstmate T3 Code\n[shell_environment_policy]\n' > "$proj/.codex/config.toml"
-  "$ROOT/bin/fm-t3code-codex-env.sh" check "$proj" || fail "marked config should be accepted"
-  "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" || fail "marked config should be removed"
-  [ ! -e "$proj/.codex/config.toml" ] || fail "cleanup left a Firstmate config behind"
-  pass "untracked Codex config is preserved unless Firstmate's marker owns it"
-}
-
-# A worker's leased worktree never shares the main checkout's untracked files,
-# so a personal Codex config there does not refuse the worker's spawn.
-test_codex_worker_ignores_untracked_config_in_main_checkout() {
+# The environment rides the thread, so a codex worker never writes Codex
+# config: one the project tracks stays exactly as found.
+test_codex_worker_leaves_project_codex_config_alone() {
   local id out rc
   id=$(t3_uid t3codexmainz)
-  t3_case codex-main-untracked
+  t3_case codex-tracked-config
   t3_worker_setup "$id"
-  # The project tracks other .codex content, but not the config itself.
-  mkdir -p "$WORKER_PROJ/.codex/skills/x"
-  printf '# Skill\n' > "$WORKER_PROJ/.codex/skills/x/SKILL.md"
-  git -C "$WORKER_PROJ" add .codex/skills/x/SKILL.md
-  git -C "$WORKER_PROJ" -c user.name=t -c user.email=t@example.invalid commit -qm skill
-  printf 'model = "personal-model"\n' > "$WORKER_PROJ/.codex/config.toml"
+  # Spawn freshens the slot onto origin's branch, which tracks the file.
+  mkdir -p "$WORKER_PROJ/.codex"
+  printf 'model = "project-model"\n' > "$WORKER_PROJ/.codex/config.toml"
+  git -C "$WORKER_PROJ" add .codex/config.toml
+  git -C "$WORKER_PROJ" -c user.name=t -c user.email=t@example.invalid -c core.hooksPath=/dev/null commit -qm codex
+  git -C "$WORKER_PROJ" push -q origin HEAD
   out=$(t3_worker_spawn "$id" codex --model gpt-5.6-sol); rc=$?
-  expect_code 0 "$rc" "an untracked Codex config in the main checkout must not refuse a worker spawn"$'\n'"$out"
-  [ "$(cat "$WORKER_PROJ/.codex/config.toml")" = 'model = "personal-model"' ] || fail "the main checkout's own Codex config must be untouched"
-  [ "$(head -n 1 "$WORKER_WT/.codex/config.toml")" = '# Generated by Firstmate T3 Code' ] \
-    || fail "the worker's environment must be written into its leased worktree"
-  pass "fm-spawn.sh --backend t3code codex: an untracked Codex config in the main checkout does not refuse a worker"
+  expect_code 0 "$rc" "a codex worker must launch beside the project's own Codex config"$'\n'"$out"
+  [ "$(cat "$WORKER_PROJ/.codex/config.toml")" = 'model = "project-model"' ] || fail "the main checkout's Codex config must be untouched"
+  [ "$(cat "$WORKER_WT/.codex/config.toml")" = 'model = "project-model"' ] || fail "the slot's tracked Codex config must be untouched"
+  [ -z "$(git -C "$WORKER_WT" status --porcelain -- .codex)" ] || fail "the slot's tracked Codex config must stay unmodified"
+  [ "$(git -C "$WORKER_WT" ls-files -v -- .codex/config.toml)" = "H .codex/config.toml" ] || fail "the tracked Codex config must keep ordinary Git tracking"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "the environment rides the thread"
+  pass "fm-spawn.sh --backend t3code codex: the project's tracked Codex config stays as found while the environment rides the thread"
 }
-
-# Teardown runs cleanup for every T3 task, so without an installed overlay it
-# must neither need Python nor refuse a project's own .codex layout.
-test_codex_cleanup_without_journal_needs_no_python() {
-  local fb py proj out rc
-  t3_case codex-cleanup-no-journal
-  fb="$CASE_DIR/no-tomllib"
-  mkdir -p "$fb"
-  for py in python3 python3.11 python3.12 python3.13 python3.14; do
-    printf '#!/bin/sh\nexit 1\n' > "$fb/$py"
-    chmod +x "$fb/$py"
-  done
-  proj="$CASE_DIR/tracked-config"
-  fm_git_init_commit "$proj"
-  mkdir -p "$proj/.codex"
-  printf 'model = "project-model"\n' > "$proj/.codex/config.toml"
-  git -C "$proj" add .codex/config.toml
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm codex
-  out=$(PATH="$fb:$PATH" "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" 2>&1); rc=$?
-  expect_code 0 "$rc" "cleanup of a tracked config Firstmate never overlaid must not need Python: $out"
-  [ "$(cat "$proj/.codex/config.toml")" = 'model = "project-model"' ] || fail "cleanup changed the project's tracked config"
-  proj="$CASE_DIR/tracked-codex-link"
-  fm_git_init_commit "$proj"
-  mkdir -p "$proj/codex-real"
-  printf '# Generated by Firstmate T3 Code\n' > "$proj/codex-real/config.toml"
-  ln -s codex-real "$proj/.codex"
-  git -C "$proj" add -A
-  git -C "$proj" -c user.name=t -c user.email=t@example.invalid commit -qm link
-  out=$(PATH="$fb:$PATH" "$ROOT/bin/fm-t3code-codex-env.sh" cleanup "$proj" 2>&1); rc=$?
-  expect_code 0 "$rc" "cleanup must not refuse a project that tracks .codex as a symlink: $out"
-  assert_present "$proj/codex-real/config.toml" "cleanup must never delete through a symlinked .codex"
-  pass "fm-t3code-codex-env.sh cleanup: without an installed overlay it needs no Python and never refuses"
-}
-
 test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   local proj wt data state id out fb thread
   id=$(t3_uid t3spawnz1)
@@ -1588,24 +1363,27 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   assert_present "$wt/.claude/settings.local.json" "spawn must still arm the Claude busy hooks in the worktree before the launch turn"
   local settings="$wt/.claude/settings.local.json"
   [ "$(t3_json_field "$settings" 'Object.keys(d.hooks).sort().join(" ")')" = "SessionEnd Stop StopFailure UserPromptSubmit" ] \
-    || fail "the env merge must keep the busy hooks, got hooks '$(t3_json_field "$settings" 'Object.keys(d.hooks || {})')'"
-  [ "$(t3_json_field "$settings" 'd.env.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "settings env must carry GOTMPDIR, got '$(t3_json_field "$settings" 'd.env')'"
-  [ "$(t3_json_field "$settings" 'd.env.FM_TASK_ID')" = "$id" ] || fail "a ship worker's settings env must carry FM_TASK_ID"
-  [ "$(t3_json_field "$settings" 'd.env.FM_TASK_INBOX')" = "$state/$id.inbox" ] || fail "a ship worker's settings env must carry its steering inbox"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_VALUE_0')" = "$state/$id.git-hooks" ] || fail "T3 workers must select the installed Git hook"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "T3 workers must select core.hooksPath"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_COUNT')" = 1 ] || fail "T3 workers must select one Git config override"
-  [ "$(t3_json_field "$settings" 'd.env.TRACEPARENT')" = undefined ] || fail "TRACEPARENT must be absent when trace context is off"
-  [ "$(t3_json_field "$settings" 'd.env.COMPACT_ADVISER_DISABLE')" = 1 ] || fail "settings env must carry the compact-adviser kill switch every launch carries"
-  [ "$(t3_json_field "$settings" 'Object.keys(d.env).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_T3CODE_ENV_KEYS FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] || fail "a worker env block carries the task inbox and Git hook with the launch environment"
+    || fail "the worktree settings must carry the busy hooks, got hooks '$(t3_json_field "$settings" 'Object.keys(d.hooks || {})')'"
+  [ "$(t3_json_field "$settings" 'd.env')" = undefined ] || fail "the environment rides the thread, not the settings file"
   t3_excluded "$wt" .claude/settings.local.json || fail "the settings file must be git-excluded"
-  assert_present "$wt/CLAUDE.local.md" "a claude worker gets the task-worker channel statement as CLAUDE.local.md"
-  assert_grep "task worker launched by Firstmate" "$wt/CLAUDE.local.md" "CLAUDE.local.md must carry the channel statement"
-  assert_grep "first-party task instructions" "$wt/CLAUDE.local.md" "CLAUDE.local.md must name the brief and inbox as first-party"
-  assert_grep "link_pull_request, list_thread_pull_requests, and unlink_pull_request tools were verified" "$wt/CLAUDE.local.md" \
-    "on a server older than the verified build CLAUDE.local.md must steer the worker off T3's PR tools"
-  assert_grep "done: PR <url> status line" "$wt/CLAUDE.local.md" "CLAUDE.local.md must name Firstmate's PR-recording channel"
-  t3_excluded "$wt" CLAUDE.local.md || fail "CLAUDE.local.md must be git-excluded"
+  [ "$(t3_request "$create" 'r.arguments.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
+  [ "$(t3_request "$create" 'r.arguments.environment.FM_TASK_ID')" = "$id" ] || fail "a ship worker's thread environment must carry FM_TASK_ID"
+  [ "$(t3_request "$create" 'r.arguments.environment.FM_TASK_INBOX')" = "$state/$id.inbox" ] || fail "a ship worker's thread environment must carry its steering inbox"
+  [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_VALUE_0')" = "$state/$id.git-hooks" ] || fail "T3 workers must select the installed Git hook"
+  [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "T3 workers must select core.hooksPath"
+  [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_COUNT')" = 1 ] || fail "T3 workers must select one Git config override"
+  [ "$(t3_request "$create" 'r.arguments.environment.TRACEPARENT')" = undefined ] || fail "TRACEPARENT must be absent when trace context is off"
+  [ "$(t3_request "$create" 'r.arguments.environment.COMPACT_ADVISER_DISABLE')" = 1 ] || fail "the thread environment must carry the compact-adviser kill switch every launch carries"
+  [ "$(t3_request "$create" 'Object.keys(r.arguments.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
+    || fail "a worker's thread environment carries the task inbox and Git hook with the launch environment"
+  local instructions
+  instructions=$(t3_request "$create" 'r.arguments.instructions')
+  assert_contains "$instructions" "task worker launched by Firstmate" "the launch instructions must carry the channel statement"
+  assert_contains "$instructions" "first-party task instructions" "the launch instructions must name the brief and inbox as first-party"
+  assert_contains "$instructions" "link_pull_request, list_thread_pull_requests, and unlink_pull_request tools were verified" \
+    "on a server older than the verified build the launch instructions must steer the worker off T3's PR tools"
+  assert_contains "$instructions" "done: PR <url> status line" "the launch instructions must name Firstmate's PR-recording channel"
+  assert_absent "$wt/CLAUDE.local.md" "the channel statement rides the thread, not CLAUDE.local.md"
   [ "$(t3_log_line_of 'r.tool === "t3_thread_launch"')" -gt "$(t3_log_line_of 'r.tool === "treehouse"')" ] \
     || fail "the thread launch must follow the lease"
   pass "fm-spawn.sh --backend t3code: leases the slot, launches the thread on it, records metadata, sends the launch brief"
@@ -1624,7 +1402,6 @@ test_spawn_grok_worker_rides_thread_channels() {
   local id out rc home
   id=$(t3_uid t3grokz1)
   t3_case spawn-grok-thread
-  t3_world_set 'w.threadFacts = true'
   t3_worker_setup "$id"
   home="$CASE_DIR/grok-user-home"
   mkdir -p "$home"
@@ -1660,7 +1437,7 @@ test_spawn_gemini_worker_finds_registry_instance_by_agent() {
   local id out rc
   id=$(t3_uid t3geminiz1)
   t3_case spawn-gemini-thread
-  t3_world_set 'w.threadFacts = true; w.providers = [
+  t3_world_set 'w.providers = [
     { providerInstanceId: "gemini", driverKind: "acpRegistry", agentId: "kimi", constraints: [], models: [{ id: "gemini-3-flash", options: [] }] },
     { providerInstanceId: "acpRegistry_gemini_cli", driverKind: "acpRegistry", agentId: "gemini", constraints: [], models: [{ id: "gemini-3-flash", options: [] }] }]'
   t3_worker_setup "$id"
@@ -1681,7 +1458,7 @@ test_spawn_claude_worker_rides_thread_channels() {
   local id out rc settings
   id=$(t3_uid t3claudethr1)
   t3_case spawn-claude-thread
-  t3_world_set 'w.threadFacts = true; w.serverVersion = "0.1.5"'
+  t3_world_set 'w.serverVersion = "0.1.5"'
   t3_worker_setup "$id"
   out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "a claude scout on a T3 with per-thread facts should spawn"$'\n'"$out"
@@ -1727,13 +1504,14 @@ test_spawn_refuses_harness_without_a_channel_or_full_access() {
   local id out rc
   id=$(t3_uid t3grokz2)
   t3_case spawn-grok-upstream
+  t3_world_set 'delete w.threadFacts'
   t3_worker_setup "$id"
   out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
   expect_code 1 "$rc" "a grok worker on a T3 without per-thread environment must refuse"$'\n'"$out"
   assert_contains "$out" "does not advertise threadEnvironment" "the refusal names the missing capability"
   [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
   [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
-  t3_world_set 'w.threadFacts = true; w.providers = [{ providerInstanceId: "grok", driverKind: "grok", constraints: [], runtimeModes: ["approval-required", "auto"], models: [{ id: "grok-4.7", options: [] }] }]'
+  t3_world_set 'w.providers = [{ providerInstanceId: "grok", driverKind: "grok", constraints: [], runtimeModes: ["approval-required", "auto"], models: [{ id: "grok-4.7", options: [] }] }]'
   : > "$LOG"
   out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
   expect_code 1 "$rc" "a grok worker on an instance without full-access must refuse"$'\n'"$out"
@@ -1756,7 +1534,7 @@ test_spawn_effective_downgrade_returns_lease() {
   local id out rc
   id=$(t3_uid t3downgrade)
   t3_case spawn-downgrade
-  t3_world_set 'w.threadFacts = true; w.bindEffectiveRuntimeMode = "approval-required"'
+  t3_world_set 'w.bindEffectiveRuntimeMode = "approval-required"'
   t3_worker_setup "$id"
   out=$(t3_worker_spawn "$id" grok --model grok-4.7); rc=$?
   expect_code 1 "$rc" "a thread T3 runs below full access must abort spawn"$'\n'"$out"
@@ -1768,53 +1546,26 @@ test_spawn_effective_downgrade_returns_lease() {
   pass "fm-spawn.sh --backend t3code: a thread T3 runs below full access is archived and its lease returned"
 }
 
-# A secondmate on the thread channels carries its launch prefix in the thread
-# environment, with no FM_SUPERVISOR_TARGET (its own id is not known before
-# launch: its daemon finds it by home), and the home's settings stay its own.
-test_spawn_secondmate_rides_thread_environment() {
-  local id home out read_env
-  id=$(t3_uid t3smthr1)
-  t3_case spawn-secondmate-thread
-  t3_world_set 'w.threadFacts = true'
-  home="$CASE_DIR/sm-home"
-  make_t3_secondmate_home "$home" "$id"
-  mkdir -p "$home/.claude"
-  printf '{"permissions":{"allow":["Bash(ls:*)"]}}\n' > "$home/.claude/settings.local.json"
-  out=$(spawn_t3_secondmate "$id" "$home" claude claude-sonnet-5)
-  expect_code 0 $? "a claude secondmate on a T3 with per-thread facts should spawn"$'\n'"$out"
-  read_env() { t3_launch_field "a.environment[\"$1\"]"; }
-  [ "$(read_env FM_HOME)" = "$home" ] || fail "the thread environment carries FM_HOME"
-  [ "$(read_env FM_SUPERVISOR_BACKEND)" = t3code ] || fail "the thread environment carries FM_SUPERVISOR_BACKEND"
-  [ "$(read_env FM_SUPERVISION_MODEL)" = autoarm ] || fail "the thread environment carries the claude supervision model"
-  [ "$(read_env FM_SUPERVISOR_TARGET)" = undefined ] || fail "a thread-environment secondmate cannot carry its own not-yet-assigned thread id"
-  [ "$(read_env FM_TASK_ID)" = undefined ] || fail "a secondmate is not a task worker"
-  [ "$(t3_launch_field 'a.instructions')" = undefined ] || fail "a secondmate never receives the task-worker statement"
-  [ "$(t3_json_field "$home/.claude/settings.local.json" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]}}' ] \
-    || fail "the home's own settings must stay untouched"
-  pass "fm-spawn.sh --backend t3code --secondmate: the launch prefix rides the thread environment and the home's settings stay its own"
-}
-
-# A forge=external ship's Git hook entry is its push guard, so a codex ship
-# whose per-directory config Codex may ignore is refused, not warned.
-test_spawn_external_forge_codex_refuses_untrusted_project() {
+# A forge=external ship's Git hook entry is its push guard; it rides the
+# codex ship's thread environment, so no Codex trust is needed.
+test_spawn_external_forge_codex_ship_carries_push_guard() {
   local id out rc
   id=$(t3_uid t3extz1)
   t3_case spawn-external-codex
   t3_worker_setup "$id"
   printf -- '- spawn-project [direct-PR forge=external] - fixture (added 2026-01-01)\n' > "$CASE_DIR/data/projects.md"
-  printf '%s\n' '# Task' '## Captain'"'"'s intent' 'Ship through the review tool.' '' '## Firstmate spec' 'Exercise the external forge refusal.' '' \
+  printf '%s\n' '# Task' '## Captain'"'"'s intent' 'Ship through the review tool.' '' '## Firstmate spec' 'Exercise the external forge push guard.' '' \
     'Delivery contract: mode=direct-PR forge=external' "Ship branch: fm/$id" > "$CASE_DIR/data/$id/brief.md"
   # shellcheck disable=SC2016 # Backticks are literal adapter text.
   printf '%s\n' 'Run `review-tool upload --draft`.' > "$CONFIG/external-review.md"
   mkdir -p "$CASE_DIR/codex-home"
   out=$(CODEX_HOME="$CASE_DIR/codex-home" t3_worker_ship_spawn "$id" codex --model gpt-5.6-sol --mode direct-PR --yolo off); rc=$?
-  expect_code 1 "$rc" "a forge=external codex ship in an untrusted project must refuse"$'\n'"$out"
-  assert_contains "$out" "push guard rides the .codex/config.toml" "the refusal names the push guard"
-  [ -z "$(t3_dispatch_types)" ] || fail "the refusal must come before any T3 mutation, got '$(t3_dispatch_types)'"
-  [ "$(t3_log_line_of 'r.tool === "treehouse"')" -eq 0 ] || fail "the refusal must come before the slot is leased"
-  pass "fm-spawn.sh --backend t3code: a forge=external codex ship whose push guard Codex may ignore is refused before any mutation"
+  expect_code 0 "$rc" "a forge=external codex ship must launch without Codex trust"$'\n'"$out"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "the push guard's hook entry must ride the thread environment"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] || fail "the push guard must select the installed hook"
+  assert_absent "$WORKER_WT/.codex/config.toml" "the push guard never rides a Codex config file"
+  pass "fm-spawn.sh --backend t3code: a forge=external codex ship carries its push guard in the thread environment"
 }
-
 # t3_worker_ship_spawn <id> <harness> [spawn-arg ...]: t3_worker_spawn as a ship.
 t3_worker_ship_spawn() {
   local id=$1 harness=$2 fb
@@ -1919,95 +1670,34 @@ test_spawn_titles_thread_from_backlog_item() {
   pass "fm-spawn.sh --backend t3code: the thread is titled with the backlog item's title, and the record keeps window=fm-<id>"
 }
 
-test_spawn_codex_scout_writes_toml_env_with_traceparent() {
-  local proj wt data state id out fb toml tp
-  t3_require_tomllib test_spawn_codex_scout_writes_toml_env_with_traceparent || return 0
+# A codex scout's environment rides the thread like every harness's, with the
+# TRACEPARENT the task record holds, and Codex's own trust configuration is
+# never consulted.
+test_spawn_codex_scout_thread_environment_carries_traceparent() {
+  local id out rc tp
   id=$(t3_uid t3codexz1)
-  t3_task_id "$id"
   t3_case spawn-codex
-  proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-  fm_git_worktree "$proj" "$wt" "fm/$id"
-  mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
-  write_spawn_brief "$data" "$id"
-  touch "$state/.last-watcher-beat"
+  t3_worker_setup "$id"
   # A worker's trace context is this home's frozen session decision
   # (bin/fm-trace-context-lib.sh): the session lock pid plus an `on` record.
-  printf '%s\n' "$$" > "$state/.lock"
-  printf '%s on\n' "$$" > "$state/.trace-context-effective"
-  FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-  fb=$(make_treehouse_fakebin "$CASE_DIR")
-  out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-    FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 )
-  expect_code 0 $? "a codex scout on t3code should spawn against the fake T3 server"$'\n'"$out"
-  toml="$wt/.codex/config.toml"
-  assert_present "$toml" "a codex worker gets .codex/config.toml in its worktree"
-  [ "$(t3_toml_env "$toml" GOTMPDIR)" = "/tmp/fm-$id/gotmp" ] || fail "config.toml must set GOTMPDIR, got '$(cat "$toml")'"
-  [ "$(t3_toml_env "$toml" FM_TASK_ID)" = "$id" ] || fail "a scout's config.toml must set FM_TASK_ID"
-  [ "$(t3_toml_env "$toml" FM_TASK_INBOX)" = "$state/$id.inbox" ] || fail "a scout's config.toml must set FM_TASK_INBOX"
-  [ "$(t3_toml_env "$toml" GIT_CONFIG_VALUE_0)" = "$state/$id.git-hooks" ] || fail "a scout's config.toml must select the installed Git hook"
-  [ "$(t3_toml_env "$toml" COMPACT_ADVISER_DISABLE)" = 1 ] || fail "config.toml must set the compact-adviser kill switch"
-  tp=$(t3_toml_env "$toml" TRACEPARENT)
-  case "$tp" in 00-????????????????????????????????-????????????????-??) ;; *) fail "config.toml must set a W3C TRACEPARENT when trace context is on, got '$(cat "$toml")'" ;; esac
-  grep -qxF "traceparent=$tp" "$state/$id.meta" || fail "the delivered TRACEPARENT must be the one recorded in the meta, got '$(grep '^traceparent=' "$state/$id.meta")'"
-  assert_absent "$wt/.claude/settings.local.json" "a codex worker writes no Claude settings"
-  assert_absent "$wt/CLAUDE.local.md" "a codex worker gets no Claude channel statement"
-  t3_excluded "$wt" .codex/config.toml || fail "config.toml must be git-excluded"
+  printf '%s\n' "$$" > "$CASE_DIR/state/.lock"
+  printf '%s on\n' "$$" > "$CASE_DIR/state/.trace-context-effective"
+  mkdir -p "$CASE_DIR/codex-home"
+  out=$(CODEX_HOME="$CASE_DIR/codex-home" t3_worker_spawn "$id" codex --model gpt-5.6-sol); rc=$?
+  expect_code 0 "$rc" "a codex scout on t3code should spawn against the fake T3 server"$'\n'"$out"
+  assert_not_contains "$out" "could not confirm" "a codex spawn no longer checks Codex trust"
+  [ "$(t3_launch_field 'a.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
+  [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "a scout's thread environment must carry FM_TASK_ID"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] || fail "a scout's thread environment must select the installed Git hook"
+  tp=$(t3_launch_field 'a.environment.TRACEPARENT')
+  case "$tp" in 00-????????????????????????????????-????????????????-??) ;; *) fail "the thread environment must carry a W3C TRACEPARENT when trace context is on, got '$tp'" ;; esac
+  grep -qxF "traceparent=$tp" "$CASE_DIR/state/$id.meta" || fail "the delivered TRACEPARENT must be the one recorded in the meta, got '$(grep '^traceparent=' "$CASE_DIR/state/$id.meta")'"
+  assert_contains "$(t3_launch_field 'a.instructions')" "first-party task instructions" "a codex worker receives the channel statement too"
+  assert_absent "$WORKER_WT/.codex/config.toml" "a codex worker writes no Codex config"
+  assert_absent "$WORKER_WT/.claude/settings.local.json" "a codex worker writes no Claude settings"
   [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_send" ] || fail "spawn must launch then send the brief, got '$(t3_dispatch_types)'"
-  pass "fm-spawn.sh --backend t3code codex: writes .codex/config.toml with GOTMPDIR, FM_TASK_ID, and TRACEPARENT"
+  pass "fm-spawn.sh --backend t3code codex: the thread environment carries GOTMPDIR, FM_TASK_ID, and the recorded TRACEPARENT"
 }
-
-# Codex applies the worktree's .codex/config.toml only when its main checkout
-# is trusted, so spawn warns once, and still launches, unless the Codex
-# configuration shows that trust. Trust resolves from the thread's launch
-# directory: a worker's leased worktree is covered only by its main checkout's
-# entry, never a parent directory's or a linked checkout's own, while a
-# secondmate's home is also covered by its own.
-test_spawn_codex_warns_unless_codex_trusts_the_project() {
-  local proj wt data state id out rc fb codex_home trust linked warning='could not confirm that'
-  t3_require_tomllib test_spawn_codex_warns_unless_codex_trusts_the_project || return 0
-  for trust in absent project; do
-    id=$(t3_uid "t3trust$trust")
-    t3_task_id "$id"
-    t3_case "spawn-codex-trust-$trust"
-    proj="$CASE_DIR/spawn-project"; wt="$CASE_DIR/spawn-wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
-    codex_home="$CASE_DIR/codex-home"
-    fm_git_worktree "$proj" "$wt" "fm/$id"
-    mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state" "$codex_home"
-    [ "$trust" = absent ] || printf '[projects."%s"]\ntrust_level = "trusted"\n' "$(cd -P "$proj" && pwd)" > "$codex_home/config.toml"
-    write_spawn_brief "$data" "$id"
-    touch "$state/.last-watcher-beat"
-    FM_T3_PROJ="$proj" t3_world_set 'w.projects[0].workspaceRoot = process.env.FM_T3_PROJ'
-    fb=$(make_treehouse_fakebin "$CASE_DIR")
-    out=$( HOME="$SPAWN_HOME" CODEX_HOME="$codex_home" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
-      FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_PROJECTS_OVERRIDE="$CASE_DIR/unused-projects" FM_SPAWN_NO_GUARD=1 \
-      "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex --scout --model gpt-5.6-sol --backend t3code 2>&1 ); rc=$?
-    expect_code 0 "$rc" "a codex t3code spawn with Codex trust '$trust' must still launch"$'\n'"$out"
-    [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_send" ] || fail "trust '$trust': spawn must launch then send the brief, got '$(t3_dispatch_types)'"
-    if [ "$trust" = project ]; then
-      case "$out" in *"$warning"*) fail "a project the Codex configuration trusts must not warn, got '$out'" ;; esac
-    else
-      assert_equals 1 "$(printf '%s\n' "$out" | grep -c "$warning")" "trust '$trust' must warn exactly once"
-      assert_contains "$out" "$codex_home/config.toml trusts $proj" "the warning must name the configuration and project it checked"
-      assert_contains "$out" "FM_TASK_ID, FM_TASK_INBOX, GOTMPDIR, and the core.hooksPath push guard" "the warning must name what the thread runs without"
-      assert_contains "$out" "trust the project in the Codex configuration T3 uses" "the warning must name the fix"
-    fi
-  done
-  linked="$CASE_DIR/linked-checkout"
-  git -C "$proj" worktree add --quiet -b fm/linked "$linked"
-  codex_trusts() {  # <trusted-path> <project> <kind>
-    printf '[projects."%s"]\ntrust_level = "trusted"\n' "$(cd -P "$1" && pwd)" > "$codex_home/config.toml"
-    CODEX_HOME="$codex_home" t3_run 'fm_backend_t3code_codex_trusted "$1" "$2"' "$2" "$3"
-  }
-  codex_trusts "$CASE_DIR" "$proj" scout && fail "a trusted parent directory must not confirm a worker's trust"
-  codex_trusts "$linked" "$linked" scout && fail "a linked checkout trusted only by its own path must not confirm a worker's trust"
-  codex_trusts "$proj" "$linked" ship || fail "the main checkout's trust must confirm a worker spawned from its linked checkout"
-  codex_trusts "$linked" "$linked" secondmate || fail "a secondmate home trusted by its own path must confirm its trust"
-  pass "fm-spawn.sh --backend t3code codex: warns once, and still launches, unless the Codex configuration trusts the launch directory's main checkout"
-}
-
 # A seeded secondmate home on its own git branch, with the charter the launch
 # turn must carry (validate_firstmate_home_for_spawn needs the marker,
 # AGENTS.md, and bin/). The primary home is $CASE_DIR/home with the case's
@@ -2035,10 +1725,12 @@ spawn_t3_secondmate() {
     "$ROOT/bin/fm-spawn.sh" "$id" "$home" "$harness" --model "$model" --backend t3code --secondmate 2>&1
 }
 
-# A t3code secondmate receives the pane launch facts plus its supervisor,
-# steering inbox, and Git hook identity through the per-directory environment.
-assert_t3_secondmate_env() {  # <reader "<file>"> <label> <home> <thread> <supervision-model> <id>
-  local read=$1 label=$2 home=$3 thread=$4 model=$5 id=$6 name expect
+# A t3code secondmate receives the pane launch facts plus its supervisor
+# backend, steering inbox, and Git hook identity through the thread
+# environment, without its own not-yet-assigned thread id: its daemon finds
+# its thread by home.
+assert_t3_secondmate_env() {  # <reader "<name>"> <label> <home> <supervision-model> <id>
+  local read=$1 label=$2 home=$3 model=$4 id=$5 name expect
   while IFS='=' read -r name expect; do
     [ "$($read "$name")" = "$expect" ] || fail "$label: $name should be '$expect', got '$($read "$name")'"
   done <<EOF
@@ -2053,26 +1745,25 @@ FM_HOME=$home
 FM_TRACE_CONTEXT=off
 FM_SUPERVISION_MODEL=$model
 FM_SUPERVISOR_BACKEND=t3code
-FM_SUPERVISOR_TARGET=$thread
 FM_TASK_INBOX=$CASE_DIR/home/state/$id.inbox
 GIT_CONFIG_COUNT=1
 GIT_CONFIG_KEY_0=core.hooksPath
 GIT_CONFIG_VALUE_0=$CASE_DIR/home/state/$id.git-hooks
 EOF
+  [ "$($read FM_SUPERVISOR_TARGET)" = undefined ] || fail "$label: a secondmate cannot carry its own not-yet-assigned thread id"
   [ "$($read FM_TASK_ID)" = undefined ] || fail "$label: a secondmate is not a task worker and must not carry FM_TASK_ID"
   [ "$($read TRACEPARENT)" = undefined ] || fail "$label: TRACEPARENT must be absent when trace context is off"
 }
 
 test_spawn_secondmate_runs_thread_in_home_with_env() {
-  local id home out thread project create turn settings
+  local id home out thread project create turn
   id=$(t3_uid t3smz1)
   t3_case spawn-secondmate
   home="$CASE_DIR/sm-home"
   make_t3_secondmate_home "$home" "$id"
-  # The home's own settings, plus a key an earlier spawn wrote that this one does not.
+  # The home's own settings, which the spawn must leave untouched.
   mkdir -p "$home/.claude"
-  printf '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep","LAVISH_AXI_HOST":"stale","FM_T3CODE_ENV_KEYS":"LAVISH_AXI_HOST"}}\n' \
-    > "$home/.claude/settings.local.json"
+  printf '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}\n' > "$home/.claude/settings.local.json"
   out=$(spawn_t3_secondmate "$id" "$home" claude claude-sonnet-5)
   expect_code 0 $? "fm-spawn.sh --backend t3code --secondmate should succeed against the fake T3 server"$'\n'"$out"
   [ "$(t3_dispatch_types)" = "t3_project_create t3_thread_launch t3_thread_send" ] \
@@ -2097,29 +1788,23 @@ test_spawn_secondmate_runs_thread_in_home_with_env() {
   assert_absent "$home/CLAUDE.local.md" "a secondmate runs under its own supervisor contract and gets no task-worker statement"
   assert_grep "t3_thread_id=$thread" "$CASE_DIR/home/state/$id.meta" "meta missing the created thread id"
   assert_grep "t3_project_id=$project" "$CASE_DIR/home/state/$id.meta" "meta missing the created project id"
-  settings="$home/.claude/settings.local.json"
-  assert_present "$settings" "a claude secondmate home gets .claude/settings.local.json"
-  [ "$(t3_json_field "$settings" 'd.hooks')" = undefined ] || fail "a secondmate home carries no busy hooks"
-  [ "$(t3_json_field "$settings" 'd.env.FM_T3CODE_ENV_KEYS.split(",").length')" = 17 ] || fail "the env block should carry GOTMPDIR plus the secondmate environment, got $(t3_json_field "$settings" 'Object.keys(d.env)')"
-  [ "$(t3_json_field "$settings" 'd.env.CAPTAIN_VAR')" = keep ] || fail "the home's own env entries must survive the T3 environment install"
-  [ "$(t3_json_field "$settings" 'd.permissions.allow[0]')" = 'Bash(ls:*)' ] || fail "the home's own settings must survive the T3 environment install"
-  [ "$(t3_json_field "$settings" 'd.env.LAVISH_AXI_HOST')" = undefined ] || fail "a key an earlier spawn wrote and this one does not must not linger"
-  [ "$(t3_json_field "$settings" 'Object.keys(d.env).length')" = 19 ] || fail "the env block should hold the home's entry, the 17 Firstmate keys, and their list, got $(t3_json_field "$settings" 'Object.keys(d.env)')"
-  [ "$(t3_json_field "$settings" 'd.env.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "settings env must carry GOTMPDIR"
-  read_settings() { t3_json_field "$settings" "d.env[\"$1\"]"; }
-  assert_t3_secondmate_env read_settings "claude secondmate settings env" "$home" "$thread" autoarm "$id"
-  t3_excluded "$home" .claude/settings.local.json || fail "the settings file must be git-excluded in the home"
+  [ "$(t3_json_field "$home/.claude/settings.local.json" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}' ] \
+    || fail "the home's own settings must stay untouched, got '$(cat "$home/.claude/settings.local.json")'"
+  [ "$(t3_launch_field 'a.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
+  [ "$(t3_launch_field 'Object.keys(a.environment).length')" = 16 ] || fail "the thread environment should carry GOTMPDIR plus the secondmate environment, got $(t3_launch_field 'Object.keys(a.environment)')"
+  read_claude_env() { t3_launch_field "a.environment[\"$1\"]"; }
+  assert_t3_secondmate_env read_claude_env "claude secondmate thread environment" "$home" autoarm "$id"
+  [ "$(t3_launch_field 'a.instructions')" = undefined ] || fail "a secondmate never receives the task-worker statement"
   assert_absent "$home/.codex/config.toml" "a claude secondmate writes no codex config"
   [ -L "$home/config/t3code-token" ] || fail "the secondmate home must link the primary's credential, not copy it"
   cmp -s "$home/config/t3code-token" "$CONFIG/t3code-token" || fail "the home's credential link must resolve to the primary's credential"
   printf 'rotated\n' > "$CONFIG/t3code-token"
   [ "$(cat "$home/config/t3code-token")" = rotated ] || fail "a fresh primary sign-in must reach the secondmate home"
-  pass "fm-spawn.sh --backend t3code --secondmate: project on the home, root-strategy thread, charter message, launch prefix as settings env"
+  pass "fm-spawn.sh --backend t3code --secondmate: project on the home, root-strategy thread, charter message, launch prefix in the thread environment"
 }
 
-test_spawn_codex_secondmate_writes_toml_env() {
-  local id home out thread toml
-  t3_require_tomllib test_spawn_codex_secondmate_writes_toml_env || return 0
+test_spawn_codex_secondmate_rides_thread_environment() {
+  local id home out
   id=$(t3_uid t3smz2)
   t3_case spawn-secondmate-codex
   home="$CASE_DIR/sm-home-codex"
@@ -2127,17 +1812,13 @@ test_spawn_codex_secondmate_writes_toml_env() {
   out=$(spawn_t3_secondmate "$id" "$home" codex gpt-5.6-sol)
   expect_code 0 $? "a codex secondmate on t3code should spawn against the fake T3 server"$'\n'"$out"
   [ "$(t3_dispatch_types)" = "t3_project_create t3_thread_launch t3_thread_send" ] || fail "unexpected mutations '$(t3_dispatch_types)'"
-  thread=$(bash -c '. "$1"; fm_meta_get "$2" t3_thread_id' _ "$ROOT/bin/fm-backend.sh" "$CASE_DIR/home/state/$id.meta")
-  toml="$home/.codex/config.toml"
-  assert_present "$toml" "a codex secondmate home gets .codex/config.toml"
-  [ "$(t3_toml_env "$toml" GOTMPDIR)" = "/tmp/fm-$id/gotmp" ] || fail "config.toml must set GOTMPDIR, got '$(cat "$toml")'"
-  read_toml() { t3_toml_env "$toml" "$1"; }
-  assert_t3_secondmate_env read_toml "codex secondmate config.toml" "$home" "$thread" persistent "$id"
-  t3_excluded "$home" .codex/config.toml || fail "config.toml must be git-excluded in the home"
+  [ "$(t3_launch_field 'a.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
+  read_codex_env() { t3_launch_field "a.environment[\"$1\"]"; }
+  assert_t3_secondmate_env read_codex_env "codex secondmate thread environment" "$home" persistent "$id"
+  assert_absent "$home/.codex/config.toml" "a codex secondmate writes no Codex config"
   assert_absent "$home/.claude/settings.local.json" "a codex secondmate writes no Claude settings"
-  pass "fm-spawn.sh --backend t3code --secondmate codex: launch prefix as .codex/config.toml shell_environment_policy"
+  pass "fm-spawn.sh --backend t3code --secondmate codex: the launch prefix rides the thread environment"
 }
-
 test_spawn_refuses_t3code_when_token_rejected() {
   local proj data state id out status fb
   id=$(t3_uid t3authz1)
@@ -2235,17 +1916,20 @@ test_spawn_abort_returns_lease_only_after_archive() {  # <ok|fail>
   local archive=$1 id out rc return_line
   id=$(t3_uid "t3abortz$archive")
   t3_case "spawn-abort-$archive"
-  [ "$archive" = ok ] || t3_world_set 'w.failTools = { t3_thread_organize: { code: "boom", message: "archive failed" } }'
-  # An untracked CLAUDE.local.md where the channel statement goes aborts the
-  # spawn after the thread exists and before T3 accepts its launch brief.
+  # A refused launch turn aborts the spawn after the thread exists and before
+  # T3 accepts its launch brief.
+  if [ "$archive" = ok ]; then
+    t3_world_set 'w.failTools = { t3_thread_send: { code: "turn_refused", message: "launch turn refused" } }'
+  else
+    t3_world_set 'w.failTools = { t3_thread_send: { code: "turn_refused", message: "launch turn refused" }, t3_thread_organize: { code: "boom", message: "archive failed" } }'
+  fi
   t3_worker_setup "$id"
-  printf 'blocker\n' > "$WORKER_WT/CLAUDE.local.md"
-  printf 'CLAUDE.local.md\n' >> "$(git -C "$WORKER_WT" rev-parse --git-path info/exclude)"
   out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   [ "$rc" -ne 0 ] || fail "the blocked spawn should abort"$'\n'"$out"
   return_line=$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')
   if [ "$archive" = ok ]; then
-    [ "$(t3_dispatch_types)" = "t3_thread_launch t3_thread_organize" ] || fail "an abort must archive the idle thread, got '$(t3_dispatch_types)'"
+    [ "$(t3_log_line_of 'r.tool === "t3_thread_organize"')" -gt "$(t3_log_line_of 'r.tool === "t3_thread_launch"')" ] \
+      || fail "an abort must archive the idle thread, got '$(t3_dispatch_types)'"
     [ "$return_line" -gt "$(t3_log_line_of 'r.tool === "t3_thread_organize"')" ] || fail "an abort must return the lease after the archive"$'\n'"$out"
     pass "fm-spawn.sh --backend t3code: an abort archives the thread, then returns the lease"
   else
@@ -2273,10 +1957,10 @@ test_uncertain_thread_launch_keeps_lease() {
 }
 
 # Inherited Git config can carry credentials (an extraheader bearer token, a
-# url.insteadOf with an embedded token), so the T3 env file carries only
-# Firstmate's own hook entry, for every harness's file.
+# url.insteadOf with an embedded token), so the thread environment carries
+# only Firstmate's own hook entry, for every harness.
 test_spawn_never_writes_inherited_git_config() {
-  local harness model id out rc settings secret=fm-inherited-secret-7f3a
+  local harness model id out rc secret=fm-inherited-secret-7f3a
   for harness in claude codex; do
     case "$harness" in claude) model=claude-sonnet-5 ;; codex) model=gpt-5.6-sol ;; esac
     id=$(t3_uid "t3gitcfgz$harness")
@@ -2289,6 +1973,7 @@ test_spawn_never_writes_inherited_git_config() {
     if grep -rqF "$secret" "$WORKER_WT" "$CASE_DIR/state"; then
       fail "an inherited GIT_CONFIG_VALUE must never be written to disk by a $harness spawn: $(grep -rlF "$secret" "$WORKER_WT" "$CASE_DIR/state")"
     fi
+    assert_not_contains "$(t3_launch_field 'JSON.stringify(a.environment)')" "$secret" "an inherited GIT_CONFIG_VALUE must never reach a $harness thread environment"
   done
   t3_case spawn-git-config-entries
   id=$(t3_uid t3gitcfgzentries)
@@ -2296,17 +1981,18 @@ test_spawn_never_writes_inherited_git_config() {
   out=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=fm-inherited-helper \
     t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "a claude spawn with an inherited credential helper should succeed"$'\n'"$out"
-  settings="$WORKER_WT/.claude/settings.local.json"
-  [ "$(t3_json_field "$settings" 'Object.keys(d.env).filter((k) => k.startsWith("GIT_CONFIG_")).sort().join(" ")')" = \
-    "GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0" ] || fail "the env file carries exactly one Git config entry, got $(t3_json_field "$settings" 'd.env')"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_COUNT')" = 1 ] || fail "the env file's Git config count is Firstmate's one hook entry"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "the env file's one Git config entry is core.hooksPath"
-  [ "$(t3_json_field "$settings" 'd.env.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] \
-    || fail "the env file's hook entry selects the installed hook"
-  pass "fm-spawn.sh --backend t3code: inherited Git config values never reach the env file, which carries only Firstmate's hook entry"
+  [ "$(t3_launch_field 'Object.keys(a.environment).filter((k) => k.startsWith("GIT_CONFIG_")).sort().join(" ")')" = \
+    "GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0" ] || fail "the thread environment carries exactly one Git config entry, got $(t3_launch_field 'JSON.stringify(a.environment)')"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_COUNT')" = 1 ] || fail "the thread environment's Git config count is Firstmate's one hook entry"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "the thread environment's one Git config entry is core.hooksPath"
+  [ "$(t3_launch_field 'a.environment.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] \
+    || fail "the thread environment's hook entry selects the installed hook"
+  pass "fm-spawn.sh --backend t3code: inherited Git config values never reach the thread environment, which carries only Firstmate's hook entry"
 }
 
-test_spawn_secondmate_refuses_symlinked_claude_settings() {
+# A secondmate's environment rides the thread, so its home's settings file is
+# never written: a symlinked one launches and its target stays untouched.
+test_spawn_secondmate_leaves_symlinked_claude_settings_alone() {
   local id home out rc target
   id=$(t3_uid t3smlinkz)
   t3_case spawn-secondmate-settings-link
@@ -2317,19 +2003,20 @@ test_spawn_secondmate_refuses_symlinked_claude_settings() {
   mkdir -p "$home/.claude"
   ln -s "$target" "$home/.claude/settings.local.json"
   out=$(spawn_t3_secondmate "$id" "$home" claude claude-sonnet-5); rc=$?
-  [ "$rc" -ne 0 ] || fail "a symlinked Claude settings file must refuse the spawn"$'\n'"$out"
-  assert_contains "$out" "is a symlink" "the refusal names the symlink"
+  expect_code 0 "$rc" "a claude secondmate must launch beside a symlinked Claude settings file"$'\n'"$out"
   [ "$(cat "$target")" = '{"env":{"OUTSIDE":"1"}}' ] || fail "the symlink's target must be left untouched, got '$(cat "$target")'"
-  pass "fm-spawn.sh --backend t3code --secondmate: a symlinked .claude/settings.local.json is refused, never written through"
+  [ -L "$home/.claude/settings.local.json" ] || fail "the symlink must remain"
+  pass "fm-spawn.sh --backend t3code --secondmate: a symlinked .claude/settings.local.json is never written through"
 }
-
 test_launch_gate_failure_returns_lease() {
   local id out rc
   id=$(t3_uid t3gatez)
   t3_case spawn-launch-gate-down
   t3_worker_setup "$id"
+  # codex: a claude spawn's pull-request-tool version read would spend the
+  # dropped call before the launch request.
   out=$(T3_FAKE_WORLD="$T3_FAKE_WORLD" FM_T3_TREEHOUSE_GET_WORLD='w.dropTools = { t3_environment_read: 1 }' \
-    t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+    t3_worker_spawn "$id" codex --model gpt-5.6-sol); rc=$?
   expect_code 1 "$rc" "a launch whose gate failed must abort spawn"$'\n'"$out"
   [ -z "$(t3_dispatch_types)" ] || fail "no launch may be requested after the gate failed, got '$(t3_dispatch_types)'"
   assert_not_contains "$out" "did not report an outcome" "a launch that was never requested is not an uncertain launch"
@@ -2356,10 +2043,8 @@ test_refused_launch_turn_archives_thread_and_returns_lease() {
       "$(t3_log_line_of 'r.tool === "t3_thread_organize"')" ] || fail "the lease must return after the archive"$'\n'"$out"
     assert_absent "$CASE_DIR/state/$id.meta" "the rolled-back dispatch leaves no record"
     assert_absent "$WORKER_WT/.claude/settings.local.json" "a returned $harness slot must not keep the aborted spawn's Claude settings"
-    assert_absent "$WORKER_WT/CLAUDE.local.md" "a returned $harness slot must not keep the aborted spawn's channel statement"
-    assert_absent "$WORKER_WT/.codex/config.toml" "a returned $harness slot must not keep the aborted spawn's Codex environment"
   done
-  pass "fm-spawn.sh --backend t3code: a refused launch turn archives the thread, removes its environment files, then returns the lease"
+  pass "fm-spawn.sh --backend t3code: a refused launch turn archives the thread, removes its hook files, then returns the lease"
 }
 
 test_misbound_thread_launch_returns_lease() {
@@ -2416,9 +2101,9 @@ test_clean_slot_refresh_failure_returns_lease() {
 }
 
 # A secondmate home outlives an aborted spawn, so once the thread's archive is
-# proven the T3 environment the spawn wrote there leaves with it, and the
+# proven the credential link the spawn wrote there leaves with it, and the
 # home's own settings stay.
-test_aborted_t3_secondmate_spawn_removes_home_env() {
+test_aborted_t3_secondmate_spawn_removes_credential_link() {
   local harness model id home out rc settings
   for harness in claude codex; do
     case "$harness" in claude) model=claude-sonnet-5 ;; codex) model=gpt-5.6-sol ;; esac
@@ -2435,13 +2120,12 @@ test_aborted_t3_secondmate_spawn_removes_home_env() {
     [ "$(t3_log_line_of 'r.tool === "t3_thread_organize"')" -gt "$(t3_log_line_of 'r.tool === "t3_thread_send"')" ] \
       || fail "the aborted $harness secondmate's thread must be archived"$'\n'"$out"
     [ "$(t3_json_field "$settings" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}' ] \
-      || fail "an aborted $harness secondmate spawn must leave only the home's own settings, got '$(cat "$settings")'"
-    assert_absent "$home/.codex/config.toml" "an aborted $harness secondmate spawn must not leave its Codex environment"
+      || fail "an aborted $harness secondmate spawn must leave the home's own settings untouched, got '$(cat "$settings")'"
     [ ! -L "$home/config/t3code-token" ] || fail "an aborted $harness secondmate spawn must not leave the credential link"
     [ -e "$CONFIG/t3code-token" ] || fail "removing the home's credential link must leave the primary's credential"
     assert_absent "$CASE_DIR/home/state/$id.meta" "the rolled-back secondmate leaves no record"
   done
-  pass "fm-spawn.sh --backend t3code --secondmate: an aborted spawn archives its thread, then removes the T3 environment it wrote into the home"
+  pass "fm-spawn.sh --backend t3code --secondmate: an aborted spawn archives its thread, then removes the credential link it wrote into the home"
 }
 
 test_uncertain_launch_message_keeps_task_record() {
@@ -2480,9 +2164,6 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
     "harness=codex" "kind=scout" "mode=no-mistakes" "yolo=off" \
     "backend=t3code" "t3_thread_id=$thread" "t3_project_id=proj-1" \
     "decisions_reviewed=1" "decision_keys="
-  mkdir -p "$wt/.codex"
-  printf '# Generated by Firstmate T3 Code\n[shell_environment_policy]\nset = { FM_TASK_ID = "%s" }\n' "$id" > "$wt/.codex/config.toml"
-  printf 'statement\n' > "$wt/CLAUDE.local.md"
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   out=$( PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
@@ -2490,8 +2171,6 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
     "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
   rc=$?
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
-  assert_absent "$wt/.codex/config.toml" "teardown must remove the codex env config before the slot is reused"
-  assert_absent "$wt/CLAUDE.local.md" "teardown must remove the channel statement before the slot is reused"
   [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "teardown must archive an idle thread exactly once, without an interrupt, got '$(t3_dispatch_types)'"
   local archive_line return_line
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
@@ -2503,22 +2182,12 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
 }
 
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete() {
-  local home data state config id out rc thread=mcp:4e0f2a6b-9d3c-4b5e-af4f-0123456789cd archive_line harness=${1:-claude} journal='' nolsof
-  t3_require_tomllib test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete || return 0
+  local home data state config id out rc thread=mcp:4e0f2a6b-9d3c-4b5e-af4f-0123456789cd archive_line harness=claude nolsof
   command -v lsof >/dev/null 2>&1 || { printf 'note: %s skipped: lsof is required to prove a process left the home\n' "${FUNCNAME[0]}"; return 0; }
   id=$(t3_uid "t3smtdz1-$harness")
   t3_case "teardown-secondmate-$harness" running
   t3_world "$(t3_thread_json "$thread" running false)"
   home="$CASE_DIR/sm-home"; data="$CASE_DIR/data"; state="$CASE_DIR/state"; config="$CONFIG"
-  if [ "$harness" = codex ]; then
-    fm_git_worktree "$CASE_DIR/home-project" "$home" "fm/$id"
-    mkdir "$home/.codex"
-    printf 'model = "gpt-5.6-sol"\n' > "$home/.codex/config.toml"
-    git -C "$home" add .codex/config.toml
-    git -C "$home" -c user.name=t -c user.email=t@example.invalid commit -qm config
-    "$ROOT/bin/fm-t3code-codex-env.sh" install "$home" "FM_HOME=$home" || fail "install secondmate overlay"
-    journal=$(git -C "$home" rev-parse --git-path fm-t3code-codex-env.json)
-  fi
   mkdir -p "$data" "$state" "$home/state" "$home/data" "$home/config" "$home/projects" "$home/bin" "$home/.claude"
   printf '%s\n' "$id" > "$home/.fm-secondmate-home"
   printf '# Firstmate\n' > "$home/AGENTS.md"
@@ -2541,7 +2210,6 @@ test_secondmate_teardown_archives_thread_before_home_removal_without_project_del
   assert_contains "$out" "lsof is unavailable" "the refusal names the missing lsof"
   [ -z "$(t3_dispatch_types)" ] || fail "a missing lsof must refuse before the thread is interrupted or archived, got '$(t3_dispatch_types)'"
   assert_present "$state/$id.meta" "a missing lsof keeps the endpoint record"
-  [ -z "$journal" ] || assert_present "$journal" "a missing lsof keeps the T3 environment the home still runs on"
   nolsof="$CASE_DIR/nolsof"
   mkdir -p "$nolsof"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$nolsof/lsof"
@@ -2568,7 +2236,6 @@ test_secondmate_teardown_archives_thread_before_home_removal_without_project_del
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
   [ "$(t3_request "$archive_line" 'r.probe')" = true ] || fail "the thread must be archived while the home still exists"
   assert_absent "$home" "teardown should remove the secondmate home"
-  [ -z "$journal" ] || assert_absent "$journal" "secondmate cleanup must retire its tracked Codex overlay before removing the home"
   assert_absent "$state/$id.meta" "teardown should remove task metadata"
   pass "fm-teardown.sh backend=t3code secondmate: interrupts and archives, then ends the home's lingering provider process before the home is removed; an unprovable scan keeps the home"
 }
@@ -2933,11 +2600,10 @@ test_pooled_t3_secondmate_home_returned_only_after_provider_exits() {
     "window=fm-$id" "endpoint_task_id=$id" "worktree=$home" "project=$home" \
     "harness=claude" "kind=secondmate" "mode=secondmate" "yolo=off" \
     "backend=t3code" "t3_thread_id=$thread" "t3_project_id=proj-sm" "home=$home"
-  # What the T3 spawn wrote into the home, beside the home's own settings.
-  mkdir -p "$home/.claude" "$home/.codex"
-  printf '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep","FM_SUPERVISOR_TARGET":"%s","FM_T3CODE_ENV_KEYS":"FM_SUPERVISOR_TARGET"}}\n' \
-    "$thread" > "$home/.claude/settings.local.json"
-  printf '# Generated by Firstmate T3 Code\n[shell_environment_policy]\nset = { FM_HOME = "%s" }\n' "$home" > "$home/.codex/config.toml"
+  # What the T3 spawn wrote into the home, the credential link, beside the
+  # home's own settings.
+  mkdir -p "$home/.claude"
+  printf '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}\n' > "$home/.claude/settings.local.json"
   ln -s "$CONFIG/t3code-token" "$home/config/t3code-token"
   fb=$(make_treehouse_fakebin "$CASE_DIR")
   (cd "$home/state" && exec sleep 300) &
@@ -2945,9 +2611,8 @@ test_pooled_t3_secondmate_home_returned_only_after_provider_exits() {
   cat > "$fb/treehouse" <<TH
 #!/usr/bin/env bash
 if kill -0 $provider 2>/dev/null; then printf 'provider-alive\n'; else printf 'provider-gone\n'; fi >> '$CASE_DIR/return.log'
-if [ -e '$home/.codex/config.toml' ] || [ -L '$home/config/t3code-token' ] \
-  || grep -q FM_SUPERVISOR_TARGET '$home/.claude/settings.local.json'; then
-  printf 't3-env-present\n' >> '$CASE_DIR/return.log'
+if [ -L '$home/config/t3code-token' ]; then
+  printf 't3-credential-link-present\n' >> '$CASE_DIR/return.log'
 fi
 exit 0
 TH
@@ -2960,11 +2625,11 @@ TH
   wait "$provider" 2>/dev/null || true
   expect_code 0 "$rc" "pooled t3code secondmate teardown should succeed"$'\n'"$out"
   [ "$(cat "$CASE_DIR/return.log" 2>/dev/null)" = provider-gone ] \
-    || fail "the slot must be returned exactly once, after the provider process ended and without the T3 environment, got '$(cat "$CASE_DIR/return.log" 2>/dev/null)'"$'\n'"$out"
+    || fail "the slot must be returned exactly once, after the provider process ended and without the credential link, got '$(cat "$CASE_DIR/return.log" 2>/dev/null)'"$'\n'"$out"
   [ "$(t3_json_field "$home/.claude/settings.local.json" 'JSON.stringify(d)')" = '{"permissions":{"allow":["Bash(ls:*)"]},"env":{"CAPTAIN_VAR":"keep"}}' ] \
-    || fail "the home's own settings must survive while Firstmate's keys leave, got '$(cat "$home/.claude/settings.local.json")'"
+    || fail "the home's own settings must stay untouched, got '$(cat "$home/.claude/settings.local.json")'"
   [ -e "$CONFIG/t3code-token" ] || fail "removing the home's credential link must leave the primary's credential"
-  pass "fm-teardown.sh backend=t3code pooled secondmate: the slot returns only after the provider ended, without the T3 environment the spawn wrote"
+  pass "fm-teardown.sh backend=t3code pooled secondmate: the slot returns only after the provider ended, without the credential link the spawn wrote"
 }
 
 # A T3 secondmate torn down as the child of another secondmate goes through
@@ -3085,9 +2750,9 @@ test_spawn_rejected_lease_is_neither_cleaned_nor_returned() {
   pass "fm-spawn.sh --backend t3code: a lease the isolation guard rejects is neither cleaned nor returned"
 }
 
-# A Codex worker never writes CLAUDE.local.md, so one the project tracks is
-# project instructions that teardown leaves in the slot.
-test_teardown_keeps_tracked_claude_local_md() {
+# A T3 worker writes neither CLAUDE.local.md nor Codex config, so ones the
+# project tracks are project files that teardown leaves in the slot.
+test_teardown_keeps_tracked_claude_local_md_and_codex_config() {
   local proj wt data state id out rc neutral fb thread=mcp:5a9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
   id=$(t3_uid t3teardownz2)
   t3_case teardown-tracked-claude-local completed
@@ -3095,7 +2760,9 @@ test_teardown_keeps_tracked_claude_local_md() {
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   printf 'project instructions\n' > "$wt/CLAUDE.local.md"
-  git -C "$wt" add CLAUDE.local.md
+  mkdir -p "$wt/.codex"
+  printf 'model = "project-model"\n' > "$wt/.codex/config.toml"
+  git -C "$wt" add CLAUDE.local.md .codex/config.toml
   git -C "$wt" -c user.name=t -c user.email=t@example.invalid -c core.hooksPath=/dev/null commit -qm instructions
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
   printf 'report\n' > "$data/$id/report.md"
@@ -3113,7 +2780,8 @@ test_teardown_keeps_tracked_claude_local_md() {
   rc=$?
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
   assert_grep "project instructions" "$wt/CLAUDE.local.md" "teardown must keep a CLAUDE.local.md the project tracks"
-  pass "fm-teardown.sh backend=t3code: a tracked CLAUDE.local.md stays in the slot"
+  [ "$(cat "$wt/.codex/config.toml")" = 'model = "project-model"' ] || fail "teardown must keep a Codex config the project tracks"
+  pass "fm-teardown.sh backend=t3code: a tracked CLAUDE.local.md and Codex config stay in the slot"
 }
 
 # The watcher accepts a fractional poll interval, so the T3 event wait does too.
@@ -3803,22 +3471,15 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn
 test_backlog_row_title_reader
 test_spawn_titles_thread_from_backlog_item
 test_claude_pr_tool_clause_version_boundary
-test_spawn_codex_preserves_tracked_codex_config
-test_tracked_codex_overlay_recovery
-test_spawn_codex_refuses_tracked_codex_config
-test_spawn_claude_refuses_tracked_claude_local_md
-test_spawn_claude_refuses_worktree_symlink
-test_untracked_codex_config_is_preserved
-test_codex_cleanup_without_journal_needs_no_python
-test_codex_worker_ignores_untracked_config_in_main_checkout
-test_spawn_codex_scout_writes_toml_env_with_traceparent
-test_spawn_codex_warns_unless_codex_trusts_the_project
+test_spawn_refuses_t3_without_thread_channels
+test_spawn_claude_leaves_project_claude_local_md_alone
+test_codex_worker_leaves_project_codex_config_alone
+test_spawn_codex_scout_thread_environment_carries_traceparent
 test_spawn_secondmate_runs_thread_in_home_with_env
-test_spawn_codex_secondmate_writes_toml_env
+test_spawn_codex_secondmate_rides_thread_environment
 test_spawn_refuses_t3code_when_token_rejected
 test_scout_teardown_stops_and_archives_before_slot_return
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete
-test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete codex
 test_pooled_t3_secondmate_home_returned_only_after_provider_exits
 test_teardown_refuses_when_t3_is_unreachable
 test_spawn_refuses_launch_settings_t3_cannot_honor claude-permission-mode auto "config/claude-permission-mode=auto"
@@ -3831,17 +3492,17 @@ test_spawn_abort_returns_lease_only_after_archive ok
 test_spawn_abort_returns_lease_only_after_archive fail
 test_uncertain_thread_launch_keeps_lease
 test_spawn_never_writes_inherited_git_config
-test_spawn_secondmate_refuses_symlinked_claude_settings
+test_spawn_secondmate_leaves_symlinked_claude_settings_alone
 test_launch_gate_failure_returns_lease
 test_refused_launch_turn_archives_thread_and_returns_lease
 test_misbound_thread_launch_returns_lease
 test_dirty_leased_slot_is_kept_without_a_thread
 test_clean_slot_refresh_failure_returns_lease
-test_aborted_t3_secondmate_spawn_removes_home_env
+test_aborted_t3_secondmate_spawn_removes_credential_link
 test_nested_t3_secondmate_home_reaped_before_removal
 test_uncertain_launch_message_keeps_task_record
 test_spawn_rejected_lease_is_neither_cleaned_nor_returned
-test_teardown_keeps_tracked_claude_local_md
+test_teardown_keeps_tracked_claude_local_md_and_codex_config
 test_fractional_poll_event_wait
 test_housekeeping_removes_the_iterated_stale_marker
 test_t3_restart_inert_without_t3
@@ -3866,6 +3527,5 @@ test_spawn_names_supervisor_thread_as_crew_parent upstream 'delete w.crewLineage
 test_spawn_names_supervisor_thread_as_crew_parent ambiguous 'w.threads["t-other"].status = "running"; w.threads["t-other"].activeRunId = "r-t-other"' ''
 test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease
-test_spawn_secondmate_rides_thread_environment
-test_spawn_external_forge_codex_refuses_untrusted_project
+test_spawn_external_forge_codex_ship_carries_push_guard
 test_kill_stops_delegated_threads
