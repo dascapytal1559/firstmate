@@ -395,6 +395,52 @@ test_thread_for_root() {
   pass "fm-t3-mcp thread-for-root: only an unarchived, running, worktree-less thread on the root resolves"
 }
 
+# pin-coordinator pins exactly the thread thread-for-root finds, one per
+# project, only where T3 advertises coordinatorRestartNote; elsewhere it looks
+# nothing up and changes nothing.
+test_pin_coordinator() {
+  local project captain other pins
+  fresh_case pin-coordinator '{"toolset":"current","coordinatorRestartNote":true}'
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp pin-coordinator --root "$TMP_ROOT/proj"
+  expect_code 5 "$RC" "with no live root thread there is nothing to pin"
+  printf 'go' > "$TMP_ROOT/msg"
+  mcp launch --project "$project" --title captain --model-selection "$SEL"
+  captain=$(field "$OUT" threadId)
+  mcp send --thread "$captain" --message-file "$TMP_ROOT/msg" --client-request-id c
+  mcp launch --project "$project" --title earlier --model-selection "$SEL"
+  other=$(field "$OUT" threadId)
+  FM_T3_ID="$other" t3_fake_set 'w.threads[process.env.FM_T3_ID].coordinator = true'
+  mcp pin-coordinator --root "$TMP_ROOT/proj"
+  expect_code 0 "$RC" "the live root thread is pinned: $ERR"
+  assert_equals true "$(field "$OUT" pinned)" "the result reports the pin"
+  assert_equals "$captain" "$(field "$OUT" threadId)" "the pinned thread is the live root thread"
+  mcp read --thread "$captain"
+  assert_equals true "$(field "$OUT" thread.coordinator)" "the captain thread reads back pinned"
+  mcp read --thread "$other"
+  assert_equals false "$(field "$OUT" thread.coordinator)" "pinning unpins the project's earlier coordinator"
+  mcp pin-coordinator --root "$TMP_ROOT/proj"
+  expect_code 0 "$RC" "pinning again is harmless: $ERR"
+  assert_equals true "$(field "$OUT" pinned)" "the repeat still reports the pin"
+  pins=$(t3_fake_calls t3_thread_configure | grep -c '"coordinator":true' || true)
+  assert_equals 2 "$pins" "each pin is one t3_thread_configure coordinator:true"
+
+  fresh_case pin-coordinator-absent '{"toolset":"current"}'
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title captain --model-selection "$SEL"
+  captain=$(field "$OUT" threadId)
+  mcp send --thread "$captain" --message-file "$TMP_ROOT/msg" --client-request-id c
+  : > "$T3_FAKE_LOG"
+  mcp pin-coordinator --root "$TMP_ROOT/proj"
+  expect_code 0 "$RC" "a T3 without the feature is no error: $ERR"
+  assert_equals false "$(field "$OUT" pinned)" "a T3 without the feature pins nothing"
+  [ -z "$(t3_fake_calls t3_thread_configure)$(t3_fake_calls t3_thread_list)" ] \
+    || fail "a T3 without the feature gets no thread lookup or configure call"
+  pass "fm-t3-mcp pin-coordinator: pins the live root thread as the one coordinator only where T3 offers it"
+}
+
 test_typed_failure_and_transport_errors() {
   local thread
   fresh_case failures
@@ -1399,6 +1445,7 @@ test_launch_binds_workspace
 test_launch_refusals
 test_send_state_capture_interrupt_archive
 test_thread_for_root
+test_pin_coordinator
 test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_start

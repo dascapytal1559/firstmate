@@ -194,6 +194,18 @@ console.error("error: " + d.error.message);
   esac
 }
 
+# fm_backend_t3code_pin_coordinator <home>: pin the live T3 thread running the
+# firstmate whose home is <home> (the thread fm_backend_t3code_thread_for_home
+# finds) as its project's coordinator, so the T3 Code fork wakes it after
+# every server restart (bin/fm-t3-mcp.mjs pin-coordinator). Silent: prints
+# nothing, and 0 means pinned or a server without the feature; any failure,
+# including no or several live threads, returns nonzero.
+fm_backend_t3code_pin_coordinator() {  # <home>
+  local real
+  real=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  fm_backend_t3code_mcp pin-coordinator --root "$real" >/dev/null 2>&1
+}
+
 # One logical delivery keeps one client request id across retries and
 # restarts: T3 derives the message id from it within the auth session that
 # sent it, so a resend after a lost reply lands on the message T3 already

@@ -34,6 +34,10 @@
 #     steer failed. A worker whose
 #     claim is an open decision, a captain-held wait, or a terminal line is
 #     left alone: its claim stays true, and firstmate's own answer reopens it.
+#     Every recover first pins this home's own live T3 thread as its
+#     project's coordinator where the server offers it
+#     (fm_backend_t3code_pin_coordinator), so the next restart wakes it even
+#     when no crew run was cut; that pin is silent and never stops recovery.
 #
 # Marker: <state>/<id>.t3-restart, owned here, removed by teardown.
 #   server=<the restarted server's identity>
@@ -58,7 +62,7 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 RECORD="$STATE/.t3code-server-start"
 
 usage() {
-  sed -n '14,33p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '14,40p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -79,6 +83,8 @@ fm_backend_source t3code >/dev/null 2>&1 || {
   [ "$VERB" = recover ] || echo "t3-restart: unknown (the t3code adapter did not load)"
   exit 0
 }
+
+[ "$VERB" != recover ] || fm_backend_t3code_pin_coordinator "$FM_HOME" || true
 
 CURRENT=$(fm_backend_t3code_server_start 2>/dev/null) || CURRENT=
 RECORDED=

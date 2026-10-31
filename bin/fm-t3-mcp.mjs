@@ -184,6 +184,15 @@
 //     counts, a delegated subagent does not: exit 0 with threadId; exit 5
 //     when there is none; exit 6 when there are several (threadIds names
 //     them).
+//   fm-t3-mcp.mjs pin-coordinator --root <abs-path>
+//     Pins the thread thread-for-root finds as its project's coordinator
+//     (t3_thread_configure coordinator:true, which unpins any earlier one in
+//     that project), so T3 sends it one note after every server start. Only
+//     where orchestrator_capabilities advertises coordinatorRestartNote:
+//     elsewhere it looks nothing up and answers pinned:false. A pin is proven
+//     by the thread reading back coordinator:true, else exit 1
+//     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
+//     harmless.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
@@ -289,6 +298,10 @@ const APPROVAL_DECISIONS = ["allow", "deny"];
 // The orchestrator_capabilities feature that lets the pending-request tools
 // list, read, and answer permission approvals.
 const APPROVAL_FEATURE = "approvalResponses";
+// The orchestrator_capabilities feature of a T3 that accepts
+// t3_thread_configure coordinator and sends every pinned coordinator one
+// restart note after each server start (the T3 Code fork).
+const COORDINATOR_FEATURE = "coordinatorRestartNote";
 // The pairing code must cover every scope T3 grants a full-access mcp-client:
 // T3 0.1.0 adds settings:write and source-control:write to the read and
 // operate scopes of the 0.0.46 nightlies, and refuses a code that lacks one.
@@ -1712,10 +1725,7 @@ async function listThreads(session, projectId, statuses) {
 // project rooted at <root>, the unarchived thread with no worktree of its own
 // whose run is active (the daemon starts from inside the captain's own turn).
 // A fork is an ordinary conversation and counts; a delegated subagent does not.
-async function threadForRoot(flags) {
-  const rootPath = need(flags, "root");
-  if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
-  const { session } = await verifiedSession(flags);
+async function rootThread(session, rootPath) {
   const project = await projectForRoot(session, rootPath);
   if (!project) throw new Refusal("no_thread", `T3 has no project rooted at ${rootPath}`, 5);
   const live = [];
@@ -1725,9 +1735,33 @@ async function threadForRoot(flags) {
     if (t.relationshipToParent === "subagent" || t.archived === true || t.archivedAt || (t.worktreePath ?? null) !== null) continue;
     if (ACTIVE_STATUSES.includes(t.status)) live.push(item.threadId);
   }
-  if (live.length === 1) return { ok: true, threadId: live[0] };
+  if (live.length === 1) return live[0];
   if (live.length === 0) throw new Refusal("no_thread", `no live T3 thread runs in ${rootPath}`, 5);
   throw new Refusal("ambiguous_thread", `${live.length} live T3 threads run in ${rootPath} (${live.join(", ")}); set FM_SUPERVISOR_TARGET to the captain thread id`, 6, { threadIds: live });
+}
+
+async function threadForRoot(flags) {
+  const rootPath = need(flags, "root");
+  if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
+  const { session } = await verifiedSession(flags);
+  return { ok: true, threadId: await rootThread(session, rootPath) };
+}
+
+// pin-coordinator: pin the thread-for-root thread as its project's
+// coordinator, so the T3 Code fork's restart note reaches it after every
+// server start, not only after one that cut a crew run. Checked before any
+// thread is looked up, so a server without the feature costs one read.
+async function pinCoordinator(flags) {
+  const rootPath = need(flags, "root");
+  if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
+  const { session } = await verifiedSession(flags);
+  const caps = await session.call("orchestrator_capabilities", {});
+  if (caps?.features?.[COORDINATOR_FEATURE] !== true) return { ok: true, pinned: false, threadId: null };
+  const threadId = await rootThread(session, rootPath);
+  await session.call("t3_thread_configure", { threadId, coordinator: true });
+  const t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  if (t.coordinator !== true) throw new Refusal("pin_unproven", `T3 accepted the coordinator pin for ${threadId} but the thread does not read back pinned`, 1, { threadId });
+  return { ok: true, pinned: true, threadId };
 }
 
 const VERBS = {
@@ -1751,6 +1785,7 @@ const VERBS = {
   archive,
   close,
   "thread-for-root": threadForRoot,
+  "pin-coordinator": pinCoordinator,
 };
 
 async function main(argv) {

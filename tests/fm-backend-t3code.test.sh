@@ -3318,6 +3318,47 @@ test_t3_restart_failed_ring_retries() {
   pass "t3code restart: a failed ring keeps the restart pending for exactly that worker, and an unreadable server is no restart"
 }
 
+# Every recovery pins this home's own live T3 thread (the root thread running
+# in the home, a main's or a secondmate's alike) as its project's coordinator
+# where T3 offers it, so the next restart wakes it even with no crew run cut.
+# The pin is silent, repeatable, skipped on a T3 without the feature, and never
+# stops recovery.
+test_t3_restart_recover_pins_coordinator() {
+  local out main=mcp:aa000021-0000-4000-8000-000000000021 other=mcp:aa000022-0000-4000-8000-000000000022
+  t3_case restart-pin completed
+  # The home is the project root its own thread runs in.
+  RS_HOME="$REPO"; RS_STATE="$RS_HOME/state"; RS_DATA="$RS_HOME/data"
+  mkdir -p "$RS_STATE" "$RS_DATA"
+  t3_world "$(t3_thread_json "$main" running false)"
+  t3_world_set 'w.toolset = "current"; w.coordinatorRestartNote = true'
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "the pin prints nothing"
+  assert_equals 1 "$(t3_fake_calls t3_thread_configure | grep -c "\"threadId\":\"$main\",\"coordinator\":true" || true)" \
+    "recovery pins the home's own live thread once"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "a repeat pin prints nothing"
+  assert_equals 2 "$(t3_fake_calls t3_thread_configure | grep -c '"coordinator":true' || true)" "every recovery pins again"
+
+  # Two live root threads leave the home's own thread unknown: nothing is
+  # pinned, and recovery still runs and stays silent.
+  t3_world "$(t3_thread_json "$main" running false)" "$(t3_thread_json "$other" running false)"
+  t3_world_set 'w.toolset = "current"; w.coordinatorRestartNote = true'
+  : > "$LOG"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "an unresolvable pin is silent"
+  [ -z "$(t3_fake_calls t3_thread_configure)" ] || fail "an ambiguous home thread is never pinned"
+
+  # A T3 without the feature gets no thread lookup and no pin.
+  t3_world "$(t3_thread_json "$main" running false)"
+  t3_world_set 'w.toolset = "current"'
+  : > "$LOG"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "a T3 without coordinator pins is silent"
+  [ -z "$(t3_fake_calls t3_thread_configure)$(t3_fake_calls t3_thread_list)" ] \
+    || fail "a T3 without coordinatorRestartNote gets no lookup or pin"
+  pass "t3code restart: recovery pins the home's own thread as coordinator where T3 offers it, silently and repeatably"
+}
+
 # Only a home signed in to T3 runs any of it.
 test_t3_restart_inert_without_t3() {
   local home="$TMP_ROOT/restart-off"
@@ -3808,6 +3849,7 @@ test_t3_main_guard_keeps_the_token_out_of_the_transcript
 test_t3_main_guard_restart_reminder
 test_t3_restart_recovery
 test_t3_restart_failed_ring_retries
+test_t3_restart_recover_pins_coordinator
 test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change
 test_t3_done_then_same_run_completed_turn_end_absorbed
 test_t3_done_then_run_failed_reports_the_bad_ending_once

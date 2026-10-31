@@ -52,6 +52,11 @@
 //     approval's runtime request), its read reads one, and its respond answers
 //     one with decision allow|deny and optional feedback; without it the
 //     pending-request tools see only user-input questions.
+//   - a T3 with coordinator pins (world coordinatorRestartNote, the T3 Code
+//     fork) advertises features.coordinatorRestartNote, its
+//     t3_thread_configure takes coordinator true|false (true unpins any other
+//     thread in that project), and t3_thread_read and t3_thread_list report
+//     every thread's coordinator boolean; without it the argument is ignored.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -66,7 +71,8 @@
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
-//   (override what a launch binds), threadFacts, crewLineage, noStop,
+//   (override what a launch binds), threadFacts, crewLineage,
+//   coordinatorRestartNote, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -299,7 +305,11 @@ async function callTool(w, name, a) {
     case "orchestrator_capabilities":
       return [ok({
         parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search),
-        features: { appOwnedSubagents: true, ...(w.approvalResponses ? { approvalResponses: true } : {}) },
+        features: {
+          appOwnedSubagents: true,
+          ...(w.approvalResponses ? { approvalResponses: true } : {}),
+          ...(w.coordinatorRestartNote ? { coordinatorRestartNote: true } : {}),
+        },
       }), false];
     case "t3_project_list":
       return [ok({ projects, nextCursor: null }), false];
@@ -361,7 +371,7 @@ async function callTool(w, name, a) {
       // T3 pages forward from afterPosition (exclusive), oldest first.
       const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1));
       const items = matching.slice(0, a.limit ?? 50);
-      const thread = { ...detail(t), itemCount: (t.items ?? []).length };
+      const thread = { ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}) };
       return [ok({ thread, recentRuns: byOrdinal(t).slice(0, a.runLimit ?? 5), items, nextPosition: items.at(-1)?.position ?? null, hasMore: matching.length > items.length }), false];
     }
     case "t3_thread_list": {
@@ -373,9 +383,15 @@ async function callTool(w, name, a) {
       const cursor = a.cursor ?? 0;
       const page = list.slice(cursor, cursor + (a.limit ?? 50));
       const nextCursor = cursor + page.length < list.length ? cursor + page.length : null;
-      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map(listItem), nextCursor, total: list.length }), false];
+      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}) })), nextCursor, total: list.length }), false];
     }
     case "t3_thread_configure":
+      if (w.coordinatorRestartNote && typeof a.coordinator === "boolean") {
+        if (!t) return [notFound(a.threadId), false];
+        if (a.coordinator) for (const x of Object.values(threads)) if (x.projectId === t.projectId) x.coordinator = false;
+        t.coordinator = a.coordinator;
+        return [ok({ threadId: t.threadId, coordinator: t.coordinator }), true];
+      }
       if (a.modelSelection === undefined && offeredTools(w).includes("t3_thread_configuration")) {
         return [err("invalid_params", "Invalid parameters for tool 't3_thread_configure': Missing key at [\"modelSelection\"]"), false];
       }
