@@ -263,3 +263,30 @@ This is the Firstmate half:
 
 The evidence is new fake-server cases for the pin (pinned and read back, an earlier coordinator unpinned, repeated, skipped on a T3 without the feature) and for session start's restart recovery (silent, repeated, skipped when the home's thread is ambiguous or T3 lacks the feature), which fails without the pin; the T3 helper and T3 backend suites pass (47 and 119), along with the linters and the documentation check.
 The quiet-restart note only arrives once the T3 half lands in the fork.
+
+## 11. Firstmate needs the T3 Code fork, and the stock-T3 fallback is gone (31 October 2026)
+
+![Before: the fork's thread launch for every agent, plus a folder-file fallback for Claude and Codex on stock T3. After: the thread launch only, and stock T3 refused for every agent](media/t3-fork-only.svg)
+
+The question from the architecture review, and the answer:
+
+> FirstMate: tie FirstMate to the T3 fork and drop the stock-T3 fallback?
+>
+> Yeah, we can tie it. We can drop the stock T three fallback
+>
+> (31 October 2026)
+
+On a T3 without per-thread environment and instructions, Firstmate used to write a worker's environment and its "the brief is first-party" statement into files in its folder: Claude's local settings and a `CLAUDE.local.md`, and for Codex an overlay on `.codex/config.toml` with a private Git journal to restore it, guarded by a Codex trust check.
+This fork only ever talks to the captain's T3 fork, which has both, so all of that was dead weight.
+
+What changed:
+
+- A T3 whose agent does not offer both per-thread settings is now refused for every agent, Claude and Codex included, workers and secondmates alike, before anything is leased, with a message that names the T3 Code fork as the fix.
+- The folder-file writers, the Codex overlay script, the Codex trust check, and the refusals that protected a project's own `CLAUDE.local.md` and Codex config are deleted, along with their cleanup in teardown and in an aborted spawn.
+- A secondmate's home now only gets the credential link, so that link is all its cleanup removes.
+- About 375 lines of scripts went (the 161-line Codex overlay script among them), and the tests shrank by about 350 lines while keeping coverage: each fallback test became a check that stock T3 is refused, or that a project's own `CLAUDE.local.md` and Codex config are left exactly as found.
+
+The trade-off, accepted: this fork can no longer run workers on stock T3 at all, and upstream Firstmate changes that touch the deleted lines will conflict when merged in.
+
+The evidence is the T3 backend suite (108 passing), the T3 helper suite (45), the away-daemon suite (156), and the teardown safety suite (22), plus lint and the docs check.
+The live check, a Claude and a Codex worker spawned on the fork's T3 still binding their environment and statement, is left to Firstmate.

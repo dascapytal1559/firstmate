@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="300" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">Firstmate now talks only to the T3 Code fork</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Before: two ways to hand a worker its environment and first-party statement. After: one, and a T3 without it is refused up front.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="86" width="440" height="170" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="110" font-weight="600">Before</text>
+    <text x="40" y="136">Fork T3: environment and statement ride the thread launch</text>
+    <text x="40" y="162">Stock T3, Claude: write .claude/settings.local.json env</text>
+    <text x="40" y="180">and CLAUDE.local.md into the worktree</text>
+    <text x="40" y="206">Stock T3, Codex: overlay .codex/config.toml, keep a Git</text>
+    <text x="40" y="224">journal to restore it, and check Codex trust first</text>
+    <text x="40" y="244" fill="#57606a">Stock T3, any other agent: refused</text>
+
+    <rect x="496" y="86" width="440" height="170" rx="8" fill="#eef6ee" stroke="#4a8a4a"/>
+    <text x="512" y="110" font-weight="600" fill="#2f5f2f">After</text>
+    <text x="512" y="136">Fork T3: environment and statement ride the thread launch,</text>
+    <text x="512" y="154">for every agent, Claude and Codex included</text>
+    <text x="512" y="180">Stock T3: refused for every agent before anything is leased,</text>
+    <text x="512" y="198">naming the T3 Code fork as the fix</text>
+    <text x="512" y="224">Nothing is written into a worktree or home to carry them,</text>
+    <text x="512" y="242">so teardown has nothing extra to undo</text>
+  </g>
+  <text x="24" y="284" font-size="12" fill="#8c959f">Source: bin/fm-spawn.sh spawn_t3code_require_channels; tests/fm-backend-t3code.test.sh</text>
+</svg>
