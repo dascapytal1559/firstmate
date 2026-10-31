@@ -290,3 +290,13 @@ The trade-off, accepted: this fork can no longer run workers on stock T3 at all,
 
 The evidence is the T3 backend suite (108 passing), the T3 helper suite (45), the away-daemon suite (156), and the teardown safety suite (22), plus lint and the docs check.
 The live check, a Claude and a Codex worker spawned on the fork's T3 still binding their environment and statement, is left to Firstmate.
+
+## 12. No more false "telemetry is on" warning (1 November 2026)
+
+> Sure assume default telemetry off
+
+Every T3 spawn and control action checks whether the T3 server counts worker turns, and it treated a server without `T3CODE_TELEMETRY_ENABLED` as telemetry on, which was right for stock T3.
+The captain's T3 fork defaults telemetry off, so the live server, with the setting simply absent, drew a false warning on every action.
+
+Now an absent setting reads off; an explicit `true` (or any value other than false, 0, no or off) still reads on and warns, and a server whose process cannot be read still warns as unknown.
+The evidence is the T3 helper suite, with the default case now expecting off and no warning and a new case expecting on plus the warning for a server started with telemetry enabled.

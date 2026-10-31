@@ -21,8 +21,9 @@
 //     ~/.t3/userdata/server-runtime.json.
 //   fm-t3-mcp.mjs status
 //     Credential expiry, the capability gate, whether a loopback server's
-//     own process runs with telemetry off (telemetry: off|on|unknown; anything
-//     but off adds a stderr warning), and that process's identity
+//     own process runs with telemetry off (telemetry: off|on|unknown; the T3
+//     fork defaults it off, so only an explicit enable or an unreadable
+//     listener reads otherwise, and anything but off adds a stderr warning), and that process's identity
 //     (serverStart: "<pid>@<kernel start time>", null for a remote origin or
 //     an unreadable listener), which changes on every server restart.
 //     Changes nothing.
@@ -701,14 +702,15 @@ function isNotFound(err) {
   return err instanceof Refusal && err.exit === 3 && /not[_ ]found/i.test(err.code);
 }
 
-// T3 product telemetry is on unless the server process runs with
-// T3CODE_TELEMETRY_ENABLED false (apps/server's AnalyticsService config).
-// Only a loopback server's own process environment can show that, read from
-// the listening process on this machine; anything else reads `unknown`.
+// The captain's T3 fork defaults product telemetry off, so a server process
+// without T3CODE_TELEMETRY_ENABLED reads off and only an explicit truthy value
+// reads on. Only a loopback server's own process environment can show that,
+// read from the listening process on this machine; anything else reads
+// `unknown`.
 export function telemetryState(listener) {
   if (listener === null) return "unknown";
   const m = listener.env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
-  if (!m) return "on";
+  if (!m) return "off";
   return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
 }
 

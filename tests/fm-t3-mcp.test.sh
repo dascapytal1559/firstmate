@@ -474,9 +474,21 @@ test_telemetry_reported() {
   fresh_case telemetry-default
   mcp status
   expect_code 0 "$RC" "status against a default server: $ERR"
-  assert_not_equals off "$(field "$OUT" telemetry)" "a server without the setting is not reported off"
-  assert_contains "$ERR" "T3CODE_TELEMETRY_ENABLED=false" "telemetry not proven off warns with the fix"
-  pass "fm-t3-mcp status: reports telemetry off only when the server process proves it, and warns otherwise"
+  if command -v lsof >/dev/null 2>&1; then
+    assert_equals off "$(field "$OUT" telemetry)" "a server without the setting reads off, the T3 fork's default"
+    assert_not_contains "$ERR" "telemetry" "the default warns nothing"
+  fi
+  t3_fake_stop
+  t3_fake_start "$tdir" T3CODE_TELEMETRY_ENABLED=true
+  fresh_case telemetry-on
+  mcp status
+  expect_code 0 "$RC" "status against a telemetry-on server: $ERR"
+  assert_not_equals off "$(field "$OUT" telemetry)" "a server explicitly enabling telemetry is not reported off"
+  if command -v lsof >/dev/null 2>&1; then
+    assert_equals on "$(field "$OUT" telemetry)" "a server explicitly enabling telemetry reads on"
+  fi
+  assert_contains "$ERR" "T3CODE_TELEMETRY_ENABLED=false" "telemetry on warns with the fix"
+  pass "fm-t3-mcp status: reads an unset telemetry setting as off and warns only on an explicit enable"
 }
 
 test_status_reports_server_start() {

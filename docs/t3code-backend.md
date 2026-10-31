@@ -24,7 +24,7 @@ Run the server that hosts Firstmate workers with T3's product telemetry off, so 
 T3CODE_TELEMETRY_ENABLED=false t3 serve --host 127.0.0.1 --port <port> --no-browser
 ```
 
-Every spawn and control action checks the server's telemetry state and warns unless the listening loopback server's own process proves it off.
+The T3 Code fork defaults telemetry off, so every spawn and control action warns only when the listening loopback server's own process explicitly enables it or its state cannot be read.
 
 Select T3 Code with local `config/backend` containing `t3code`, `FM_BACKEND=t3code` for one launch, or `--backend t3code` for one task.
 T3 Code is explicit-only for task dispatch; a configured server does not select this backend automatically.
