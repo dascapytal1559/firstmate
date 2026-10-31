@@ -1075,6 +1075,39 @@ test_watch_state_dir_races_the_run_wait() {
   pass "fm-t3-mcp watch --state-dir: a status or turn-end change ends the wait, a run end and a pending request still win, and an idle thread holds for the budget"
 }
 
+# A zero budget is the watcher's read beside another backend's wait: it
+# reports a fresh pending request with its detail and otherwise answers at
+# once, never waiting on the run or the state directory.
+test_watch_zero_budget_reads_pending_requests_only() {
+  local dir started elapsed sig
+  fresh_case watch-zero-budget
+  dir="$TMP_ROOT/cases/watch-zero-budget/state"
+  mkdir -p "$dir"
+  t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+    runs: [{ runId: "run-w", ordinal: 1, status: "running" }] } }'
+  started=$(date +%s)
+  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$RC" "a zero-budget watch: $ERR"
+  assert_equals none "$(field "$OUT" event)" "with nothing pending a zero budget answers none at once"
+  [ "$elapsed" -lt 5 ] || fail "a zero budget must not wait on the running run, took ${elapsed}s"
+  [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "a zero budget must not call t3_thread_wait"
+  # shellcheck disable=SC2016  # $OUT is part of the approval's literal command.
+  t3_fake_set 'w.threads["thread-w"].runtimeRequests = [{ id: "req-rm", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf \"$OUT\"/frames", reason: "Dangerous rm operation on possibly-empty variable path", override: "provider_check" }]'
+  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir"
+  expect_code 0 "$RC" "a zero-budget watch with an approval pending: $ERR"
+  assert_equals blocked "$(field "$OUT" event)" "a pending approval is a blocked event under a zero budget"
+  assert_equals req-rm "$(field "$OUT" approvalRequests.0.requestId)" "the approval is named"
+  assert_equals provider_check "$(field "$OUT" approvalRequests.0.override)" "the approval carries its override"
+  sig=$(field "$OUT" signature)
+  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir" --escalated "thread-w=$sig"
+  assert_equals none "$(field "$OUT" event)" "an already-escalated approval does not block again"
+  [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "a zero budget never waits on the run"
+  mcp watch --thread thread-w --timeout-ms -1
+  expect_code 2 "$RC" "a negative budget is still a usage error: $OUT"
+  pass "fm-t3-mcp watch --timeout-ms 0: reads pending requests with their detail and answers at once without waiting"
+}
+
 # The one adapter table: every row resolves through T3's catalog the same
 # way, an ACP registry row finds its instance by agent whatever T3 named it
 # and refuses none or several, a named instance must report the row's agent,
@@ -1398,3 +1431,4 @@ test_long_wait_rearms_in_slices
 test_capture_clamps_lines_and_closes_session
 test_state_reports_runs_and_the_failed_run_error
 test_watch_state_dir_races_the_run_wait
+test_watch_zero_budget_reads_pending_requests_only

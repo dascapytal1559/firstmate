@@ -161,7 +161,8 @@
 //     budget instead, so the verb never spins, and with no active run the
 //     wait then holds for the budget rather than answering none. When every
 //     run wait failed rather than returned, the first failure is the verb's
-//     error.
+//     error. --timeout-ms 0 reads the pending requests only and answers
+//     event:none without waiting, for a cycle whose wait another backend holds.
 //   fm-t3-mcp.mjs archive --thread <id> [--timeout-ms <n>]
 //     t3_thread_organize archive, then read back until the thread reports
 //     archived:true and activeRunId:null and no delegated (subagent) thread
@@ -1571,7 +1572,7 @@ async function approve(flags) {
 async function watch(flags) {
   const threadIds = [...new Set(flags.all.thread ?? [])];
   if (!threadIds.length) usage("--thread is required");
-  const timeoutMs = positiveInt(flags, "timeout-ms", 60_000, 3_600_000);
+  const timeoutMs = flags["timeout-ms"] === "0" ? 0 : positiveInt(flags, "timeout-ms", 60_000, 3_600_000);
   const stateDir = flags["state-dir"];
   if (stateDir !== undefined && !path.isAbsolute(stateDir)) usage("--state-dir must be an absolute path");
   const escalated = new Map();
@@ -1603,7 +1604,7 @@ async function watch(flags) {
     }
     if (t.activeRunId) runs.push({ threadId, runId: t.activeRunId });
   }
-  if (!runs.length && stateDir === undefined) return { ok: true, event: "none", cleared };
+  if (!timeoutMs || (!runs.length && stateDir === undefined)) return { ok: true, event: "none", cleared };
   const abort = new AbortController();
   const notEnded = new Error("not ended");
   const waits = runs.map(async ({ threadId, runId }) => {

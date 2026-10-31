@@ -564,7 +564,8 @@ fm_backend_t3code_events_capable() {  # <session>
 # fresh pending request; 1 when a run ended (its terminal status written to the thread's
 # run-ended record first), a status or turn-end file changed, the budget
 # passed, or nothing was running (the budget is slept); 2 when the server
-# could not be read.
+# could not be read. A zero budget only reads the pending requests, for a
+# watcher cycle whose wait another push backend holds.
 fm_backend_t3code_wait_transition() {  # <session> <timeout_secs> <state_dir> <thread...>
   local timeout=$2 state=$3 thread marker out
   shift 3

@@ -2771,6 +2771,38 @@ test_push_wait_escalates_pending_approval_with_detail() {
   pass "t3code push wait: a pending approval on a T3 with approval responses wakes the supervisor once with its detail"
 }
 
+# A home that also records a Herdr worker gives Herdr the cycle's push wait;
+# a T3 worker's pending approval must still wake the supervisor on the first
+# cycle with its detail, once, while Herdr's own wait keeps running.
+test_push_wait_escalates_t3_approval_beside_herdr_worker() {
+  local thread=mcp:7d8e9fa0-2b3c-4d4e-9f5a-456789abcdef state bin
+  t3_case push-approval-mixed running
+  t3_world "$(t3_thread_json "$thread" running false)"
+  FM_T3_T="$thread" t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-rm", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf \"$OUT\"/frames", reason: "Dangerous rm operation on possibly-empty variable path", override: "provider_check" }]'
+  state="$CASE_DIR/state"
+  bin="$CASE_DIR/bin"
+  mkdir -p "$state" "$bin"
+  # A herdr that records each call and names no session, so Herdr's wait runs
+  # and returns without a socket; the recorded call proves it still ran.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$CASE_DIR/herdr-calls" > "$bin/herdr"
+  chmod +x "$bin/herdr"
+  fm_write_meta "$state/herdr1.meta" "window=default:w1:p2" "backend=herdr" "herdr_session=default" "herdr_pane_id=w1:p2" "kind=ship" "harness=claude"
+  fm_write_meta "$state/t3mixed1.meta" "window=fm-t3mixed1" "backend=t3code" "t3_thread_id=$thread" "kind=ship" "harness=claude"
+  PATH="$bin:$PATH" FM_BACKEND_HERDR_EVENTS_FORCE=1 t3_watch_cycles "$state" 1 || fail "the watcher's event wait failed"
+  [ -s "$CASE_DIR/wakes" ] || fail "a T3 approval beside a Herdr worker must wake the supervisor on the first cycle"
+  [ "$(wc -l < "$CASE_DIR/wakes")" -eq 1 ] || fail "one pending approval must wake exactly once, got: $(cat "$CASE_DIR/wakes")"
+  assert_grep "$thread (t3code: agent blocked" "$CASE_DIR/wakes" "the wake names the T3 worker and the blocked cause"
+  assert_grep 'approval req-rm command: rm -rf "$OUT"/frames - reason: Dangerous rm operation on possibly-empty variable path - override: provider_check' "$CASE_DIR/wakes" \
+    "the wake carries the approval's command, reason, and override"
+  assert_grep "T3 permission approval req-rm pending - decide it with bin/fm-t3-approve.sh" "$CASE_DIR/wakes" "the wake names how to decide the approval"
+  assert_grep "$thread" "$state/.wake-queue" "the escalation is durably queued"
+  PATH="$bin:$PATH" FM_BACKEND_HERDR_EVENTS_FORCE=1 t3_watch_cycles "$state" 2 || fail "the watcher's event wait failed on later cycles"
+  [ "$(wc -l < "$CASE_DIR/wakes")" -eq 1 ] || fail "the same pending approval must not wake again, got: $(cat "$CASE_DIR/wakes")"
+  assert_grep "session list" "$CASE_DIR/herdr-calls" "Herdr keeps the cycle's push wait beside the T3 read"
+  [ "$(t3_fake_calls t3_thread_wait | wc -l)" -eq 0 ] || fail "the T3 read beside Herdr's wait must not wait on the T3 run"
+  pass "t3code push wait: a T3 approval beside a Herdr worker wakes the supervisor on the first cycle with its detail, and Herdr keeps its wait"
+}
+
 # fm-t3-approve.sh answers an approval as the supervisor and records the
 # decision; a T3 without approval responses refuses with the fallback.
 test_approve_script_answers_and_records_approvals() {
@@ -3709,6 +3741,7 @@ test_lost_send_reply_to_secondmate_names_armed_correlation
 test_status_table
 test_push_wait_escalates_pending_question_once
 test_push_wait_escalates_pending_approval_with_detail
+test_push_wait_escalates_t3_approval_beside_herdr_worker
 test_approve_script_answers_and_records_approvals
 test_answer_script_reads_and_answers_questions
 test_failed_t3_secondmate_is_resumed_in_place

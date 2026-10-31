@@ -3605,15 +3605,30 @@ state_wait_or_sleep() {  # <secs>
   sleep "$secs"
 }
 
+# t3_pending_read: the T3 workers' pending requests, read once with a zero
+# budget in a cycle whose push wait another backend (herdr, rex) holds, so a
+# T3 question or permission approval still wakes the supervisor within POLL,
+# with its detail, instead of waiting out the stale-pane wedge timer. The
+# escalation is the push path's own (handle_push_transition, once per request
+# set); a server the read cannot reach leaves the poll loop as the backstop.
+t3_pending_read() {  # <thread...>
+  local session
+  session=$(fm_backend_event_session t3code "$1")
+  watcher_waited fm_backend_wait_transition t3code "$session" 0 "$STATE" "$@" || return 0
+  handle_push_transition t3code "$session" "$WATCHER_CAPTURE"
+}
+
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
 # with push-capable windows (herdr, rex), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
 # `blocked` wakes the supervisor sub-second instead of after the stale-pane
 # wedge timer; on T3 that wait also races the state directory, so a status
-# append ends it too. For every other home - no push-capable window, backend
-# not capable, or the event path proven unreliable this process - it waits on
-# the state directory for POLL (state_wait_or_sleep), sleeping POLL where that
-# is unavailable. The poll loop above still runs every cycle, so
+# append ends it too, and beside a herdr or rex wait the T3 workers' pending
+# requests are read first (t3_pending_read). For every other home - no
+# push-capable window, backend not capable, or the event path proven
+# unreliable this process - it waits on the state directory for POLL
+# (state_wait_or_sleep), sleeping POLL where that is unavailable. The poll
+# loop above still runs every cycle, so
 # this only ever SHORTENS latency; it can never drop an escalation (the poll
 # loop is the permanent fail-closed backstop). This preserves the single live
 # supervision cycle: the reader is a short-lived subprocess of THIS watcher, not
@@ -3630,7 +3645,9 @@ event_wait_or_sleep() {
     # them.
     [ "$(window_kind "$w")" = secondmate ] && continue
     # T3 Code's bounded wait runs only when no other push backend is recorded,
-    # so adding a T3 task to a herdr home never takes herdr's fast path away.
+    # so adding a T3 task to a herdr home never takes herdr's fast path away;
+    # beside one, its pending requests are still read every cycle
+    # (t3_pending_read).
     if [ "$b" = t3code ]; then
       t3_windows+=("$w")
       continue
@@ -3645,10 +3662,14 @@ event_wait_or_sleep() {
     fi
     windows+=("$w")
   done < <(recorded_windows)
-  if [ "${#windows[@]}" -eq 0 ] && [ "${#t3_windows[@]}" -gt 0 ]; then
-    first_backend=t3code
-    first_session=$(fm_backend_event_session t3code "${t3_windows[0]}")
-    windows=("${t3_windows[@]}")
+  if [ "${#t3_windows[@]}" -gt 0 ]; then
+    if [ "${#windows[@]}" -eq 0 ]; then
+      first_backend=t3code
+      first_session=$(fm_backend_event_session t3code "${t3_windows[0]}")
+      windows=("${t3_windows[@]}")
+    else
+      t3_pending_read "${t3_windows[@]}"
+    fi
   fi
 
   if [ "${#windows[@]}" -eq 0 ]; then

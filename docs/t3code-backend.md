@@ -284,7 +284,8 @@ The same call races a change to a status or turn-end file in the home's state di
 A run's terminal status is kept in the thread's run-ended record rather than discarded, and the watcher uses it, or one `state` read, to report a run that ends `failed`, `interrupted`, `cancelled`, or `rolled_back` after the worker's surfaced `done`, `failed`, or decision, carrying the error message T3 exposes on this credential ([`watcher-continuity.md`](watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path) owns the rule).
 The poll loop, its wedge timer, and the `FM_BUSY_TURN_MAX_SECS` bound on a running thread remain the backstop, and a server the call cannot read drops the cycle to plain polling.
 Secondmate threads stay off the splice, as on Herdr.
-In a home that also records Herdr or Rex workers, that backend keeps the push wait and the T3 workers stay on the poll loop, so adding a T3 task never slows Herdr or Rex escalation.
+In a home that also records Herdr or Rex workers, that backend keeps the push wait, so adding a T3 task never slows Herdr or Rex escalation.
+Each such cycle first reads the T3 workers' pending requests once without waiting (`watch --timeout-ms 0`), so a T3 question or approval still wakes firstmate within the poll interval with the same detail, escalated once per set; only a T3 run's end then waits for the poll loop.
 
 Read and answer a worker's pending questions with [`bin/fm-t3-answer.sh`](../bin/fm-t3-answer.sh), which uses T3's pending-request tools (see the [capability gate](#capability-gate) for the two generations).
 Its listing also shows each answerable approval, and [`bin/fm-t3-approve.sh`](../bin/fm-t3-approve.sh) allows or denies one through the same tool, as T3 Code's own buttons do, recording the decision in the task's durable record.

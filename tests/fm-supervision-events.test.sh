@@ -128,16 +128,17 @@ fm_write_meta "$STATE_DIR/web-ui.meta" "window=default:wG:pQ" "backend=herdr" "k
 # shellcheck disable=SC2329 # Runtime overrides called by the isolated watcher.
 fm_backend_events_capable() { return 0; }
 # shellcheck disable=SC2329 # Runtime overrides called by the isolated watcher.
-fm_backend_wait_transition() { printf '%s %s\n' "$1" "$*" > "$TMP/panes"; return 1; }
+fm_backend_wait_transition() { printf '%s\n' "$*" >> "$TMP/panes"; return 1; }
 event_wait_or_sleep
 PANES=$(cat "$TMP/panes" 2>/dev/null || true)
-case "$PANES" in "herdr "*"default:wG:pQ"*) : ;; *) fail "a mixed home must keep herdr's push wait even when a T3 task sorts first, got '$PANES'" ;; esac
+[ "$PANES" = "t3code t3code 0 $STATE_DIR mcp:thread-api"$'\n'"herdr default $POLL $STATE_DIR default:wG:pQ" ] \
+  || fail "a mixed home must read T3's pending requests with a zero budget, then keep herdr's push wait, got '$PANES'"
 rm -f "$STATE_DIR/web-ui.meta" "$TMP/panes"
 _event_cap_key=""
 event_wait_or_sleep
 PANES=$(cat "$TMP/panes" 2>/dev/null || true)
-case "$PANES" in "t3code "*) : ;; *) fail "a T3-only home must use T3's bounded wait, got '$PANES'" ;; esac
-pass "event_wait_or_sleep: herdr keeps the push wait in a mixed home; T3's wait runs only without another push backend"
+[ "$PANES" = "t3code t3code $POLL $STATE_DIR mcp:thread-api" ] || fail "a T3-only home must use T3's bounded wait alone, got '$PANES'"
+pass "event_wait_or_sleep: herdr keeps the push wait in a mixed home after a zero-budget T3 pending read; T3's wait runs only without another push backend"
 
 reset_state
 fm_write_meta "$STATE_DIR/tk3.meta" "window=default:wG:pQ" "backend=herdr" "kind=ship"
