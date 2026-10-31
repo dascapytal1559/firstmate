@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="330" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A T3 worker's approval wakes Firstmate, even with Herdr workers in the home</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">31 October: a worker sat on a prompt for about 9 minutes because two parked Herdr workers took the watcher's fast wait.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="98" font-weight="600">Before</text>
+    <rect x="24" y="108" width="200" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="132">08:56:49 worker asks</text>
+    <text x="40" y="152" font-family="Menlo, monospace" font-size="12">rm on a variable path</text>
+    <rect x="270" y="108" width="300" height="70" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="286" y="132">watcher waits on the Herdr workers only;</text>
+    <text x="286" y="152">no T3 worker's prompt is ever read</text>
+    <rect x="616" y="108" width="320" height="70" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="632" y="132">09:04:19 generic "gone quiet" alert,</text>
+    <text x="632" y="152">no command; Firstmate digs, allows at 09:05</text>
+
+    <text x="24" y="218" font-weight="600">After</text>
+    <rect x="24" y="228" width="200" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="252">worker asks</text>
+    <text x="40" y="272" font-family="Menlo, monospace" font-size="12">rm on a variable path</text>
+    <rect x="270" y="228" width="300" height="70" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="286" y="252">each cycle first reads all T3 prompts</text>
+    <text x="286" y="272">once (0.1 s), then Herdr keeps its wait</text>
+    <rect x="616" y="228" width="320" height="70" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="632" y="252">within 15 s: Firstmate is woken with the</text>
+    <text x="632" y="272">command, reason, and how to decide it</text>
+  </g>
+
+  <g stroke="#57606a" stroke-width="2" fill="none">
+    <path d="M224 143 L266 143" marker-end="url(#a)"/>
+    <path d="M570 143 L612 143" marker-end="url(#a)" stroke-dasharray="5 4"/>
+    <path d="M224 263 L266 263" marker-end="url(#a)"/>
+    <path d="M570 263 L612 263" marker-end="url(#a)"/>
+  </g>
+  <text x="24" y="320" font-size="12" fill="#57606a">Source: t3_pending_read in bin/fm-watch.sh and fm-t3-mcp.mjs watch --timeout-ms 0, with a regression test beside Herdr.</text>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#57606a"/></marker>
+  </defs>
+</svg>

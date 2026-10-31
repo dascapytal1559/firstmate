@@ -222,3 +222,24 @@ This entry is the Firstmate half: the outside job, its launchd template, its rec
 
 The evidence is the T3 helper, away-daemon, turn-end guard, and T3 backend suites (44, 156, 91, and 113 passing), the linters, and the documentation check.
 The note only reaches a main whose workers are recorded as its crew, which needs entry 7's Firstmate half to have landed.
+
+## 9. A worker's approval wakes Firstmate even with Herdr workers in the home (31 October 2026)
+
+![Before: two parked Herdr workers took the watcher's fast wait, so a T3 worker's prompt sat for about 9 minutes until a generic quiet-worker alert; after: every cycle reads the T3 workers' prompts first, and Firstmate is woken within 15 seconds with the command](media/t3-approval-wake-beside-herdr.svg)
+
+The morning after entry 6 landed, a T3 worker hit a Claude safety check on an `rm` and sat on it for about 9 minutes; Firstmate only noticed through the general "worker has gone quiet" alert, without the command.
+Asked whether to find out why and fix it with a test, the captain said:
+
+> Yeah, investigate.
+
+The cause was in Firstmate, not T3.
+Entry 6's wake rides the watcher's T3 wait, and the watcher gave that wait to T3 only when no Herdr worker was recorded, so Herdr's own fast path was never slowed.
+This home still records two parked Herdr workers, so no T3 worker's prompt was ever read; the old notes said T3 workers "stay on the poll loop", but the poll loop has no way to see a prompt.
+The thread id and the installed T3 were both fine: the live T3 read the worker under its recorded id and lists approvals.
+
+- Each cycle that waits on Herdr or Rex now first reads every T3 worker's pending prompts once, without waiting; against the live T3 that read takes 0.1 seconds for this home's five T3 workers.
+- A prompt found there wakes Firstmate exactly as in a T3-only home: once per prompt, with the command, the reason, and how to decide it.
+- Herdr keeps its wait, so nothing about Herdr workers changes.
+
+The evidence is a new regression that adds one Herdr worker beside a T3 worker with a pending `rm` approval: it fails on the old watcher (no wake) and passes now (a wake on the first cycle, never repeated, Herdr's wait still run).
+Replaying the watcher against copies of this home's live task records showed the same thing: before, only the two Herdr workers were handed to the wait; after, all five T3 workers are read first.
