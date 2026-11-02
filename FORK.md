@@ -45,6 +45,13 @@ A T3 Code worker is refused unless it runs with full access, because a worker st
 Cleanup uses T3 Code's own Stop, which also stops any tasks the worker started itself, instead of leaving them running after the worker is gone.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
+## Approvals reach FirstMate at once
+
+When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it within about a second instead of at the end of its next 15-second wait.
+FirstMate can then allow or deny the approval itself, from its own session, instead of interrupting the worker and steering it again.
+T3 Code sends no event for a new request, so FirstMate's wait re-reads the workers' pending requests each second, and the 15-second check stays as the backstop.
+Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
+
 ## Recovery after a T3 Code restart
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.

@@ -8,6 +8,7 @@ The rest of this README is upstream's.
 - Any T3 Code agent can be a worker, not only Claude and Codex, through the T3 Code fork's per-thread settings.
 - T3 Code workers show readable project and task titles.
 - T3 Code workers run with full access, stop cleanly, and recover after a T3 Code restart.
+- A T3 Code worker's question or approval reaches firstmate within a second, and firstmate can answer the approval itself.
 - Works with T3 Code 0.1.3 and later.
 
 Details and pictures: [FORK.md](FORK.md).
