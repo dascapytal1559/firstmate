@@ -127,8 +127,9 @@
 //     request id with its questions, from T3's pending-request list/read);
 //     approvalResponses, whether orchestrator_capabilities advertises that
 //     feature; approvalRequests, the permission approvals T3's pending-request
-//     list names when it does, each {requestId, kind, detail (the command or
-//     file), reason, override (provider_check, ask_rule, or null)}; and
+//     list names in its approvals array when it does, each {requestId, kind,
+//     detail (the command or file), reason, override (provider_check,
+//     ask_rule, or null)}; and
 //     approvals, the count of the remaining pending requests those tools
 //     cannot see or answer (every permission approval on a T3 without
 //     approvalResponses). The signature
@@ -155,6 +156,10 @@
 //     that run's threadId, runId, and terminal status, for the first that
 //     turns terminal, event:timeout when none does, or event:none when no
 //     thread has an active run (the caller sleeps instead of re-arming).
+//     While it waits it re-reads every thread's pending requests each
+//     PENDING_RECHECK_MS (1 s), since T3 pushes no pending-request event to
+//     an MCP client, and a question or approval that appears and differs from
+//     its --escalated signature ends the wait with the same event:blocked.
 //     With --state-dir the same wait also races a change to a *.status or
 //     *.turn-ended entry in that directory (bin/fm-state-watch.mjs owns the
 //     filter and debounce) and reports event:state-changed with the entry's
@@ -275,6 +280,10 @@ const SESSION_CLOSE_TIMEOUT_MS = 2_000;
 // t3_thread_wait, plus its 15 s grace, stays under that and a longer wait
 // re-arms until its own deadline.
 const WAIT_SLICE_MS = 240_000;
+// How often a watch re-reads its threads' pending requests while it waits
+// (pendingEdge): a new question or approval wakes the watcher within about
+// this long instead of at the next cycle.
+const PENDING_RECHECK_MS = 1_000;
 // JSON-RPC errors that refuse the request itself: parse error, invalid
 // request, unknown method, invalid params.
 const REFUSED_REQUEST_CODES = new Set([-32700, -32600, -32601, -32602]);
@@ -676,16 +685,16 @@ function threadConfiguration(session, threadId) {
 
 // One pending-request action (list, read, or respond), through the family
 // the gate found.
-function pendingRequest(session, action, args) {
-  if (session.toolFamilies?.pendingRequests === "earlier") return session.call(`t3_pending_request_${action}`, args);
-  return session.call("t3_pending_request", { action, ...args });
+function pendingRequest(session, action, args, opts) {
+  if (session.toolFamilies?.pendingRequests === "earlier") return session.call(`t3_pending_request_${action}`, args, opts);
+  return session.call("t3_pending_request", { action, ...args }, opts);
 }
 
 // Whether this server answers permission approvals through the
 // pending-request tools, read once per session.
-async function approvalResponses(session) {
+async function approvalResponses(session, opts) {
   if (session.approvalResponses === undefined) {
-    const caps = await session.call("orchestrator_capabilities", {});
+    const caps = await session.call("orchestrator_capabilities", {}, opts);
     session.approvalResponses = caps?.features?.[APPROVAL_FEATURE] === true;
   }
   return session.approvalResponses;
@@ -1321,9 +1330,9 @@ export function renderCapture(out, lines) {
 // t3_thread_read pages forward from the oldest item, so the tail starts from
 // the thread's itemCount and widens backwards if that undercounts the visible
 // timeline (forked or handed-off threads).
-async function readTail(session, threadId, itemCount, lines) {
+async function readTail(session, threadId, itemCount, lines, opts) {
   const read = (afterPosition) =>
-    session.call("t3_thread_read", { threadId, view: "activity", limit: READ_LIMIT_MAX, maxCharsPerItem: 600, runLimit: 1, ...(afterPosition >= 0 ? { afterPosition } : {}) });
+    session.call("t3_thread_read", { threadId, view: "activity", limit: READ_LIMIT_MAX, maxCharsPerItem: 600, runLimit: 1, ...(afterPosition >= 0 ? { afterPosition } : {}) }, opts);
   let start = Math.max(0, itemCount - lines);
   for (;;) {
     let out = await read(start - 1);
@@ -1485,21 +1494,22 @@ function approvalEntry(e) {
 // among the thread's last READ_LIMIT_MAX activity items, so an approval
 // answered and replaced by another between two reads is a new set; a pending
 // request T3 shows no such item for is counted only.
-async function pendingOf(session, threadId, t) {
+async function pendingOf(session, threadId, t, opts) {
   const count = t.pendingRequestCount ?? 0;
   if (!count) return { questions: [], approvals: 0, approvalIds: [], approvalRequests: [] };
-  const listed = await pendingRequest(session, "list", { threadId });
-  const entries = (Array.isArray(listed?.requests) ? listed.requests : []).filter((e) => e && typeof e.requestId === "string");
-  const listedApprovals = entries.filter((e) => e.type === "approval");
+  const listed = await pendingRequest(session, "list", { threadId }, opts);
+  // T3 lists question ids in requestIds and, with approvalResponses, each
+  // approval as an entry of approvals.
+  const listedApprovals = (Array.isArray(listed?.approvals) ? listed.approvals : []).filter((e) => e && typeof e.requestId === "string");
   const approvalIdSet = new Set(listedApprovals.map((e) => e.requestId));
-  const ids = [...new Set([...(listed?.requestIds ?? []), ...entries.map((e) => e.requestId)])].filter((id) => !approvalIdSet.has(id)).sort();
-  const approvalRequests = (await approvalResponses(session))
+  const ids = [...new Set(listed?.requestIds ?? [])].filter((id) => typeof id === "string" && !approvalIdSet.has(id)).sort();
+  const approvalRequests = (await approvalResponses(session, opts))
     ? listedApprovals.map(approvalEntry).sort((a, b) => (a.requestId < b.requestId ? -1 : a.requestId > b.requestId ? 1 : 0))
     : [];
   const answerable = new Set(approvalRequests.map((a) => a.requestId));
   const approvals = Math.max(0, count - ids.length - approvalRequests.length);
   if (!approvals) return { questions: ids, approvals, approvalIds: [], approvalRequests };
-  const { items } = await readTail(session, threadId, t.itemCount ?? 0, READ_LIMIT_MAX);
+  const { items } = await readTail(session, threadId, t.itemCount ?? 0, READ_LIMIT_MAX, opts);
   const open = items
     .filter((it) => it?.type === APPROVAL_ITEM && it.status === APPROVAL_WAITING && !answerable.has(it.requestId ?? String(it.itemId).replace(APPROVAL_ITEM_ID_PREFIX, "")))
     .map((it) => it.itemId);
@@ -1583,6 +1593,79 @@ async function approve(flags) {
   return { ok: true, threadId, requestId, decision, ...(feedback !== undefined ? { feedback } : {}), approval };
 }
 
+// One watched thread's pending requests, or null for a thread the server no
+// longer has or that is archived.
+async function watchedThread(session, threadId, opts) {
+  let t;
+  try {
+    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }, opts));
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+  if (t.archived === true || t.archivedAt) return null;
+  const pending = await pendingOf(session, threadId, t, opts);
+  return { threadId, t, pending, any: Boolean(pending.questions.length || pending.approvals || pending.approvalRequests.length) };
+}
+
+// The event:blocked a watched thread reports when its pending requests differ
+// from the signature it was escalated with, else null.
+function blockedEvent(read, escalated) {
+  if (!read.any) return null;
+  const signature = pendingSignature(read.pending);
+  if (escalated.get(read.threadId) === signature) return null;
+  const { questions, approvals, approvalRequests } = read.pending;
+  return { ok: true, event: "blocked", threadId: read.threadId, signature, questions, approvals, approvalRequests };
+}
+
+// The pending-request edge of a watch. T3 gives an MCP client no push for a
+// new pending request: t3_thread_wait settles only on a terminal run, /mcp
+// sends no notifications, and the WebSocket event stream refuses this
+// credential. So for the length of the wait this re-reads every watched
+// thread each PENDING_RECHECK_MS, inside the one watch call, and answers the
+// first event:blocked as the start-of-wait read would; null at the deadline or
+// on abort. A failed re-read is skipped, since the next cycle's first read
+// reports a server it cannot reach.
+async function pendingEdge(session, threadIds, escalated, timeoutMs, signal) {
+  const deadline = Date.now() + timeoutMs;
+  const live = new Set(threadIds);
+  for (;;) {
+    const pause = Math.min(PENDING_RECHECK_MS, deadline - Date.now());
+    if (pause <= 0 || !(await abortableSleep(pause, signal))) return null;
+    for (const threadId of live) {
+      let read;
+      try {
+        read = await watchedThread(session, threadId, { signal });
+      } catch {
+        if (signal.aborted) return null;
+        continue;
+      }
+      if (!read) {
+        live.delete(threadId);
+        continue;
+      }
+      const blocked = blockedEvent(read, escalated);
+      if (blocked) return blocked;
+    }
+  }
+}
+
+// Sleep that ends early on abort: true after the full pause, false on abort.
+function abortableSleep(ms, signal) {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 // watch: one bounded supervision wait across threads (see the header).
 async function watch(flags) {
   const threadIds = [...new Set(flags.all.thread ?? [])];
@@ -1599,34 +1682,30 @@ async function watch(flags) {
   const { session } = await verifiedSession(flags);
   const cleared = [];
   const runs = [];
+  const live = [];
   for (const threadId of threadIds) {
-    let t;
-    try {
-      t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
-    } catch (err) {
-      if (isNotFound(err)) continue;
-      throw err;
-    }
-    if (t.archived === true || t.archivedAt) continue;
-    const pending = await pendingOf(session, threadId, t);
-    const signature = pendingSignature(pending);
-    if (pending.questions.length || pending.approvals || pending.approvalRequests.length) {
-      if (escalated.get(threadId) !== signature) {
-        return { ok: true, event: "blocked", threadId, signature, questions: pending.questions, approvals: pending.approvals, approvalRequests: pending.approvalRequests, cleared };
-      }
-    } else if (escalated.has(threadId)) {
-      cleared.push(threadId);
-    }
-    if (t.activeRunId) runs.push({ threadId, runId: t.activeRunId });
+    const read = await watchedThread(session, threadId);
+    if (!read) continue;
+    live.push(threadId);
+    const blocked = blockedEvent(read, escalated);
+    if (blocked) return { ...blocked, cleared };
+    if (!read.any && escalated.has(threadId)) cleared.push(threadId);
+    if (read.t.activeRunId) runs.push({ threadId, runId: read.t.activeRunId });
   }
   if (!timeoutMs || (!runs.length && stateDir === undefined)) return { ok: true, event: "none", cleared };
   const abort = new AbortController();
   const notEnded = new Error("not ended");
-  const waits = runs.map(async ({ threadId, runId }) => {
+  const waits = [
+    pendingEdge(session, live, escalated, timeoutMs, abort.signal).then((blocked) => {
+      if (blocked) return { blocked };
+      throw notEnded;
+    }),
+  ];
+  waits.push(...runs.map(async ({ threadId, runId }) => {
     const waited = await waitRun(session, threadId, runId, timeoutMs, abort.signal);
     if (waited?.runId === runId && waited?.timedOut !== true && TERMINAL_RUN.has(waited?.status)) return { threadId, runId, status: waited.status };
     throw notEnded;
-  });
+  }));
   if (stateDir !== undefined) {
     waits.push(
       stateDirWait(stateDir, timeoutMs, abort.signal).then((changed) => {
@@ -1637,9 +1716,13 @@ async function watch(flags) {
   }
   try {
     const ended = await Promise.any(waits).catch((err) => {
-      if (err.errors.every((e) => e !== notEnded)) throw err.errors[0];
+      // The pending-request edge only ever ends unanswered; the verb's error
+      // is a run wait's when every run wait failed and no directory raced.
+      const others = err.errors.slice(1);
+      if (others.every((e) => e !== notEnded)) throw others[0];
       return null;
     });
+    if (ended?.blocked) return { ...ended.blocked, cleared };
     if (ended?.stateChanged !== undefined) return { ok: true, event: "state-changed", name: ended.stateChanged, cleared };
     return ended ? { ok: true, event: "run-ended", ...ended, cleared } : { ok: true, event: "timeout", cleared };
   } finally {

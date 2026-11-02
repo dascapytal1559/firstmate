@@ -508,8 +508,10 @@ fm_backend_t3code_approve_request() {  # <thread-id> <request-id> <allow|deny> [
 # through bin/fm-backend.sh. T3 refuses the `/mcp` credential on its WebSocket
 # stream, but t3_thread_wait is itself an event-driven wait on stored run
 # updates, so one bounded `fm-t3-mcp.mjs watch` call per cycle covers every
-# recorded T3 worker: a new or changed pending request is the actionable
-# `blocked` edge, escalated once per request signature; a run reaching a
+# recorded T3 worker: a new or changed pending request, at the call's start
+# or re-read about once a second while it waits (T3 pushes no pending-request
+# event), is the actionable `blocked` edge, escalated once per request
+# signature; a run reaching a
 # terminal status ends the wait early so the poll loop reconciles that turn at
 # once, and that run's terminal status is kept in the thread's run-ended
 # record (fm_backend_t3code_run_ended_record) rather than discarded, so the

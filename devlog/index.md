@@ -300,3 +300,35 @@ The captain's T3 fork defaults telemetry off, so the live server, with the setti
 
 Now an absent setting reads off; an explicit `true` (or any value other than false, 0, no or off) still reads on and warns, and a server whose process cannot be read still warns as unknown.
 The evidence is the T3 helper suite, with the default case now expecting off and no warning and a new case expecting on plus the warning for a server started with telemetry enabled.
+
+## 13. A worker's permission prompt reaches Firstmate in about a second, and Firstmate can answer it (3 November 2026)
+
+![Before: the watcher's wait missed a worker's permission prompt and woke on its timer 10.8 seconds later, unable to see what was asked. After: it woke 0.6 seconds after the prompt, naming the command, and the prompt could be allowed or denied directly](media/t3-approval-instant.svg)
+
+The question:
+
+> I noticed that when a crewmate has an approval pending first mate does not pick up the approval instantly. Can you check if the approval handoff is the same as the done handoff where it's instant like pub sub style or is it running on some sort of poll timer?
+
+It was a timer.
+A worker's status line ends the watcher's wait at once, but a permission prompt was only looked for when each wait began, so one that appeared mid-wait sat until the wait ran out, up to 15 seconds.
+And once seen, Firstmate could not answer it: the T3 Code fork lists approvals in a field Firstmate never read, so Firstmate saw "one approval pending" with nothing to approve, and had to interrupt the worker and steer it instead.
+
+Of the three fixes offered, his answer:
+
+> Yeah, you should do all three if you believe the third one is the right move. At least do one two. But do three as well if you believe it.
+
+The third, telling workers to avoid commands that trigger prompts, was done separately in this home's own brief additions.
+This entry is the first two:
+
+- Firstmate now reads the fork's approval list correctly, so it names each pending prompt with what it asks for, and allows or denies it directly.
+- The watcher's wait now also checks for new questions and prompts about once a second, so one that appears mid-wait wakes Firstmate within about a second, the same way as before, once per prompt.
+
+The choice made: this is a fast check, not true push.
+T3 gives Firstmate's connection no signal when a prompt opens: its thread wait ends only when a run finishes, and its live event stream refuses this kind of sign-in.
+A once-a-second read of a local server is cheap, and the old timer stays as the backstop.
+True push would need a change to the fork, letting its thread wait also end when a prompt opens; that is left as a follow-up rather than done here.
+
+What is still not instant: while Firstmate is in the middle of its own turn, nothing waits on workers at all, so a prompt raised then is picked up when that turn ends, as before.
+
+The evidence is live, against the fork on 3 November 2026, with a scratch Claude thread told to run `touch` in a scratch project: before the fix the wait missed the prompt and ran out 10.8 seconds after it appeared, and the list came back empty; after, the wait woke 0.6 seconds after the prompt, naming `touch approval-probe-after.txt`, one prompt was allowed and its file appeared, and another was denied with a note and its file never did.
+The T3 client and T3 backend suites cover the new check and the corrected list.

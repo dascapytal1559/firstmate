@@ -1166,6 +1166,52 @@ test_watch_zero_budget_reads_pending_requests_only() {
   pass "fm-t3-mcp watch --timeout-ms 0: reads pending requests with their detail and answers at once without waiting"
 }
 
+# T3 pushes no pending-request event to an MCP client, so a question or
+# approval that appears while the watch waits must end that wait at once (the
+# in-wait re-read), as the same blocked event the first read reports, rather
+# than at the next cycle; an already-escalated set still never ends it.
+test_watch_pending_edge_ends_the_wait() {
+  local dir started elapsed bg_pid sig
+  fresh_case watch-pending-edge
+  dir="$TMP_ROOT/cases/watch-pending-edge/state"
+  mkdir -p "$dir"
+  t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+    runs: [{ runId: "run-w", ordinal: 1, status: "running" }], runtimeRequests: [] } }'
+  ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-touch", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt", override: "provider_check" })' ) &
+  bg_pid=$!
+  started=$(date +%s)
+  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$RC" "watch with an approval arriving mid-wait: $ERR"
+  assert_equals blocked "$(field "$OUT" event)" "an approval that appears while the run still runs ends the wait"
+  assert_equals req-touch "$(field "$OUT" approvalRequests.0.requestId)" "the mid-wait approval is named by request id"
+  assert_equals "touch probe.txt" "$(field "$OUT" approvalRequests.0.detail)" "the mid-wait approval carries its command"
+  assert_equals "q:;a:0;r:req-touch" "$(field "$OUT" signature)" "the mid-wait signature is the one the first read computes"
+  [ "$elapsed" -lt 5 ] || fail "the approval must end the wait within a re-read, took ${elapsed}s"
+  sig=$(field "$OUT" signature)
+  mcp watch --thread thread-w --timeout-ms 2500 --state-dir "$dir" --escalated "thread-w=$sig"
+  assert_equals timeout "$(field "$OUT" event)" "an approval already escalated never ends a later wait"
+  ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-curl", kind: "approval", status: "pending", requestKind: "command", command: "curl example.com" })' ) &
+  bg_pid=$!
+  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir" --escalated "thread-w=$sig"
+  wait "$bg_pid"
+  assert_equals blocked "$(field "$OUT" event)" "a second approval beside an escalated one ends the wait"
+  assert_equals "q:;a:0;r:req-curl,req-touch" "$(field "$OUT" signature)" "the new set names both approvals"
+  t3_fake_set 'w.threads["thread-i"] = { threadId: "thread-i", projectId: "p", status: "completed", activeRunId: null, archived: false, worktreePath: null, items: [],
+    runs: [{ runId: "run-i", ordinal: 1, status: "completed" }], runtimeRequests: [] }'
+  ( sleep 0.5; t3_fake_set 'w.threads["thread-i"].runtimeRequests.push({ id: "req-q", kind: "user_input", status: "pending", questions: [] })' ) &
+  bg_pid=$!
+  started=$(date +%s)
+  mcp watch --thread thread-i --timeout-ms 20000 --state-dir "$dir"
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  assert_equals blocked "$(field "$OUT" event)" "a question on a thread idle when the wait began also ends the wait"
+  assert_equals req-q "$(field "$OUT" questions.0)" "the question is named"
+  [ "$elapsed" -lt 5 ] || fail "the question must end the idle hold within a re-read, took ${elapsed}s"
+  pass "fm-t3-mcp watch: a question or approval that appears mid-wait ends it as the same blocked event, once per set"
+}
+
 # The one adapter table: every row resolves through T3's catalog the same
 # way, an ACP registry row finds its instance by agent whatever T3 named it
 # and refuses none or several, a named instance must report the row's agent,
@@ -1491,3 +1537,4 @@ test_capture_clamps_lines_and_closes_session
 test_state_reports_runs_and_the_failed_run_error
 test_watch_state_dir_races_the_run_wait
 test_watch_zero_budget_reads_pending_requests_only
+test_watch_pending_edge_ends_the_wait

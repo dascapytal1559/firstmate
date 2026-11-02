@@ -47,9 +47,12 @@
 //     lists every model whose id or label contains the text, with no count.
 //   - a T3 with approval responses (world approvalResponses) advertises
 //     features.approvalResponses in orchestrator_capabilities, and its
-//     pending-request list also names each pending approval in `requests`
-//     ({requestId, type: "approval", kind, command, reason, override}, from the
-//     approval's runtime request), its read reads one, and its respond answers
+//     pending-request list also names each pending approval in `approvals`
+//     beside the question `requestIds` ({requestId, type: "approval", kind,
+//     detail, reason, override, supportsFeedback}, as the T3 Code fork's
+//     handlers.ts builds it: detail is the approval item's prompt, here the
+//     runtime request's command, and detail and reason are omitted when
+//     absent), its read reads one in the same shape, and its respond answers
 //     one with decision allow|deny and optional feedback; without it the
 //     pending-request tools see only user-input questions.
 //   - a T3 with coordinator pins (world coordinatorRestartNote, the T3 Code
@@ -210,7 +213,9 @@ const now = () => new Date().toISOString();
 const pendingRequests = (t) => (t.runtimeRequests ?? []).filter((r) => r.status === "pending");
 // A pending approval as the approval-responses pending-request tools show it.
 const approvalEntry = (r) => ({
-  requestId: r.id, type: "approval", kind: r.requestKind ?? "command", command: r.command ?? null, reason: r.reason ?? null, override: r.override ?? null,
+  requestId: r.id, type: "approval", kind: r.requestKind ?? "command",
+  ...(r.command == null ? {} : { detail: r.command }), ...(r.reason == null ? {} : { reason: r.reason }),
+  override: r.override ?? null, supportsFeedback: true,
 });
 
 function detail(t) {
@@ -459,11 +464,8 @@ async function callTool(w, name, a) {
       if (!t) return [notFound(a.threadId), false];
       const requestIds = pendingRequests(t).filter((r) => r.kind === "user_input").map((r) => r.id);
       if (!w.approvalResponses) return [ok({ requestIds }), false];
-      const requests = [
-        ...requestIds.map((requestId) => ({ requestId, type: "question" })),
-        ...pendingRequests(t).filter((r) => r.kind === "approval").map(approvalEntry),
-      ];
-      return [ok({ requestIds, requests }), false];
+      const approvals = pendingRequests(t).filter((r) => r.kind === "approval").map(approvalEntry);
+      return [ok({ requestIds, approvals }), false];
     }
     case "t3_pending_request_read":
     case "t3_pending_request_respond": {

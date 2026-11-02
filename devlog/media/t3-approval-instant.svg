@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="320" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A worker's permission prompt, from appearing to Firstmate waking</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Live, 3 November 2026: a scratch Claude thread asked to run touch; the watcher's wait was armed before the prompt appeared.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="104" font-weight="600">Before</text>
+    <rect x="110" y="88" width="141" height="24" fill="#d0d7de"/>
+    <rect x="251" y="88" width="342" height="24" fill="#f2c4c4"/>
+    <text x="110" y="132" fill="#57606a">armed</text>
+    <text x="230" y="132" fill="#57606a">prompt +4.4 s</text>
+    <text x="520" y="132" fill="#57606a">wait ran out +15.1 s</text>
+    <text x="610" y="104">missed: woke on the timer, 10.8 s later,</text>
+    <text x="610" y="122">and could not see what the prompt asked</text>
+
+    <text x="24" y="190" font-weight="600">After</text>
+    <rect x="110" y="174" width="147" height="24" fill="#d0d7de"/>
+    <rect x="257" y="174" width="16" height="24" fill="#4a8a4a"/>
+    <text x="110" y="218" fill="#57606a">armed</text>
+    <text x="236" y="218" fill="#57606a">prompt +4.6 s, woke +5.1 s</text>
+    <text x="610" y="190">woke 0.6 s later, naming the command:</text>
+    <text x="610" y="208" font-family="Menlo, monospace" font-size="12">touch approval-probe-after.txt</text>
+  </g>
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="244" width="912" height="44" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="264">Answering it: before, the list came back empty, so the worker had to be interrupted and re-steered.</text>
+    <text x="40" y="281">After, Firstmate allowed one prompt (the file was made) and denied another with a note (it was not).</text>
+  </g>
+  <text x="24" y="308" font-size="12" fill="#8c959f">Source: bin/fm-t3-mcp.mjs watch and requests; docs/verification/runtime-backends.md "Permission approvals on the T3 Code fork"</text>
+</svg>

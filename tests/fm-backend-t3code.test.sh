@@ -3263,6 +3263,27 @@ test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change() {
   pass "t3code push wait: an ended run's status is kept in the thread's run-ended record, and a status append ends the wait at once"
 }
 
+# An approval that appears while the event wait already runs ends that wait
+# with the blocked record and its detail, as a status append does, instead of
+# waiting out the budget for the next cycle's first read.
+test_push_wait_wakes_on_an_approval_raised_mid_wait() {
+  local state rec rc started elapsed bg_pid
+  t3_case push-approval-mid-wait running
+  state="$CASE_DIR/state"; mkdir -p "$state"
+  t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads["thread-live"].runtimeRequests = []'
+  ( sleep 0.5; t3_world_set 'w.threads["thread-live"].runtimeRequests.push({ id: "req-mid", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt", override: "provider_check" })' ) &
+  bg_pid=$!
+  started=$(date +%s)
+  rec=$(t3_run '. "$0/bin/fm-transition-lib.sh"; fm_backend_t3code_wait_transition sess 10 "$1" thread-live' "$state" 2>&1); rc=$?
+  wait "$bg_pid"
+  elapsed=$(( $(date +%s) - started ))
+  expect_code 0 "$rc" "an approval raised mid-wait is the actionable blocked edge, got '$rec'"
+  [ "$elapsed" -lt 5 ] || fail "an approval raised mid-wait did not end the T3 event wait before its budget (${elapsed}s)"
+  [ "$(printf '%s' "$rec" | cut -f1,2,4)" = "$(printf 'thread-live\tq:;a:0;r:req-mid\tblocked')" ] || fail "the record must name the thread, signature, and blocked state, got '$rec'"
+  assert_contains "$rec" "approval req-mid command: touch probe.txt - override: provider_check" "the record carries the approval's detail"
+  pass "t3code push wait: an approval raised mid-wait ends the wait at once with its blocked record"
+}
+
 test_t3_done_then_same_run_completed_turn_end_absorbed() {
   local thread=mcp:7a1b2c3d-0e1f-4a5b-9c6d-0a1b2c3d4e5f out proof before i=0
   t3_turn_case turn-absorb "$thread"
@@ -3512,6 +3533,7 @@ test_t3_restart_recovery
 test_t3_restart_failed_ring_retries
 test_t3_restart_recover_pins_coordinator
 test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change
+test_push_wait_wakes_on_an_approval_raised_mid_wait
 test_t3_done_then_same_run_completed_turn_end_absorbed
 test_t3_done_then_run_failed_reports_the_bad_ending_once
 test_t3_done_then_run_interrupted_during_the_event_wait_reports

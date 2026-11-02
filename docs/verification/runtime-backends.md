@@ -2634,6 +2634,34 @@ Paths are in the T3 Code repository at that tag.
 - Answering the request moves the item to `completed`, or `cancelled` on a decline or cancel (`apps/server/src/orchestration-v2/Orchestrator.ts:7407-7410` and `:7477`), so only an unanswered approval reads `waiting`.
 - `maxCharsPerItem` accepts 1 to 50000 (`packages/contracts/src/orchestratorMcp.ts:363`); the helper reads the activity view at 600, the value `capture` already uses live.
 
+### Permission approvals on the T3 Code fork
+
+Verified live on 2026-11-03 against the T3 Code fork at server version `0.1.6` (`approvalResponses: true`), with a scratch Claude thread (`claudeAgent`, `claude-haiku-5-5`, effort low, full access) in a scratch project, told to run `touch approval-probe-<label>.txt`; Claude raised a permission approval for it with `override: provider_check`.
+The thread and project were deleted afterwards.
+
+The fork's pending-request list answers question ids in `requestIds` and each approval as an entry of `approvals` (`apps/server/src/mcp/toolkits/thread/handlers.ts`, `t3_pending_request` list), as read on that thread:
+
+```text
+{"requestIds":[],"approvals":[{"requestId":"runtime-request:provider:claudeAgent:...:native-request:toolu_...","type":"approval","kind":"command","detail":"touch approval-probe-before.txt","override":"provider_check","supportsFeedback":true}]}
+```
+
+T3 gives an MCP client no event when a request opens: `t3_thread_wait` settles only on a terminal run (`ThreadManagementService.ts` `waitForThread`), `/mcp` sends no notifications, and the WebSocket upgrade refuses an `mcp-client` session (`EnvironmentAuth.ts` `rejectMcpClientAudience`).
+`fm-t3-mcp.mjs watch` therefore re-reads pending requests about once a second inside its wait.
+
+```sh
+fm-t3-mcp.mjs watch --thread <thread> --timeout-ms 15000 --state-dir <empty-dir>   # armed while the run is active, before the approval
+fm-t3-mcp.mjs requests --thread <thread>
+fm-t3-mcp.mjs approve --thread <thread> --request <request-id> --decision allow
+fm-t3-mcp.mjs approve --thread <thread> --request <request-id> --decision deny --feedback-file <file>
+```
+
+| Check | Result |
+| --- | --- |
+| Approval appearing during the 15 s wait | `event:"blocked"` 573 ms after a 100 ms side poll first saw `pendingRequestCount` 1, naming the approval's request id, `detail` `touch approval-probe-after.txt`, and `override` `provider_check` |
+| `requests` | `approvalResponses:true`, the approval in `approvalRequests` with its detail, `approvals:0` |
+| `approve --decision allow` | the file was created and the run completed with `pendingRequestCount` 0 |
+| `approve --decision deny` with feedback | the file was never created and the run completed with `pendingRequestCount` 0 |
+
 ### Claude pull-request tools
 
 T3's `link_pull_request`, `list_thread_pull_requests`, and `unlink_pull_request` tools crashed a Claude session on a pre-V2 T3 build, so Claude workers were told not to call them.
@@ -2673,8 +2701,8 @@ tests/fm-daemon.test.sh
 ```
 
 The fake models the T3 protocol facts that hide defects when simplified: cursor paging, the read cap of 100, a wait on the exact run or else the latest by ordinal, an interrupt and an archive whose run ends asynchronously, a send committed before a reply that can be lost, and a pending-request count that includes approvals the question tools cannot see.
-`tests/fm-t3-mcp.test.sh` drives the helper against `tests/t3-fake-server.mjs`: the PKCE sign-in, origin defaults, every gate and credential refusal, real-path project matching, catalog-resolved selection, including ACP registry instances found by agent and omitted models found by catalog search, launch binding and configuration read-back with their uncertain and refused outcomes, send idempotency and the unconfirmed verdict for a lost reply, a JSON-RPC server error, T3's catch-all `orchestration_error`, or a tool error without a code (each of which also leaves a launch uncertain), capture and its 500-line bound, exact-run interrupt claims, pending questions and the per-approval signature, the bounded event wait and its re-armed slices, session close, the proven archive, and paged supervisor lookup.
-`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, the refusal of an instance without them for every harness, a Grok worker with no pane-shaped wiring, a Gemini worker on the registry instance found by agent with its workspace-trust variable, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's credential-link removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions and of approvals with their detail, including under a fractional poll interval, `bin/fm-t3-answer.sh`, and `bin/fm-t3-approve.sh` with and without approval responses, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
+`tests/fm-t3-mcp.test.sh` drives the helper against `tests/t3-fake-server.mjs`: the PKCE sign-in, origin defaults, every gate and credential refusal, real-path project matching, catalog-resolved selection, including ACP registry instances found by agent and omitted models found by catalog search, launch binding and configuration read-back with their uncertain and refused outcomes, send idempotency and the unconfirmed verdict for a lost reply, a JSON-RPC server error, T3's catch-all `orchestration_error`, or a tool error without a code (each of which also leaves a launch uncertain), capture and its 500-line bound, exact-run interrupt claims, pending questions and the per-approval signature, the bounded event wait and its re-armed slices, a question or approval raised mid-wait ending that wait, session close, the proven archive, and paged supervisor lookup.
+`tests/fm-backend-t3code.test.sh` drives the adapter, spawn, control, watcher, away daemon, and teardown against the same fake: model selection through the harness adapter table, including the full-access, ACP registry agent, and effort-word refusals, the status table, kill ordering, including Stop of a worker's delegated threads and the close proof that refuses while one still runs, thread environment and instructions with their read-back and effective-runtime-mode refusal, the refusal of an instance without them for every harness, a Grok worker with no pane-shaped wiring, a Gemini worker on the registry instance found by agent with its workspace-trust variable, the Claude pull-request-tool version boundary, worker and secondmate spawn, the secondmate credential link, launch-setting refusals, abort, including a secondmate home's credential-link removal, slot freshening before launch, isolation-rejected, dirty-slot, and uncertain-launch lease retention, the exit and relaunch refusals, lost-reply resends through `fm-send.sh`, the push escalation of pending questions and of approvals with their detail, including under a fractional poll interval and for an approval raised mid-wait, `bin/fm-t3-answer.sh`, and `bin/fm-t3-approve.sh` with and without approval responses, failed-run secondmate resume, the secondmate home shutdown barrier for pooled, standalone, and nested homes and its `lsof` refusal before any archive, the wedge and dead-agent paths, and stale-alert retention and re-arming under unknown busy state.
 `tests/fm-backend-t3code.test.sh` also covers the refusal to replace a T3 secondmate whose thread cannot be proven closed, and `tests/fm-secondmate-liveness.test.sh` pins the unchanged best-effort close on tmux.
 `tests/fm-daemon.test.sh` covers discovery precedence and native busy state.
 
