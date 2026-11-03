@@ -25,8 +25,11 @@
 //     fork defaults it off, so only an explicit enable or an unreadable
 //     listener reads otherwise, and anything but off adds a stderr warning), and that process's identity
 //     (serverStart: "<pid>@<kernel start time>", null for a remote origin or
-//     an unreadable listener), which changes on every server restart.
-//     Changes nothing.
+//     an unreadable listener), which changes on every server restart, and
+//     pendingRequestPush: whether t3_thread_wait declares
+//     settleOnPendingRequest (false adds a stderr warning, since watch then
+//     sees a new question or approval only at its next call). Changes
+//     nothing.
 //   fm-t3-mcp.mjs project-ensure --root <abs-path> [--title <title>]
 //     The live T3 project whose workspaceRoot is <root> by real path, created
 //     when absent. A create that fails is looked up again, so a project a
@@ -156,10 +159,17 @@
 //     that run's threadId, runId, and terminal status, for the first that
 //     turns terminal, event:timeout when none does, or event:none when no
 //     thread has an active run (the caller sleeps instead of re-arming).
-//     While it waits it re-reads every thread's pending requests each
-//     PENDING_RECHECK_MS (1 s), since T3 pushes no pending-request event to
-//     an MCP client, and a question or approval that appears and differs from
-//     its --escalated signature ends the wait with the same event:blocked.
+//     Where t3_thread_wait's tools/list schema declares
+//     settleOnPendingRequest (the T3 Code fork), each run wait also passes
+//     the request ids that read found pending as knownRequestIds, so T3 ends
+//     it the moment any other question or approval appears and returns the
+//     thread's pending requests with it; a set that differs from its
+//     --escalated signature then answers the same event:blocked with no
+//     second read, and any other set re-arms the wait knowing those ids too.
+//     Firstmate requires the fork and keeps no re-read loop for a T3 without
+//     the flag: there, and for a thread whose run starts after the wait
+//     began, a new request is first seen by the next call's opening read,
+//     within the watcher's poll interval.
 //     With --state-dir the same wait also races a change to a *.status or
 //     *.turn-ended entry in that directory (bin/fm-state-watch.mjs owns the
 //     filter and debounce) and reports event:state-changed with the entry's
@@ -280,10 +290,9 @@ const SESSION_CLOSE_TIMEOUT_MS = 2_000;
 // t3_thread_wait, plus its 15 s grace, stays under that and a longer wait
 // re-arms until its own deadline.
 const WAIT_SLICE_MS = 240_000;
-// How often a watch re-reads its threads' pending requests while it waits
-// (pendingEdge): a new question or approval wakes the watcher within about
-// this long instead of at the next cycle.
-const PENDING_RECHECK_MS = 1_000;
+// The T3 Code fork's t3_thread_wait argument that also ends the wait when a
+// question or approval appears (watchRun); clients detect it in tools/list.
+const PENDING_PUSH_FLAG = "settleOnPendingRequest";
 // JSON-RPC errors that refuse the request itself: parse error, invalid
 // request, unknown method, invalid params.
 const REFUSED_REQUEST_CODES = new Set([-32700, -32600, -32601, -32602]);
@@ -835,7 +844,11 @@ async function login(flags) {
 }
 
 async function status(flags) {
-  const { cred, gate: g } = await verifiedSession(flags);
+  const { cred, session, gate: g } = await verifiedSession(flags);
+  const pendingRequestPush = toolOffers(session, "t3_thread_wait", PENDING_PUSH_FLAG);
+  if (!pendingRequestPush) {
+    process.stderr.write(`warning: T3 at ${cred.origin} lacks t3_thread_wait ${PENDING_PUSH_FLAG}, so a worker's new question or approval reaches Firstmate only at the next poll; install the current T3 Code fork (docs/t3code-backend.md)\n`);
+  }
   const listener = loopbackListener(cred.origin);
   const telemetry = telemetryState(listener);
   if (telemetry !== "off") {
@@ -852,6 +865,7 @@ async function status(flags) {
     recordedServerVersion: cred.server_version ?? null,
     telemetry,
     serverStart: listener ? `${listener.pid}@${listener.startedAt}` : null,
+    pendingRequestPush,
     ...(cred.warning ? { credentialWarning: cred.warning } : {}),
   };
 }
@@ -1498,18 +1512,29 @@ async function pendingOf(session, threadId, t, opts) {
   const count = t.pendingRequestCount ?? 0;
   if (!count) return { questions: [], approvals: 0, approvalIds: [], approvalRequests: [] };
   const listed = await pendingRequest(session, "list", { threadId }, opts);
-  // T3 lists question ids in requestIds and, with approvalResponses, each
-  // approval as an entry of approvals.
-  const listedApprovals = (Array.isArray(listed?.approvals) ? listed.approvals : []).filter((e) => e && typeof e.requestId === "string");
-  const approvalIdSet = new Set(listedApprovals.map((e) => e.requestId));
-  const ids = [...new Set(listed?.requestIds ?? [])].filter((id) => typeof id === "string" && !approvalIdSet.has(id)).sort();
+  return pendingFromList(session, threadId, listed, count, t.itemCount ?? 0, opts);
+}
+
+// T3 lists question ids in requestIds and, with approvalResponses, each
+// approval as an entry of approvals.
+function listedRequests(listed) {
+  const approvals = (Array.isArray(listed?.approvals) ? listed.approvals : []).filter((e) => e && typeof e.requestId === "string");
+  const approvalIdSet = new Set(approvals.map((e) => e.requestId));
+  const questions = [...new Set(listed?.requestIds ?? [])].filter((id) => typeof id === "string" && !approvalIdSet.has(id)).sort();
+  return { questions, approvals };
+}
+
+// pendingOf's result from one pending-request list (or a push-settled wait's
+// pendingRequests, the same shape), with <count> pending requests in all.
+async function pendingFromList(session, threadId, listed, count, itemCount, opts) {
+  const { questions: ids, approvals: listedApprovals } = listedRequests(listed);
   const approvalRequests = (await approvalResponses(session, opts))
     ? listedApprovals.map(approvalEntry).sort((a, b) => (a.requestId < b.requestId ? -1 : a.requestId > b.requestId ? 1 : 0))
     : [];
   const answerable = new Set(approvalRequests.map((a) => a.requestId));
   const approvals = Math.max(0, count - ids.length - approvalRequests.length);
   if (!approvals) return { questions: ids, approvals, approvalIds: [], approvalRequests };
-  const { items } = await readTail(session, threadId, t.itemCount ?? 0, READ_LIMIT_MAX, opts);
+  const { items } = await readTail(session, threadId, itemCount, READ_LIMIT_MAX, opts);
   const open = items
     .filter((it) => it?.type === APPROVAL_ITEM && it.status === APPROVAL_WAITING && !answerable.has(it.requestId ?? String(it.itemId).replace(APPROVAL_ITEM_ID_PREFIX, "")))
     .map((it) => it.itemId);
@@ -1605,65 +1630,67 @@ async function watchedThread(session, threadId, opts) {
   }
   if (t.archived === true || t.archivedAt) return null;
   const pending = await pendingOf(session, threadId, t, opts);
-  return { threadId, t, pending, any: Boolean(pending.questions.length || pending.approvals || pending.approvalRequests.length) };
+  return { threadId, t, pending };
 }
+
+// The request ids a pending-request set names, questions and answerable
+// approvals alike: what a push-settled wait is told it already knows.
+const pendingIds = (p) => [...p.questions, ...p.approvalRequests.map((a) => a.requestId)];
 
 // The event:blocked a watched thread reports when its pending requests differ
 // from the signature it was escalated with, else null.
-function blockedEvent(read, escalated) {
-  if (!read.any) return null;
-  const signature = pendingSignature(read.pending);
-  if (escalated.get(read.threadId) === signature) return null;
-  const { questions, approvals, approvalRequests } = read.pending;
-  return { ok: true, event: "blocked", threadId: read.threadId, signature, questions, approvals, approvalRequests };
+function blockedEvent(threadId, pending, escalated) {
+  const { questions, approvals, approvalRequests } = pending;
+  if (!questions.length && !approvals && !approvalRequests.length) return null;
+  const signature = pendingSignature(pending);
+  if (escalated.get(threadId) === signature) return null;
+  return { ok: true, event: "blocked", threadId, signature, questions, approvals, approvalRequests };
 }
 
-// The pending-request edge of a watch. T3 gives an MCP client no push for a
-// new pending request: t3_thread_wait settles only on a terminal run, /mcp
-// sends no notifications, and the WebSocket event stream refuses this
-// credential. So for the length of the wait this re-reads every watched
-// thread each PENDING_RECHECK_MS, inside the one watch call, and answers the
-// first event:blocked as the start-of-wait read would; null at the deadline or
-// on abort. A failed re-read is skipped, since the next cycle's first read
-// reports a server it cannot reach.
-async function pendingEdge(session, threadIds, escalated, timeoutMs, signal) {
+// One watched run's wait, in slices of at most WAIT_SLICE_MS. With push (the
+// T3 Code fork's t3_thread_wait declares settleOnPendingRequest), T3 also
+// ends the wait the moment a question or approval outside <known> is pending
+// and returns the thread's pending requests with it, so no re-read is needed:
+// a set that differs from the escalated signature answers {blocked}, and
+// otherwise its ids join <known> and the wait re-arms. A push settle that
+// teaches nothing new re-arms without push, so a server that kept settling on
+// requests it does not list cannot spin the wait. Without push only the run's
+// end settles it. Answers {run} for a terminal run, else null.
+async function watchRun(session, run, known, escalated, timeoutMs, signal, push) {
+  const { threadId, runId } = run;
   const deadline = Date.now() + timeoutMs;
-  const live = new Set(threadIds);
   for (;;) {
-    const pause = Math.min(PENDING_RECHECK_MS, deadline - Date.now());
-    if (pause <= 0 || !(await abortableSleep(pause, signal))) return null;
-    for (const threadId of live) {
-      let read;
-      try {
-        read = await watchedThread(session, threadId, { signal });
-      } catch {
-        if (signal.aborted) return null;
-        continue;
+    const slice = Math.min(WAIT_SLICE_MS, Math.max(1, deadline - Date.now()));
+    const out = await session.call(
+      "t3_thread_wait",
+      { threadId, runId, timeoutMs: slice, ...(push ? { settleOnPendingRequest: true, knownRequestIds: [...known] } : {}) },
+      { timeoutMs: slice + 15_000, signal },
+    );
+    if (push && out?.settledBy === "pending_request") {
+      let pending;
+      if (await approvalResponses(session, { signal })) {
+        const listed = out.pendingRequests ?? {};
+        const { questions, approvals } = listedRequests(listed);
+        pending = await pendingFromList(session, threadId, listed, questions.length + approvals.length, 0, { signal });
+      } else {
+        // Without approvalResponses an approval has no id to pass as known,
+        // so the push cannot tell a new one from an escalated one: read the
+        // thread as the opening read does, and wait on without the push.
+        const read = await watchedThread(session, threadId, { signal });
+        if (!read) return null;
+        pending = read.pending;
+        push = false;
       }
-      if (!read) {
-        live.delete(threadId);
-        continue;
-      }
-      const blocked = blockedEvent(read, escalated);
-      if (blocked) return blocked;
+      const blocked = blockedEvent(threadId, pending, escalated);
+      if (blocked) return { blocked };
+      const before = known.size;
+      for (const id of pendingIds(pending)) known.add(id);
+      if (known.size === before) push = false;
+      continue;
     }
+    if (out?.runId === runId && out?.timedOut !== true && TERMINAL_RUN.has(out?.status)) return { run: { threadId, runId, status: out.status } };
+    if (out?.timedOut !== true || Date.now() >= deadline) return null;
   }
-}
-
-// Sleep that ends early on abort: true after the full pause, false on abort.
-function abortableSleep(ms, signal) {
-  if (signal.aborted) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve(false);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(true);
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 // watch: one bounded supervision wait across threads (see the header).
@@ -1682,30 +1709,24 @@ async function watch(flags) {
   const { session } = await verifiedSession(flags);
   const cleared = [];
   const runs = [];
-  const live = [];
   for (const threadId of threadIds) {
     const read = await watchedThread(session, threadId);
     if (!read) continue;
-    live.push(threadId);
-    const blocked = blockedEvent(read, escalated);
+    const blocked = blockedEvent(threadId, read.pending, escalated);
     if (blocked) return { ...blocked, cleared };
-    if (!read.any && escalated.has(threadId)) cleared.push(threadId);
-    if (read.t.activeRunId) runs.push({ threadId, runId: read.t.activeRunId });
+    const known = new Set(pendingIds(read.pending));
+    if (!known.size && !read.pending.approvals && escalated.has(threadId)) cleared.push(threadId);
+    if (read.t.activeRunId) runs.push({ threadId, runId: read.t.activeRunId, known });
   }
   if (!timeoutMs || (!runs.length && stateDir === undefined)) return { ok: true, event: "none", cleared };
+  const push = toolOffers(session, "t3_thread_wait", PENDING_PUSH_FLAG);
   const abort = new AbortController();
   const notEnded = new Error("not ended");
-  const waits = [
-    pendingEdge(session, live, escalated, timeoutMs, abort.signal).then((blocked) => {
-      if (blocked) return { blocked };
-      throw notEnded;
-    }),
-  ];
-  waits.push(...runs.map(async ({ threadId, runId }) => {
-    const waited = await waitRun(session, threadId, runId, timeoutMs, abort.signal);
-    if (waited?.runId === runId && waited?.timedOut !== true && TERMINAL_RUN.has(waited?.status)) return { threadId, runId, status: waited.status };
+  const waits = runs.map(async (run) => {
+    const ended = await watchRun(session, run, run.known, escalated, timeoutMs, abort.signal, push);
+    if (ended) return ended;
     throw notEnded;
-  }));
+  });
   if (stateDir !== undefined) {
     waits.push(
       stateDirWait(stateDir, timeoutMs, abort.signal).then((changed) => {
@@ -1716,15 +1737,14 @@ async function watch(flags) {
   }
   try {
     const ended = await Promise.any(waits).catch((err) => {
-      // The pending-request edge only ever ends unanswered; the verb's error
-      // is a run wait's when every run wait failed and no directory raced.
-      const others = err.errors.slice(1);
-      if (others.every((e) => e !== notEnded)) throw others[0];
+      // The verb's error is a run wait's when every run wait failed and no
+      // directory raced.
+      if (err.errors.every((e) => e !== notEnded)) throw err.errors[0];
       return null;
     });
     if (ended?.blocked) return { ...ended.blocked, cleared };
     if (ended?.stateChanged !== undefined) return { ok: true, event: "state-changed", name: ended.stateChanged, cleared };
-    return ended ? { ok: true, event: "run-ended", ...ended, cleared } : { ok: true, event: "timeout", cleared };
+    return ended?.run ? { ok: true, event: "run-ended", ...ended.run, cleared } : { ok: true, event: "timeout", cleared };
   } finally {
     abort.abort();
   }

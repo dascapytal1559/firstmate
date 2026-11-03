@@ -63,7 +63,8 @@ mkdir -p "$SPAWN_HOME"
 
 # t3_case <name> [thread-status] -> sets CASE_DIR, CONFIG, LOG, REPO
 # The default world is the T3 Code fork's: every provider advertises
-# threadEnvironment and threadInstructions (threadFacts), with one project
+# threadEnvironment and threadInstructions (threadFacts), t3_thread_wait
+# ends on a new question or approval (pendingPush), with one project
 # rooted at $REPO with a Claude default model, one thread `thread-live` in
 # the given V2 status, and a credential.
 t3_case() {
@@ -92,7 +93,7 @@ t3_thread_json() {  # <id> <status> <archived true|false>
 # keeps the case's accepted credentials.
 t3_world() {
   FM_T3_THREADS="[$(IFS=,; printf '%s' "$*")]" FM_T3_REPO="$REPO" t3_fake_set '
-w = { tokens: w.tokens || [], threadFacts: true,
+w = { tokens: w.tokens || [], threadFacts: true, pendingPush: true,
   projects: [{ id: "proj-1", title: "repo", workspaceRoot: process.env.FM_T3_REPO, deletedAt: null,
     defaultModelSelection: { instanceId: "claudeAgent", model: "claude-sonnet-5" } }],
   threads: Object.fromEntries(JSON.parse(process.env.FM_T3_THREADS).map((t) => [t.threadId, t])) };'
@@ -3264,8 +3265,9 @@ test_push_wait_keeps_the_run_end_status_and_wakes_on_a_state_change() {
 }
 
 # An approval that appears while the event wait already runs ends that wait
-# with the blocked record and its detail, as a status append does, instead of
-# waiting out the budget for the next cycle's first read.
+# through the fork's push with the blocked record and its detail, as a status
+# append does, instead of waiting out the budget for the next cycle's first
+# read.
 test_push_wait_wakes_on_an_approval_raised_mid_wait() {
   local state rec rc started elapsed bg_pid
   t3_case push-approval-mid-wait running

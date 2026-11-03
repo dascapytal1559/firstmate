@@ -60,6 +60,11 @@
 //     t3_thread_configure takes coordinator true|false (true unpins any other
 //     thread in that project), and t3_thread_read and t3_thread_list report
 //     every thread's coordinator boolean; without it the argument is ignored.
+//   - a T3 with pending-request push (world pendingPush, the T3 Code fork)
+//     declares t3_thread_wait's settleOnPendingRequest and knownRequestIds,
+//     and such a wait also ends on a question or approval outside the known
+//     ids, carrying settledBy and pendingRequests (see waitRun); without it
+//     both arguments are dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -75,7 +80,7 @@
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
 //   (override what a launch binds), threadFacts, crewLineage,
-//   coordinatorRestartNote, noStop,
+//   coordinatorRestartNote, pendingPush, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -132,6 +137,11 @@ const TOOL_SCHEMAS = {
   orchestrator_capabilities: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", ...(w.noSearch ? [] : ["search"])].map((k) => [k, {}])),
+  }),
+  t3_thread_wait: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "threadId", "runId", "timeoutMs", "untilDelegatedWorkSettled",
+      ...(w.pendingPush ? ["settleOnPendingRequest", "knownRequestIds"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -217,6 +227,12 @@ const approvalEntry = (r) => ({
   ...(r.command == null ? {} : { detail: r.command }), ...(r.reason == null ? {} : { reason: r.reason }),
   override: r.override ?? null, supportsFeedback: true,
 });
+// What the pending-request list returns, and a push-settled wait carries.
+const pendingList = (w, t) => {
+  const requestIds = pendingRequests(t).filter((r) => r.kind === "user_input").map((r) => r.id);
+  if (!w.approvalResponses) return { requestIds };
+  return { requestIds, approvals: pendingRequests(t).filter((r) => r.kind === "approval").map(approvalEntry) };
+};
 
 function detail(t) {
   const { items, runs, runtimeRequests, modelSelection, environment, instructions, ...rest } = t;
@@ -460,13 +476,9 @@ async function callTool(w, name, a) {
     case "t3_pending_request":
       if (!["list", "read", "respond"].includes(a.action)) return [err("invalid_action", `unknown action ${a.action}`), false];
       return callTool(w, `t3_pending_request_${a.action}`, a);
-    case "t3_pending_request_list": {
+    case "t3_pending_request_list":
       if (!t) return [notFound(a.threadId), false];
-      const requestIds = pendingRequests(t).filter((r) => r.kind === "user_input").map((r) => r.id);
-      if (!w.approvalResponses) return [ok({ requestIds }), false];
-      const approvals = pendingRequests(t).filter((r) => r.kind === "approval").map(approvalEntry);
-      return [ok({ requestIds, approvals }), false];
-    }
+      return [ok(pendingList(w, t)), false];
     case "t3_pending_request_read":
     case "t3_pending_request_respond": {
       if (!t) return [notFound(a.threadId), false];
@@ -493,19 +505,33 @@ async function callTool(w, name, a) {
 }
 
 // t3_thread_wait: T3 selects the exact runId, else the latest run by ordinal,
-// and resolves when that run is terminal or the timeout passes.
+// and resolves when that run is terminal or the timeout passes. With the
+// T3 Code fork's push (world pendingPush) and settleOnPendingRequest, it also
+// resolves the moment a question or approval is pending outside
+// knownRequestIds (default: those pending at the start), with settledBy and
+// pendingRequests in the list's shape; a terminal run wins over a pending
+// request. Without pendingPush the flag is dropped, as T3 drops an argument
+// its schema lacks.
 async function waitRun(a) {
   const deadline = Date.now() + Math.max(1, Math.min(a.timeoutMs ?? 600_000, loadWorld().waitCapMs ?? Infinity));
+  let known;
   for (;;) {
     const w = loadWorld();
     if (settle(w)) saveWorld(w);
     const t = (w.threads ?? {})[a.threadId];
     if (!t) return notFound(a.threadId);
+    const push = w.pendingPush && a.settleOnPendingRequest === true;
+    const answerable = pendingRequests(t).filter((r) => r.kind === "user_input" || r.kind === "approval");
+    if (push && known === undefined) known = new Set(a.knownRequestIds ?? answerable.map((r) => r.id));
+    const by = (settledBy) => (push ? { settledBy } : {});
     const run = a.runId === undefined ? latestRun(t) : (t.runs ?? []).find((r) => r.runId === a.runId);
     if (a.runId !== undefined && !run) return err("run_not_found", `Run ${a.runId} is not in thread ${a.threadId}.`);
-    if (!run) return ok({ threadId: t.threadId, runId: null, status: "idle", timedOut: false });
-    if (!ACTIVE.has(run.status)) return ok({ threadId: t.threadId, runId: run.runId, status: run.status, timedOut: false });
-    if (Date.now() >= deadline) return ok({ threadId: t.threadId, runId: run.runId, status: run.status, timedOut: true });
+    if (!run) return ok({ threadId: t.threadId, runId: null, status: "idle", timedOut: false, ...by("run_ended") });
+    if (!ACTIVE.has(run.status)) return ok({ threadId: t.threadId, runId: run.runId, status: run.status, timedOut: false, ...by("run_ended") });
+    if (push && answerable.some((r) => !known.has(r.id))) {
+      return ok({ threadId: t.threadId, runId: run.runId, status: run.status, timedOut: false, settledBy: "pending_request", pendingRequests: pendingList(w, t) });
+    }
+    if (Date.now() >= deadline) return ok({ threadId: t.threadId, runId: run.runId, status: run.status, timedOut: true, ...by("timeout") });
     await sleep(25);
   }
 }

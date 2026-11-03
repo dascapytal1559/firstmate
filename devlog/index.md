@@ -332,3 +332,30 @@ What is still not instant: while Firstmate is in the middle of its own turn, not
 
 The evidence is live, against the fork on 3 November 2026, with a scratch Claude thread told to run `touch` in a scratch project: before the fix the wait missed the prompt and ran out 10.8 seconds after it appeared, and the list came back empty; after, the wait woke 0.6 seconds after the prompt, naming `touch approval-probe-after.txt`, one prompt was allowed and its file appeared, and another was denied with a note and its file never did.
 The T3 client and T3 backend suites cover the new check and the corrected list.
+
+## 14. Approvals reach Firstmate by push, and idle workers cost the server nothing (3 November 2026)
+
+![T3 Code's server load while Firstmate watches one waiting worker: 3.5% of a core with nothing extra watching, 5.4% with the once-a-second re-read, 3.6% with the fork's push; the prompt still wakes Firstmate 41 ms after it appears](media/t3-approval-push.svg)
+
+His word on it:
+
+> Earlier today we were discussing this and let's go with your recommendation here.
+
+The recommendation was true push.
+Entry 13 made a worker's permission prompt wake Firstmate within about a second by re-reading every watched worker's pending requests once a second.
+Each of those reads cost T3 Code's server real work, so every watched worker kept part of a core busy, more with each worker, even while they all sat idle.
+The fork's half landed first: its thread wait, which Firstmate already holds open on each running worker, can now also end the moment a question or prompt appears, and hands back what is pending.
+
+What was built, in Firstmate:
+
+- Firstmate's wait asks the fork to end on a new question or prompt, telling it which ones Firstmate has already reported, so a reported prompt never wakes it twice.
+- When the fork ends the wait on one, Firstmate reports it from what the fork handed back, with no second read.
+- The once-a-second re-read is gone. The 15-second check stays as the backstop.
+
+The choice made: no fallback for an older T3.
+Firstmate already requires the T3 Code fork, so on a T3 without the new wait it simply sees a new prompt at its next 15-second check, and `status` warns rather than quietly keeping the old loop.
+One honest gap: a worker that is idle when the wait begins and starts a new turn during it is first seen at the next check, within 15 seconds, because there is no running turn to wait on yet.
+
+The evidence is live, against the installed fork on 3 November 2026, with a throwaway Claude thread in a scratch project told to run `touch` under a rule that makes it ask: the prompt woke Firstmate 41 ms after it appeared, naming the command; and with the worker sitting on an already-reported prompt, the server's load was 3.6% of a core with the new wait against 5.4% with the old re-read and 3.5% with nothing extra watching.
+The scratch threads and project were deleted afterwards.
+The T3 client and T3 backend suites cover the push, the already-known prompt, run end, the time limit, and an older T3 without it.

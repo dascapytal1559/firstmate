@@ -2645,8 +2645,7 @@ The fork's pending-request list answers question ids in `requestIds` and each ap
 {"requestIds":[],"approvals":[{"requestId":"runtime-request:provider:claudeAgent:...:native-request:toolu_...","type":"approval","kind":"command","detail":"touch approval-probe-before.txt","override":"provider_check","supportsFeedback":true}]}
 ```
 
-T3 gives an MCP client no event when a request opens: `t3_thread_wait` settles only on a terminal run (`ThreadManagementService.ts` `waitForThread`), `/mcp` sends no notifications, and the WebSocket upgrade refuses an `mcp-client` session (`EnvironmentAuth.ts` `rejectMcpClientAudience`).
-`fm-t3-mcp.mjs watch` therefore re-reads pending requests about once a second inside its wait.
+`/mcp` sends no notifications and the WebSocket upgrade refuses an `mcp-client` session (`EnvironmentAuth.ts` `rejectMcpClientAudience`), so the only push an MCP client gets is `t3_thread_wait` itself.
 
 ```sh
 fm-t3-mcp.mjs watch --thread <thread> --timeout-ms 15000 --state-dir <empty-dir>   # armed while the run is active, before the approval
@@ -2657,10 +2656,30 @@ fm-t3-mcp.mjs approve --thread <thread> --request <request-id> --decision deny -
 
 | Check | Result |
 | --- | --- |
-| Approval appearing during the 15 s wait | `event:"blocked"` 573 ms after a 100 ms side poll first saw `pendingRequestCount` 1, naming the approval's request id, `detail` `touch approval-probe-after.txt`, and `override` `provider_check` |
 | `requests` | `approvalResponses:true`, the approval in `approvalRequests` with its detail, `approvals:0` |
 | `approve --decision allow` | the file was created and the run completed with `pendingRequestCount` 0 |
 | `approve --decision deny` with feedback | the file was never created and the run completed with `pendingRequestCount` 0 |
+
+### Pending-request push on the T3 Code fork
+
+Verified live on 2026-11-03 against the T3 Code fork at server version `0.1.6`, fork commit `f00097a45b` (`fm-t3-mcp.mjs status` reads `pendingRequestPush:true`), with a scratch Claude thread (`claudeAgent`, `claude-haiku-5-5`, effort low, full access) in a scratch project whose `.claude/settings.json` holds the ask rule `Bash(touch:*)`, told to run `touch approval-probe-<label>.txt`.
+The threads and project were deleted afterwards.
+
+The fork's `t3_thread_wait` declares `settleOnPendingRequest` and `knownRequestIds` in its `tools/list` input schema; with the flag it also settles when a question or approval outside the known ids is pending and returns `settledBy:"pending_request"` with `pendingRequests` in the pending-request list's shape (`apps/server/src/orchestration-v2/ThreadManagementService.ts` `waitForThread`, on the thread's `runtime-request.updated` events).
+`fm-t3-mcp.mjs watch` passes the flag on each run wait and has no re-read loop.
+
+```sh
+fm-t3-mcp.mjs watch --thread <thread> --timeout-ms 15000 --state-dir <empty-dir>   # armed while the run is active, before the approval
+fm-t3-mcp.mjs watch --thread <thread> --timeout-ms 15000 --state-dir <empty-dir> --escalated <thread>=<signature>   # back to back, for the CPU sample
+ps -o cputime= -p <T3 server pid>   # before and after each 45 s window
+```
+
+| Check | Result |
+| --- | --- |
+| Approval appearing during the 15 s wait | `event:"blocked"` from the push, naming the approval's request id, `detail` `touch approval-probe-new2.txt`, and `override` `provider_check`; the watch process exited 41 ms after the thread's `updatedAt` for the approval |
+| T3 server CPU, no extra watch (before and after) | 3.5% and 3.7% of a core, the fleet's own load |
+| T3 server CPU, the earlier once-a-second re-read watching the approval-blocked thread | 5.4% of a core, about 1.9% above the baseline |
+| T3 server CPU, the push watch on the same thread | 3.6% of a core, within the baseline |
 
 ### Claude pull-request tools
 

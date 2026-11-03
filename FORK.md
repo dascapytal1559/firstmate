@@ -47,9 +47,9 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 ## Approvals reach FirstMate at once
 
-When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it within about a second instead of at the end of its next 15-second wait.
+When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it at once instead of at the end of its next 15-second wait.
 FirstMate can then allow or deny the approval itself, from its own session, instead of interrupting the worker and steering it again.
-T3 Code sends no event for a new request, so FirstMate's wait re-reads the workers' pending requests each second, and the 15-second check stays as the backstop.
+The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
 ## Recovery after a T3 Code restart
