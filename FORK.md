@@ -8,15 +8,16 @@ The [README](README.md) keeps a one-line summary of each.
 
 ![Instant handoff: the median wait from a worker finishing to FirstMate being notified fell from 38 s to 3.5 s](docs/media/fork/instant-handoff.png)
 
-When a worker reports that it is done, failed, blocked, or needs a decision, FirstMate hears about it within a few seconds.
+When a worker reports that it is done, failed, blocked, or needs a decision, FirstMate hears about it within a few seconds of the worker's turn ending, for any agent that marks that end.
 Before, every finish waited out a fixed 30-second pause, so a finished worker typically sat unnoticed for 38 seconds.
 That pause existed so a worker's last status line and the end of the same turn would cost FirstMate one wake instead of two.
-FirstMate now acts on the status line at once and drops the trailing turn-end only when it can prove that turn ended cleanly with nothing new to report.
-If the turn instead ends badly after a reported `done`, FirstMate is told once, naming the worker and what happened.
+The pause now ends as soon as that turn's end arrives, so the pair still costs one wake.
+That part is upstream's own fix, [#7648](https://github.com/kunchenguid/firstmate/pull/7648), which this fork carries ahead of its merge upstream; the next upstream sync reconciles it once #7648 merges or changes.
+On T3 Code only Claude marks it, so a Codex, Grok, or other T3 Code worker still waits out the full pause.
+A worker's `done` or `failed` also goes straight to FirstMate's own session instead of through the supervision host's extra turn first, which is this fork's part.
 Routine `working:` notes keep the pause, where it still saves a wake.
-Cleanup does not act early: it waits for a worker's running turn to finish rather than cutting it off.
-This works on every backend, not only T3 Code.
-Details: [signal coalescing and the terminal fast path](docs/watcher-continuity.md#signal-coalescing-and-the-terminal-fast-path).
+The chart was measured on the fork's earlier version of this change, which #7648 replaced.
+Details: [`FM_SIGNAL_GRACE`](docs/configuration.md#environment-variables) and [decision-owned rows](docs/pi-supervision-branch.md#decision-owned-rows).
 
 ## Any T3 Code agent can be a worker
 

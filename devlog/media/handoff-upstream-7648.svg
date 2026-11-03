@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="340" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A T3 worker's done to Firstmate waking, before and after upstream's #7648</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">The real watcher at its default settings against a fake T3 server; the worker's turn ends 2 s after its done line.</text>
+
+  <g font-size="13" fill="#57606a">
+    <line x1="200" y1="80" x2="200" y2="262" stroke="#d0d7de"/>
+    <line x1="320" y1="80" x2="320" y2="262" stroke="#eaeef2"/>
+    <line x1="440" y1="80" x2="440" y2="262" stroke="#eaeef2"/>
+    <line x1="560" y1="80" x2="560" y2="262" stroke="#eaeef2"/>
+    <line x1="680" y1="80" x2="680" y2="262" stroke="#eaeef2"/>
+    <text x="196" y="280">0 s</text>
+    <text x="312" y="280">10 s</text>
+    <text x="432" y="280">20 s</text>
+    <text x="552" y="280">30 s</text>
+    <text x="672" y="280">40 s</text>
+  </g>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="104" font-weight="600">Claude worker</text>
+    <text x="24" y="122" fill="#57606a">before</text>
+    <rect x="200" y="110" width="24" height="16" fill="#8c959f"/>
+    <text x="232" y="123">2 s</text>
+    <text x="24" y="146" fill="#57606a">after</text>
+    <rect x="200" y="134" width="54" height="16" fill="#2f6fde"/>
+    <text x="262" y="147">4-5 s: 2-3 s after its turn ends, still one wake</text>
+
+    <text x="24" y="190" font-weight="600">Codex or Grok worker</text>
+    <text x="24" y="208" fill="#57606a">before</text>
+    <rect x="200" y="196" width="24" height="16" fill="#8c959f"/>
+    <text x="232" y="209">2 s</text>
+    <text x="24" y="232" fill="#57606a">after</text>
+    <rect x="200" y="220" width="420" height="16" fill="#c2410c"/>
+    <text x="628" y="233">35 s: the full 30 s pause again</text>
+  </g>
+
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="290" width="912" height="30" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="310">On T3 Code only Claude marks the end of its turn, which #7648 waits for; other agents give it nothing to wait for.</text>
+  </g>
+  <text x="24" y="334" font-size="12" fill="#8c959f">Source: scratch timing runs, 4 November 2026; before is the fork at a859afdc, after is this change.</text>
+</svg>

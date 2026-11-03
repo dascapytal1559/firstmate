@@ -359,3 +359,30 @@ One honest gap: a worker that is idle when the wait begins and starts a new turn
 The evidence is live, against the installed fork on 3 November 2026, with a throwaway Claude thread in a scratch project told to run `touch` under a rule that makes it ask: the prompt woke Firstmate 41 ms after it appeared, naming the command; and with the worker sitting on an already-reported prompt, the server's load was 3.6% of a core with the new wait against 5.4% with the old re-read and 3.5% with nothing extra watching.
 The scratch threads and project were deleted afterwards.
 The T3 client and T3 backend suites cover the push, the already-known prompt, run end, the time limit, and an older T3 without it.
+
+## 15. The fast handoff now comes from upstream (4 November 2026)
+
+![From a T3 worker's done to Firstmate waking: a Claude worker took 2 s before and 4-5 s after; a Codex or Grok worker took 2 s before and 35 s after](media/handoff-upstream-7648.svg)
+
+His words, on hearing upstream was already fixing the same pause:
+
+> Oh okay. I mean if upstream's already fixing it then yeah we don't need to worry about that. Um if it's simpler than ours, in that it's more elegant, we should try to adopt theirs and then fit our pieces around that. The standing rule would be to maintain minimum but necessary deviation from And maybe also add in the cause that's like especially if it's upstream is more elegant. But even if it's not more elegant, I should be notified about that and I can make a decision.
+
+Upstream's open pull request [#7648](https://github.com/kunchenguid/firstmate/pull/7648) fixes the 30-second pause from entry 1 in 4 files instead of 21.
+The pause becomes a limit rather than a fixed wait: it ends as soon as the worker's turn-end arrives after its status line, so the pair still costs one wake.
+
+What changed in his fork:
+
+- #7648 is merged in as its author wrote it, ahead of upstream merging it; the next upstream sync reconciles it.
+- Entry 1's own machinery is gone: the record of which turn wrote a status, the proof checks, the report of a turn that ends badly after `done`, the state-folder watch, and cleanup's wait for a running turn.
+  The watcher's difference from upstream went from about 490 added lines to about 55.
+- Kept, because #7648 does not touch them: a finished worker's `done` still goes straight to Firstmate instead of through the supervision host's extra turn, and a T3 worker's question or approval still wakes Firstmate at once.
+
+The part he asked to hear about: upstream's version is not better for every worker.
+#7648 waits for the worker's turn-end marker, and on T3 Code only Claude writes one.
+A Claude worker now reaches Firstmate 2-3 seconds after its turn ends, a little slower than before.
+A Codex or Grok worker, this home's computer-use and probe lanes, now waits out the full 30-second pause again.
+The option, if he wants it: a small T3-only addition that marks a worker's turn-end when Firstmate's T3 wait sees its run finish, which would bring those workers back to a few seconds for most finishes.
+
+The evidence is the watcher, signal-grace, T3 backend, T3 client, supervision host, supervision events, turn-end, away daemon, branch dispatcher, and cleanup suites, all passing, including the poll-only-home case that the fork's own state-folder watch had been failing.
+The timings come from scratch runs of the real watcher at its default settings against the fake T3 server, with the worker's turn ending 2 seconds after its `done`: before, both workers woke Firstmate in 2 seconds; after, a Claude worker took 4-5 seconds and a Codex worker 35.
