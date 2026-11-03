@@ -1,17 +1,11 @@
 ## About this fork
 
-A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`.
-Works with [this T3 Code fork](https://github.com/dascapytal1559/t3code), which hosts firstmate and its workers.
-The rest of this README is upstream's.
+A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`. It changes two things:
 
-- Firstmate hears a finished worker in seconds, not after a 30-second wait.
-- Any T3 Code agent can be a worker, not only Claude and Codex, through the T3 Code fork's per-thread settings.
-- T3 Code workers show readable project and task titles.
-- T3 Code workers run with full access, stop cleanly, and recover after a T3 Code restart.
-- A T3 Code worker's question or approval reaches firstmate at once, and firstmate can answer the approval itself.
-- Works with T3 Code 0.1.3 and later.
+- **Works with T3 Code.** Firstmate and its workers run in [this T3 Code fork](https://github.com/dascapytal1559/t3code); any T3 Code agent can be a worker.
+- **Hears a worker in seconds, not after a 30-second wait.** A finished worker, a question or an approval reaches firstmate at once.
 
-Details and pictures: [FORK.md](FORK.md).
+Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 
 <h1 align="center">firstmate</h1>
 <p align="center">
