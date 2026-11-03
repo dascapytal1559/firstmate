@@ -1069,82 +1069,16 @@ test_both_generations_pick_the_working_tools() {
   pass "fm-t3-mcp gate: with both generations offered, the configuration read stays on the dedicated tool and pending requests use the merged tool"
 }
 
-test_state_reports_runs_and_the_failed_run_error() {
-  fresh_case state-runs
-  t3_fake_set 'w.threads = { "thread-r": { threadId: "thread-r", projectId: "p", status: "failed", activeRunId: null, archived: false, worktreePath: null,
-    items: [{ type: "user_message", status: "completed", text: "go" }, { type: "error", status: "completed", text: "usage limit reached; resets at 12:00Z" }],
-    runs: [{ runId: "run-2", ordinal: 2, status: "failed", completedAt: "2026-10-29T10:00:00.000Z" }, { runId: "run-1", ordinal: 1, status: "completed", completedAt: "2026-10-29T09:00:00.000Z" }] } }'
-  mcp state --thread thread-r
-  expect_code 0 "$RC" "state: $ERR"
-  assert_equals run-2 "$(field "$OUT" latestRunId)" "state names the latest run"
-  assert_equals failed "$(field "$OUT" latestRunStatus)" "state reports the latest run's status"
-  assert_equals 'usage limit reached; resets at 12:00Z' "$(field "$OUT" latestRunError)" "a failed latest run carries its error item's message"
-  assert_equals run-2 "$(field "$OUT" runs.0.runId)" "the runs list starts with the newest"
-  assert_equals completed "$(field "$OUT" runs.1.status)" "the runs list carries each run's status"
-  t3_fake_set 'w.threads["thread-r"].runs[0].status = "completed"; w.threads["thread-r"].status = "completed"'
-  mcp state --thread thread-r
-  assert_equals completed "$(field "$OUT" latestRunStatus)" "a completed latest run reads completed"
-  assert_equals "" "$(field "$OUT" latestRunError)" "a completed latest run carries no error, whatever older items say"
-  pass "fm-t3-mcp state: latest run id and status, the recent runs, and a failed run's error message"
-}
-
-test_watch_state_dir_races_the_run_wait() {
-  local dir started elapsed bg_pid
-  fresh_case watch-state-dir
-  dir="$TMP_ROOT/cases/watch-state-dir/state"
-  mkdir -p "$dir"
-  t3_fake_set 'w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
-    runs: [{ runId: "run-w", ordinal: 1, status: "running" }] } }'
-  ( sleep 0.5; printf 'done: ready\n' >> "$dir/task.status" ) &
-  bg_pid=$!
-  started=$(date +%s)
-  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
-  wait "$bg_pid"
-  elapsed=$(( $(date +%s) - started ))
-  expect_code 0 "$RC" "watch with a state dir: $ERR"
-  assert_equals state-changed "$(field "$OUT" event)" "a status append ends the wait while the run still runs"
-  assert_equals task.status "$(field "$OUT" name)" "the changed entry is named"
-  [ "$elapsed" -lt 10 ] || fail "the status append must end the wait promptly, took ${elapsed}s"
-  ( sleep 0.3; t3_fake_set 'w.threads["thread-w"].runs[0].status = "failed"; w.threads["thread-w"].activeRunId = null; w.threads["thread-w"].status = "failed"' ) &
-  bg_pid=$!
-  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
-  wait "$bg_pid"
-  assert_equals run-ended "$(field "$OUT" event)" "a run's end still ends the wait"
-  assert_equals failed "$(field "$OUT" status)" "the ended run's terminal status is carried"
-  : > "$T3_FAKE_LOG"
-  ( sleep 0.3; printf 'v2' > "$dir/.seen-task_status" ) &
-  bg_pid=$!
-  mcp watch --thread thread-w --timeout-ms 1200 --state-dir "$dir"
-  wait "$bg_pid"
-  assert_equals timeout "$(field "$OUT" event)" "with no active run the watch holds for its budget, ignoring this home's own bookkeeping, instead of answering none"
-  [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "an idle watch must still not call t3_thread_wait"
-  ( sleep 0.3; touch "$dir/task.turn-ended" ) &
-  bg_pid=$!
-  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
-  wait "$bg_pid"
-  assert_equals state-changed "$(field "$OUT" event)" "a turn-end touch ends the wait"
-  assert_equals task.turn-ended "$(field "$OUT" name)" "the touched turn-end is named"
-  t3_fake_set 'w.threads["thread-w"].runtimeRequests = [{ id: "req-1", kind: "user_input", status: "pending", questions: [] }]'
-  mcp watch --thread thread-w --timeout-ms 200 --state-dir "$dir"
-  assert_equals blocked "$(field "$OUT" event)" "a pending request still wins before any wait"
-  mcp watch --thread thread-w --timeout-ms 400 --state-dir "$TMP_ROOT/cases/watch-state-dir/absent" --escalated "thread-w=$(field "$OUT" signature)"
-  expect_code 0 "$RC" "an unwatchable state dir must not fail the watch: $ERR"
-  assert_equals timeout "$(field "$OUT" event)" "an unwatchable state dir waits out the budget instead of answering at once"
-  pass "fm-t3-mcp watch --state-dir: a status or turn-end change ends the wait, a run end and a pending request still win, and an idle thread holds for the budget"
-}
-
 # A zero budget is the watcher's read beside another backend's wait: it
 # reports a fresh pending request with its detail and otherwise answers at
-# once, never waiting on the run or the state directory.
+# once, never waiting on the run.
 test_watch_zero_budget_reads_pending_requests_only() {
-  local dir started elapsed sig
+  local started elapsed sig
   fresh_case watch-zero-budget
-  dir="$TMP_ROOT/cases/watch-zero-budget/state"
-  mkdir -p "$dir"
   t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-w", ordinal: 1, status: "running" }] } }'
   started=$(date +%s)
-  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir"
+  mcp watch --thread thread-w --timeout-ms 0
   elapsed=$(( $(date +%s) - started ))
   expect_code 0 "$RC" "a zero-budget watch: $ERR"
   assert_equals none "$(field "$OUT" event)" "with nothing pending a zero budget answers none at once"
@@ -1152,13 +1086,13 @@ test_watch_zero_budget_reads_pending_requests_only() {
   [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "a zero budget must not call t3_thread_wait"
   # shellcheck disable=SC2016  # $OUT is part of the approval's literal command.
   t3_fake_set 'w.threads["thread-w"].runtimeRequests = [{ id: "req-rm", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf \"$OUT\"/frames", reason: "Dangerous rm operation on possibly-empty variable path", override: "provider_check" }]'
-  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir"
+  mcp watch --thread thread-w --timeout-ms 0
   expect_code 0 "$RC" "a zero-budget watch with an approval pending: $ERR"
   assert_equals blocked "$(field "$OUT" event)" "a pending approval is a blocked event under a zero budget"
   assert_equals req-rm "$(field "$OUT" approvalRequests.0.requestId)" "the approval is named"
   assert_equals provider_check "$(field "$OUT" approvalRequests.0.override)" "the approval carries its override"
   sig=$(field "$OUT" signature)
-  mcp watch --thread thread-w --timeout-ms 0 --state-dir "$dir" --escalated "thread-w=$sig"
+  mcp watch --thread thread-w --timeout-ms 0 --escalated "thread-w=$sig"
   assert_equals none "$(field "$OUT" event)" "an already-escalated approval does not block again"
   [ -z "$(t3_fake_calls t3_thread_wait)" ] || fail "a zero budget never waits on the run"
   mcp watch --thread thread-w --timeout-ms -1
@@ -1176,16 +1110,14 @@ calls() {  # <tool> -> how many calls to <tool> the fake logged
 # no thread re-read and no pending-request list call; a known request never
 # re-settles it, and a run end or the budget still does.
 test_watch_pending_push_ends_the_wait() {
-  local dir started elapsed bg_pid sig call
+  local started elapsed bg_pid sig call
   fresh_case watch-pending-push
-  dir="$TMP_ROOT/cases/watch-pending-push/state"
-  mkdir -p "$dir"
   t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.pendingPush = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-w", ordinal: 1, status: "running" }], runtimeRequests: [] } }'
   ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-touch", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt", override: "provider_check" })' ) &
   bg_pid=$!
   started=$(date +%s)
-  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir"
+  mcp watch --thread thread-w --timeout-ms 20000
   wait "$bg_pid"
   elapsed=$(( $(date +%s) - started ))
   expect_code 0 "$RC" "watch with an approval arriving mid-wait: $ERR"
@@ -1201,14 +1133,14 @@ test_watch_pending_push_ends_the_wait() {
   assert_equals 0 "$(calls t3_pending_request)" "the push carries the pending requests, so no list call follows it"
   sig=$(field "$OUT" signature)
   : > "$T3_FAKE_LOG"
-  mcp watch --thread thread-w --timeout-ms 2500 --state-dir "$dir" --escalated "thread-w=$sig"
+  mcp watch --thread thread-w --timeout-ms 2500 --escalated "thread-w=$sig"
   assert_equals timeout "$(field "$OUT" event)" "an approval already escalated never ends a later wait"
   assert_equals 1 "$(calls t3_thread_wait)" "a known request never settles the wait, so it is never re-armed"
   assert_equals '["req-touch"]' "$(field "$(t3_fake_calls t3_thread_wait)" knownRequestIds)" "the opening read's request ids ride as known"
   assert_equals 1 "$(calls t3_pending_request)" "only the opening read lists the pending requests"
   ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-curl", kind: "approval", status: "pending", requestKind: "command", command: "curl example.com" })' ) &
   bg_pid=$!
-  mcp watch --thread thread-w --timeout-ms 20000 --state-dir "$dir" --escalated "thread-w=$sig"
+  mcp watch --thread thread-w --timeout-ms 20000 --escalated "thread-w=$sig"
   wait "$bg_pid"
   assert_equals blocked "$(field "$OUT" event)" "a second approval beside an escalated one ends the wait"
   assert_equals "q:;a:0;r:req-curl,req-touch" "$(field "$OUT" signature)" "the new set names both approvals"
@@ -1227,10 +1159,10 @@ test_watch_pending_push_ends_the_wait() {
   : > "$T3_FAKE_LOG"
   ( sleep 0.5; t3_fake_set 'w.threads["thread-i"].runtimeRequests.push({ id: "req-q", kind: "user_input", status: "pending", questions: [] })' ) &
   bg_pid=$!
-  mcp watch --thread thread-i --timeout-ms 2000 --state-dir "$dir"
+  mcp watch --thread thread-i --timeout-ms 2000
   wait "$bg_pid"
-  assert_equals timeout "$(field "$OUT" event)" "a thread idle when the wait began holds for the budget"
-  assert_equals 1 "$(calls t3_thread_read)" "an idle thread is read once, never re-read while it holds"
+  assert_equals none "$(field "$OUT" event)" "a thread idle when the wait began answers none, so the caller sleeps the budget"
+  assert_equals 1 "$(calls t3_thread_read)" "an idle thread is read once"
   mcp watch --thread thread-i --timeout-ms 0
   assert_equals blocked "$(field "$OUT" event)" "the next call's opening read reports the idle thread's question"
   assert_equals req-q "$(field "$OUT" questions.0)" "the question is named"
@@ -1589,8 +1521,6 @@ test_jsonrpc_server_error_is_not_proven_refusal
 test_orchestration_error_is_not_proven_refusal
 test_long_wait_rearms_in_slices
 test_capture_clamps_lines_and_closes_session
-test_state_reports_runs_and_the_failed_run_error
-test_watch_state_dir_races_the_run_wait
 test_watch_zero_budget_reads_pending_requests_only
 test_watch_pending_push_ends_the_wait
 test_watch_without_pending_push_reads_at_the_next_call

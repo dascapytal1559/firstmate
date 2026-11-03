@@ -101,13 +101,9 @@
 //     exits 1.
 //   fm-t3-mcp.mjs state --thread <id>
 //     exists, archived, status, activeRunId, pendingRequestCount,
-//     worktreePath, turnAt (the latest run's completion, else its start or
-//     request time), latestRunId and latestRunStatus, runs (the newest
-//     STATE_RUN_LIMIT runs as {runId, status}, newest first), and
-//     latestRunError: the message of the latest `error` activity item of a
-//     latest run that read failed, else null (T3's failure class never leaves
-//     the server on this credential; the message is what `/mcp` exposes). A
-//     thread the verified server does not have reads exists:false.
+//     worktreePath, and turnAt (the latest run's completion, else its start or
+//     request time); a thread the verified server does not have reads
+//     exists:false.
 //   fm-t3-mcp.mjs read --thread <id> [--limit <n>]
 //     t3_thread_read: the thread record and its latest run, unchanged. T3
 //     caps --limit at 100.
@@ -149,7 +145,7 @@
 //     reads back as an approval; --feedback-file holds the text the agent
 //     sees, accepted only with deny. Prints the decision and the approval's
 //     normalized entry as read just before the answer.
-//   fm-t3-mcp.mjs watch --thread <id>... --timeout-ms <n> [--escalated <id>=<signature>]... [--state-dir <dir>]
+//   fm-t3-mcp.mjs watch --thread <id>... --timeout-ms <n> [--escalated <id>=<signature>]...
 //     The T3 event wait for the watcher. It first reads every thread: one
 //     whose pending requests changed from its --escalated signature reports
 //     event:blocked with that signature (as requests computes it), its
@@ -169,16 +165,10 @@
 //     Firstmate requires the fork and keeps no re-read loop for a T3 without
 //     the flag: there, and for a thread whose run starts after the wait
 //     began, a new request is first seen by the next call's opening read,
-//     within the watcher's poll interval.
-//     With --state-dir the same wait also races a change to a *.status or
-//     *.turn-ended entry in that directory (bin/fm-state-watch.mjs owns the
-//     filter and debounce) and reports event:state-changed with the entry's
-//     name first; a directory watch that cannot be opened waits out the
-//     budget instead, so the verb never spins, and with no active run the
-//     wait then holds for the budget rather than answering none. When every
-//     run wait failed rather than returned, the first failure is the verb's
-//     error. --timeout-ms 0 reads the pending requests only and answers
-//     event:none without waiting, for a cycle whose wait another backend holds.
+//     within the watcher's poll interval. When every run wait failed rather
+//     than returned, the first failure is the verb's error. --timeout-ms 0
+//     reads the pending requests only and answers event:none without waiting,
+//     for a cycle whose wait another backend holds.
 //   fm-t3-mcp.mjs archive --thread <id> [--timeout-ms <n>]
 //     t3_thread_organize archive, then read back until the thread reports
 //     archived:true and activeRunId:null and no delegated (subagent) thread
@@ -246,7 +236,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { watchStateDir } from "./fm-state-watch.mjs";
 
 export const PROTOCOL = "2025-06-18";
 export const REQUIRED_TOOLS = [
@@ -301,11 +290,6 @@ const REFUSED_REQUEST_CODES = new Set([-32700, -32600, -32601, -32602]);
 // of its own is read as this one.
 const UNPROVEN_TOOL_ERROR = "orchestration_error";
 const CAPTURE_LINES_MAX = 500;
-// The newest runs `state` reports, enough for a supervisor to find the run it
-// recorded at a worker's `done` once a steer has started a newer one.
-const STATE_RUN_LIMIT = 5;
-// Activity items read back for the error message of a failed latest run.
-const STATE_ERROR_TAIL_ITEMS = 20;
 // The activity item T3 keeps for each permission approval, and the status it
 // holds until the approval is answered (docs/verification/runtime-backends.md).
 const APPROVAL_ITEM = "approval_request";
@@ -877,28 +861,13 @@ async function state(flags) {
   const { session } = await verifiedSession(flags);
   let out;
   try {
-    out = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: STATE_RUN_LIMIT });
+    out = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 });
   } catch (err) {
     if (isNotFound(err)) return { ok: true, threadId, exists: false };
     throw err;
   }
   const t = threadOf(out);
-  const recent = out?.recentRuns ?? [];
-  const run = recent[0] ?? {};
-  const runs = recent.map((r) => ({ runId: r?.runId ?? null, status: r?.status ?? null }));
-  let latestRunError = null;
-  if (run.status === "failed" && run.runId) {
-    // The run record carries no failure detail on `/mcp`; the `error` activity
-    // item T3 writes for the failure carries its message (its class and code
-    // stay server-side). Best effort: a tail that cannot be read leaves null.
-    try {
-      const { items } = await readTail(session, threadId, t.itemCount ?? 0, STATE_ERROR_TAIL_ITEMS);
-      const errorItem = [...items].reverse().find((item) => item?.type === "error" && (item.runId === undefined || item.runId === null || item.runId === run.runId));
-      if (errorItem && typeof errorItem.text === "string" && errorItem.text) latestRunError = errorItem.text;
-    } catch {
-      latestRunError = null;
-    }
-  }
+  const run = (out?.recentRuns ?? [])[0] ?? {};
   return {
     ok: true,
     threadId,
@@ -909,10 +878,6 @@ async function state(flags) {
     pendingRequestCount: t.pendingRequestCount ?? 0,
     worktreePath: t.worktreePath ?? null,
     turnAt: run.completedAt ?? run.startedAt ?? run.requestedAt ?? null,
-    latestRunId: run.runId ?? null,
-    latestRunStatus: run.status ?? null,
-    runs,
-    latestRunError,
   };
 }
 
@@ -1698,8 +1663,6 @@ async function watch(flags) {
   const threadIds = [...new Set(flags.all.thread ?? [])];
   if (!threadIds.length) usage("--thread is required");
   const timeoutMs = flags["timeout-ms"] === "0" ? 0 : positiveInt(flags, "timeout-ms", 60_000, 3_600_000);
-  const stateDir = flags["state-dir"];
-  if (stateDir !== undefined && !path.isAbsolute(stateDir)) usage("--state-dir must be an absolute path");
   const escalated = new Map();
   for (const pair of flags.all.escalated ?? []) {
     const eq = pair.indexOf("=");
@@ -1718,7 +1681,7 @@ async function watch(flags) {
     if (!known.size && !read.pending.approvals && escalated.has(threadId)) cleared.push(threadId);
     if (read.t.activeRunId) runs.push({ threadId, runId: read.t.activeRunId, known });
   }
-  if (!timeoutMs || (!runs.length && stateDir === undefined)) return { ok: true, event: "none", cleared };
+  if (!timeoutMs || !runs.length) return { ok: true, event: "none", cleared };
   const push = toolOffers(session, "t3_thread_wait", PENDING_PUSH_FLAG);
   const abort = new AbortController();
   const notEnded = new Error("not ended");
@@ -1727,47 +1690,17 @@ async function watch(flags) {
     if (ended) return ended;
     throw notEnded;
   });
-  if (stateDir !== undefined) {
-    waits.push(
-      stateDirWait(stateDir, timeoutMs, abort.signal).then((changed) => {
-        if (changed?.event === "state-changed") return { stateChanged: changed.name };
-        throw notEnded;
-      }),
-    );
-  }
   try {
     const ended = await Promise.any(waits).catch((err) => {
-      // The verb's error is a run wait's when every run wait failed and no
-      // directory raced.
+      // The verb's error is a run wait's when every run wait failed.
       if (err.errors.every((e) => e !== notEnded)) throw err.errors[0];
       return null;
     });
     if (ended?.blocked) return { ...ended.blocked, cleared };
-    if (ended?.stateChanged !== undefined) return { ok: true, event: "state-changed", name: ended.stateChanged, cleared };
     return ended?.run ? { ok: true, event: "run-ended", ...ended.run, cleared } : { ok: true, event: "timeout", cleared };
   } finally {
     abort.abort();
   }
-}
-
-// The state-directory half of a watch: a directory that cannot be watched is
-// a timeout after the budget, never an immediate answer, so a caller that
-// re-arms on return cannot spin on an unwatchable directory.
-function stateDirWait(dir, timeoutMs, signal) {
-  return watchStateDir(dir, timeoutMs, signal).catch(
-    (err) =>
-      new Promise((resolve) => {
-        const timer = setTimeout(() => resolve({ event: "timeout", error: err?.message ?? String(err) }), timeoutMs);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve({ event: "aborted" });
-          },
-          { once: true },
-        );
-      }),
-  );
 }
 
 async function archive(flags) {
