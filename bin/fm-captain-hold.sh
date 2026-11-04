@@ -55,7 +55,8 @@
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
-# card.
+# card. A live T3 worker's title shows the hold (bin/fm-t3-captain-label.sh),
+# and every hold, answer, and reconcile close brings that title up to date.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -264,6 +265,7 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
   esac
 }
 
+CAPTAIN_LABEL_SYNC=0
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
@@ -278,6 +280,9 @@ captain_hold_cleanup() {
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
   fm_afk_contract_lock_release || true
+  # After the locks: a T3 thread's title follows the hold (the script's header
+  # owns how), and a slow or failed rename never changes this command's result.
+  [ "$CAPTAIN_LABEL_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-captain-label.sh" sync >&2 || true
 }
 trap captain_hold_cleanup EXIT
 
@@ -1192,6 +1197,8 @@ command_hold() {
   if [ -n "$origin" ]; then
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
+  "$SCRIPT_DIR/fm-t3-captain-label.sh" note "$id" ${origin:+"$origin"} >&2 || true
+  CAPTAIN_LABEL_SYNC=1
   printf '%s\n' "$id"
 }
 
@@ -1829,6 +1836,7 @@ reconcile_close() {
     shift
   done
   validate_slug task-id "$id"
+  CAPTAIN_LABEL_SYNC=1
   [ -n "$evidence_file" ] || fail "--evidence-file is required; a moot call closes on evidence, never on assertion"
   load_decision "$evidence_file"
   acquire_task_control_lock "$id"
@@ -2260,7 +2268,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
-  answer) shift; command_answer "$@" ;;
+  answer) shift; CAPTAIN_LABEL_SYNC=1; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;

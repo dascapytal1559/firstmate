@@ -441,6 +441,59 @@ test_pin_coordinator() {
   pass "fm-t3-mcp pin-coordinator: pins the live root thread as the one coordinator only where T3 offers it"
 }
 
+# title-label sets and removes one leading label on the live title, renames
+# only when that changes it, proves T3's answer, and leaves a thread that is
+# gone alone. A T3 without the rename tool still passes the gate.
+test_title_label() {
+  local project thread
+  fresh_case title-label '{"toolset":"current"}'
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title 'Print view' --model-selection "$SEL"
+  thread=$(field "$OUT" threadId)
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state on
+  expect_code 0 "$RC" "labelling should succeed: $ERR"
+  assert_equals 'Waiting for captain · Print view' "$(field "$OUT" title)" "the label leads and the title stays"
+  assert_equals true "$(field "$OUT" changed)" "the first label renames"
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state on
+  assert_equals false "$(field "$OUT" changed)" "a repeat renames nothing"
+  assert_equals 1 "$(t3_fake_calls t3_thread_update | wc -l | tr -d ' ')" "a repeat makes no rename call"
+  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].title = "Waiting for captain · Waiting for captain · Print view"'
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state off
+  expect_code 0 "$RC" "unlabelling should succeed: $ERR"
+  assert_equals 'Print view' "$(field "$OUT" title)" "every leading label comes off"
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state off
+  assert_equals false "$(field "$OUT" changed)" "an unlabelled title needs no rename"
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state sideways
+  expect_code 2 "$RC" "a bad state is a usage error"
+
+  t3_fake_set 'w.renameAnswersTitle = "something else"'
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state on
+  expect_code 1 "$RC" "a rename T3 does not answer with the new title is unproven"
+  assert_contains "$OUT" rename_unproven "the failure names the unproven rename"
+  t3_fake_set 'delete w.renameAnswersTitle; w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state off
+  expect_code 3 "$RC" "T3's refusal of the rename is a typed failure"
+  t3_fake_set 'delete w.failTools'
+
+  mcp title-label --thread thread-missing --label 'Waiting for captain' --state on
+  expect_code 0 "$RC" "a thread T3 no longer has is no failure: $ERR"
+  assert_equals false "$(field "$OUT" exists)" "a missing thread reads exists:false"
+  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].title = "Waiting for captain · Print view"; w.threads[process.env.FM_T3_ID].archived = true'
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state on
+  expect_code 0 "$RC" "an archived thread is no failure: $ERR"
+  assert_equals true "$(field "$OUT" archived)" "the result reports the archive"
+  assert_equals 'Print view' "$(field "$OUT" title)" "an archived thread has no card, so it always loses the label"
+
+  t3_fake_set 'w.tools = ["t3_thread_launch", "t3_thread_send", "t3_thread_read", "t3_thread_wait", "t3_thread_interrupt", "t3_thread_organize", "t3_thread_list", "t3_project_list", "t3_project_create", "orchestrator_capabilities", "t3_environment_read", "t3_thread_configure", "t3_pending_request"]'
+  mcp title-label --thread "$thread" --label 'Waiting for captain' --state on
+  expect_code 4 "$RC" "a T3 without the rename tool refuses only this verb"
+  assert_contains "$OUT" rename_unsupported "the refusal names the missing tool"
+  mcp state --thread "$thread"
+  expect_code 0 "$RC" "the rename tool stays out of the capability gate: $ERR"
+  pass "fm-t3-mcp title-label: one label on the live title, proven, and harmless on a repeat or a gone thread"
+}
+
 test_typed_failure_and_transport_errors() {
   local thread
   fresh_case failures
@@ -1491,6 +1544,7 @@ test_launch_refusals
 test_send_state_capture_interrupt_archive
 test_thread_for_root
 test_pin_coordinator
+test_title_label
 test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_start

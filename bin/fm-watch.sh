@@ -3843,6 +3843,21 @@ lane_capacity_publish_detached() {
   LANE_CAPACITY_PID=$!
 }
 
+T3_CAPTAIN_LABEL_PID=
+t3_captain_label_sync_detached() {
+  if [ -n "$T3_CAPTAIN_LABEL_PID" ]; then
+    if kill -0 "$T3_CAPTAIN_LABEL_PID" 2>/dev/null; then
+      return 0
+    fi
+    wait "$T3_CAPTAIN_LABEL_PID" 2>/dev/null || true
+    T3_CAPTAIN_LABEL_PID=
+  fi
+  touch "$STATE/.t3-captain-wait-sync"
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-t3-captain-label.sh" sync </dev/null >/dev/null 2>&1 &
+  T3_CAPTAIN_LABEL_PID=$!
+}
+
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
 # A merged poll may have queued its terminal wake and then lost the process
@@ -4003,6 +4018,14 @@ while :; do
   # repost after grace, and escalate once if the recovery turn is also missed.
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
+
+  # A T3 thread's captain-wait title is repaired here: a rename that failed,
+  # or a thread that came back, converges on the next pass. Nothing to do and
+  # no call to T3 without a record, which is every home but a T3 one with a
+  # captain wait.
+  if [ -d "$STATE/t3-captain-wait" ] && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
+    t3_captain_label_sync_detached
+  fi
 
   open_decision_reminder_tick || {
     echo 'watcher: open-decision reminder check failed' >&2

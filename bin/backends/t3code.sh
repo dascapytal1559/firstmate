@@ -205,6 +205,14 @@ fm_backend_t3code_pin_coordinator() {  # <home>
   fm_backend_t3code_mcp pin-coordinator --root "$real" >/dev/null 2>&1
 }
 
+# fm_backend_t3code_title_label <thread-id> <label> <on|off>: label or unlabel
+# a thread's title (bin/fm-t3-mcp.mjs title-label owns the rename and its
+# proof) and print the helper's one JSON object. Display only: no selector,
+# record, or recovery keys on a title.
+fm_backend_t3code_title_label() {  # <thread-id> <label> <on|off>
+  fm_backend_t3code_mcp title-label --thread "$1" --label "$2" --state "$3"
+}
+
 # One logical delivery keeps one client request id across retries and
 # restarts: T3 derives the message id from it within the auth session that
 # sent it, so a resend after a lost reply lands on the message T3 already

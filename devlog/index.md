@@ -386,3 +386,38 @@ The option, if he wants it: a small T3-only addition that marks a worker's turn-
 
 The evidence is the watcher, signal-grace, T3 backend, T3 client, supervision host, supervision events, turn-end, away daemon, branch dispatcher, and cleanup suites, all passing, including the poll-only-home case that the fork's own state-folder watch had been failing.
 The timings come from scratch runs of the real watcher at its default settings against the fake T3 server, with the worker's turn ending 2 seconds after its `done`: before, both workers woke Firstmate in 2 seconds; after, a Claude worker took 4-5 seconds and a Codex worker 35.
+
+## 16. Waiting for captain, on the card (4 November 2026)
+
+![A worker's card through its life: Working, then Waiting for captain ahead of its title while only the captain can unblock it, then its plain title again once he answers](media/waiting-for-captain-card.svg)
+
+An illustration of the card, not a screenshot: a browser pointed at the live T3 needs a pairing token, and minting one for a picture was not worth it.
+
+His words:
+
+> I imagine how it works is when a worker finishes, it will say done, and then first mate picks it up immediately, and then the done will either either disappear and turn into working again if first mate like tell it to risk to to act or um it can also say waiting for captain, which is where first mate has determined that okay, only a cap a captain is needed to unblock this.
+
+> Yep, perfect. Okay. We're aligned. We're aligned on waiting for captain as well
+
+What was built, in Firstmate alone, with no change to the T3 Code fork:
+
+- When a captain hold is open on a live T3 worker, its thread title reads `Waiting for captain · <title>`. It goes when the hold ends, and when the worker is cleaned up.
+- The title is rewritten from the thread's live title, so nothing keeps a copy that could go stale.
+- A rename that fails, or meets a stopped T3, never fails the hold or the answer. A small record stays until the title is proven, and the watcher repairs it within about a minute.
+
+The choices made:
+
+- **The trigger is the captain hold, and only that.** The hold can be on the worker's own task or on a task with `--origin` naming the worker. A worker's `needs-decision` line does not count, since Firstmate settles most of those itself. A question a live worker is parked on is covered by Firstmate holding it as it escalates, which is already the rule, so there is no new status word or worker protocol.
+- **A hold with no running worker changes nothing,** because there is no card to label.
+- **Cleanup restores the title even while the hold stays open,** so an archived thread reads as the work.
+
+The half that could not be done here: Done still clears only when the card is opened.
+T3 clears it through a visit, and the visit command is only reachable from T3's own client: no tool Firstmate can call sends it, `t3_thread_organize` offers `mark_unread` and no opposite, and T3 refuses a Firstmate sign-in anywhere but its tool endpoint.
+So a waiting card can read Done beside the new title until it is opened.
+It needs one small fork change: a `mark_read` action on `t3_thread_organize` that sends the visit command.
+With that, Firstmate marks the thread seen when it reads a worker's report.
+
+The evidence is two throwaway threads on the live T3, a parent and a crew card, renamed through the same tool Firstmate calls.
+The label landed mid-run and stayed when the run ended, the thread still read as crew of the same parent, and the title restored and relabelled cleanly on the finished thread.
+A rename on an archived thread also works, which is why an archived thread always loses the label.
+Firstmate's own rename command ran only against the fake T3 server, with the hold, answer, cleanup, watcher, and capability suites, because this worker had no sign-in for the live one.

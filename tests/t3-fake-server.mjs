@@ -65,6 +65,8 @@
 //     and such a wait also ends on a question or approval outside the known
 //     ids, carrying settledBy and pendingRequests (see waitRun); without it
 //     both arguments are dropped.
+//   - t3_thread_update renames a thread, archived or not, and answers with its
+//     title (world renameAnswersTitle answers another one).
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -113,7 +115,7 @@ for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].slice(2)] 
 
 const ALL_TOOLS = [
   "t3_thread_launch", "t3_thread_send", "t3_thread_read", "t3_thread_wait", "t3_thread_interrupt",
-  "t3_thread_organize", "t3_thread_list", "t3_thread_configuration", "t3_thread_configure", "t3_project_list", "t3_project_create",
+  "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configuration", "t3_thread_configure", "t3_project_list", "t3_project_create",
   "t3_pending_request_list", "t3_pending_request_read", "t3_pending_request_respond",
   "orchestrator_capabilities", "t3_environment_read",
 ];
@@ -472,6 +474,12 @@ async function callTool(w, name, a) {
         }
       }
       return [ok({ threadId: t.threadId, action: a.action }), true];
+    }
+    case "t3_thread_update": {
+      if (!t) return [notFound(a.threadId), false];
+      if (a.action !== "rename") return [err("invalid_action", `unknown action ${a.action}`), false];
+      t.title = a.title;
+      return [ok({ threadId: t.threadId, action: "rename", title: w.renameAnswersTitle ?? t.title }), true];
     }
     case "t3_pending_request":
       if (!["list", "read", "respond"].includes(a.action)) return [err("invalid_action", `unknown action ${a.action}`), false];

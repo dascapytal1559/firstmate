@@ -130,6 +130,7 @@ state/               runtime records and signals; gitignored
   pr-health.check.sh  generated owned-PR health poll shim and its .check-trust binding; present only after bin/fm-pr-health.sh arm, which config/pr-health-monitor gates (docs/configuration.md "PR health monitor")
   pr-health.json     the health monitor's fm-pr-health.v1 record: per-PR fingerprints of the conditions already reported, the task branch-to-PR lookup cache, and the GitHub notifications cursor, replaced by rename under .pr-health.lock; bin/fm-pr-health.sh owns the format
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
+  t3-captain-wait/   live T3 workers whose title shows a captain wait; bin/fm-t3-captain-label.sh owns it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

@@ -47,6 +47,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 ### Creating a hold (`hold`)
 
 The `hold` subcommand is the mandatory captain-hold creation path.
+On a live T3 worker it also [labels the worker's card](t3code-backend.md#waiting-for-captain).
 It works in this order:
 
 1. It uses an existing task, or creates one when nothing exists to hold.

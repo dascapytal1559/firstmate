@@ -204,6 +204,18 @@ The kill is idempotent, so an already archived thread, or one the verified serve
 Archiving keeps the transcript visible in T3 Code; this backend never deletes a thread.
 The T3 project of a torn-down secondmate home stays in T3 Code pointing at the removed directory until the operator deletes it there, because deleting a nonempty project takes the archived thread's transcript with it.
 
+### Waiting for captain
+
+A live worker's thread title reads `Waiting for captain · <title>` while a captain hold is open on it, because only Firstmate knows the worker is waiting on the captain.
+A hold counts when it is on the worker's own task or on a task whose `--origin` is the worker, so firstmate holds the question as it escalates; a worker's `needs-decision` line alone does not count, because firstmate settles most of those itself.
+A hold on a task with no live T3 ship or scout has no card and changes nothing.
+
+The title is display only, and T3's `crewOf` stays what makes a thread crew.
+[`bin/fm-t3-captain-label.sh`](../bin/fm-t3-captain-label.sh) sets it after every hold, answer, and reconcile close, and cleanup restores it before archiving the thread, even while the hold stays open.
+It works from the thread's live title and a record of the worker's holds, so a rename that failed or a T3 that was down is repaired by the watcher within about a minute, and a rename already made survives a restart.
+
+The label sits in the title, not in T3's status label, so a waiting card can also read Done until it is opened: T3 clears Done only on a visit, and no `/mcp` tool marks a thread seen.
+
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
@@ -334,7 +346,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-captain-label.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh
 FM_T3CODE_PR_TOOLS_LIVE=1 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-pr-tools-live-e2e.test.sh

@@ -53,6 +53,18 @@ FirstMate can then allow or deny the approval itself, from its own session, inst
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
+## Waiting for captain on the worker's card
+
+![A worker's card through its life: Working, then Waiting for captain ahead of its title while only the captain can unblock it, then its plain title again once he answers](devlog/media/waiting-for-captain-card.svg)
+
+T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain.
+When FirstMate decides that only the captain can unblock a live worker, the worker's card title starts with "Waiting for captain", and the rest of the title stays.
+The words go when that wait ends, and when the worker is cleaned up.
+A worker's own question does not set it, because FirstMate settles most of those itself.
+Only T3 Code workers show this, and a failed rename is retried, so the title comes right within about a minute.
+A card can still read Done beside these words until it is opened, because T3 Code clears Done only when a thread is opened and gives FirstMate no way to mark one seen.
+Details: [waiting for captain](docs/t3code-backend.md#waiting-for-captain).
+
 ## Recovery after a T3 Code restart
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
