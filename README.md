@@ -6,6 +6,7 @@ A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that
 Upstream can run workers in T3 Code as an experimental backend; with the T3 Code fork, this fork makes T3 Code FirstMate's home:
 
 - FirstMate's own session runs in T3 Code, and wakes again after a T3 restart.
+- T3 Code's Refresh context button swaps that session for a fresh one on the same thread, stowing first.
 - Hears a worker in seconds: a finish, a question or an approval reaches FirstMate at once, and FirstMate can answer the approval itself.
 - Any T3 Code agent can be a worker, not only Claude and Codex.
 - A worker's card says Waiting for captain while only the captain can unblock it, and Testing during its no-mistakes run.

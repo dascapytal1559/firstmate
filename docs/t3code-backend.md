@@ -262,6 +262,32 @@ Claude's `SessionStart` hook does not reliably fire on such a reopen, so nothing
   The project's `continueThreadsAfterServerUpdate` setting switches the note off, and upstream T3 Code sends none.
   A main whose own run the restart cut gets T3's restart continuation instead of the note, and that continuation does not mention session start, so the first-tool-call reminder above is what brings it back.
 
+### Refresh context
+
+T3 Code's Refresh context button keeps the Firstmate thread and replaces the agent session behind it, so the captain sees one chat with a dated divider while the new session starts with no earlier context.
+It shows only on a pinned coordinator thread, so keep the main pinned, and the thread id does not change, so records keyed by it stay valid.
+No `/mcp` tool triggers it: only the captain's press does, and an agent cannot refresh itself mid-turn.
+The [T3 Code fork](https://github.com/dascapytal1559/t3code)'s `fork/README.md` owns the button; this section owns what Firstmate does around it.
+
+1. T3 sends `/stow` as one plain message on the old session.
+   [The stow skill](../.agents/skills/stow/SKILL.md#when-t3-code-sends-stow) runs its whole pass and asks nothing, because the swap waits for the turn to end; what it would have asked becomes a held task the next session reads.
+   If the turn fails, is stopped, or a rewake keeps the agent busy, T3 keeps the session and says so under the turn.
+2. When the turn ends, T3 ends the agent's process and waits for it to exit: SIGTERM about 2 s later, SIGKILL 5 s after that.
+   Nothing releases the session lock, and the Stop hook may fire once on the way out.
+   A hook that fires once the process is gone arms nothing and moves no lock, whether that is before or after the new session starts.
+3. The new process takes the helm through the ordinary session start.
+   `bin/fm-lock.sh` reclaims the dead holder's lock, so the session does not come up read-only, and it writes the same thread id to `state/t3-main-thread`.
+   The T3 server has not restarted, so `bin/fm-t3-restart.sh recover` steers no worker.
+4. T3 sends exactly `Context refreshed.` as the first message, so the new session starts and takes the helm.
+   [`bin/fm-operational-input.sh`](../bin/fm-operational-input.sh) classifies that text as operational, not captain, so the session runs no Bearings, replies in one short line, and keeps the text out of the dialog mirror and the Ahoy boundary.
+5. Wakes queued during the swap stay durable and reach the new session in its digest.
+   Claude ends a running Stop hook, its arm, and its watcher with the session ([dated evidence](verification/runtime-backends.md#refresh-context-swap-on-real-claude)), so the new session's first Stop starts the one cycle, and it attaches instead if a watcher did outlive the old session.
+   A watcher that died leaves one recovery notice, in the digest or as a wake after that first Stop, which the new session acknowledges like any other.
+
+A session that starts while the old process is still alive comes up read-only, which is why T3 waits for the exit.
+A server restart in the middle of a refresh drops it, and the captain presses the button again.
+A startup check from the old session that is still running can refuse the lock for up to its two-minute bound, which needs a refresh within two minutes of the previous session's start.
+
 The main's credential guard in the same PreToolUse hook denies a Read or Grep of `config/t3code-token`, a Grep over `config/`, and a shell command that would print the file or a glob over `config/`, so the full-access credential stays out of the main thread's transcript; it guards against a mistake, not a determined reader.
 
 Inspect a failed worker's thread error before sending a new turn through its normal steer path.
@@ -357,11 +383,13 @@ If a task's thread no longer reads back, release the task by hand:
 ```sh
 bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-captain-label.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
+bin/fm-test-run.sh tests/fm-session-swap.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh
 FM_T3CODE_PR_TOOLS_LIVE=1 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-pr-tools-live-e2e.test.sh
 ```
 
 The portable entry points cover the T3 adapter against a [fake `/mcp` server](../tests/t3-fake-server.mjs) and fake Treehouse, plus the shared backend, daemon, and control behavior.
+`tests/fm-session-swap.test.sh` runs the [Refresh context](#refresh-context) swap with real processes: a real SIGTERM, the real session start, Stop hook, host or arm, and watcher.
 The live guard spends no model tokens and changes nothing on the server: it checks the gate, the project catalog, and a typed missing-thread read against the server the configured credential names, and skips cleanly without one.
 Set `FM_T3CODE_LIVE_E2E=0` to disable it or `FM_T3CODE_LIVE_E2E=1` to require it; the shared `FM_LIVE` override also applies.
 The pull-request-tool guard is opt-in because it spends model tokens: it launches one scratch Claude thread that links, lists, and unlinks an old merged PR, and archives that thread afterwards.

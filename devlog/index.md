@@ -503,3 +503,34 @@ The choices made:
 - **The record is the worker's folder.** An empty folder means the card may carry a label, so a run needs no new kind of record.
 
 The evidence is the label and T3 helper suites against the fake T3 server, with new cases for Testing, the order of the two labels, a scout, an older T3, and the watcher finding a run on its own.
+
+## 20. Refresh context, FirstMate's half (5 November 2026)
+
+His words:
+
+> I want my experience on the front end to stay the same it's as if I've gotten a new first mate thread but in the back end it essentially swaps out the thread and starts a new one.
+
+> when I click this button, it essentially dumps the old thread or it stows, does whatever stowing it needs. It dumps the old thread and then creates a new one and runs bearings on it. And the front end experience for me stays exactly the same.
+
+And then, changing that last part:
+
+> Actually for the first mate refresh button, don't run bearings on new first mate thread.
+
+The T3 side landed first. What was built here:
+
+- `Context refreshed.`, T3's plain opening message for the new session, is operational and not the captain speaking. The session starts and takes the helm, replies in one short line, and runs no Bearings.
+- `/stow` from T3 finishes without asking anything. What it would have asked becomes a held decision, so the next session's digest and Bearings carry it.
+- `tests/fm-session-swap.test.sh` runs the swap with real processes. No lock or watcher code had to change: the proof found the handover already works.
+
+The choices made:
+
+- **The classifier owns the opening message.** `bin/fm-operational-input.sh classify` recognizes the exact text, so the dialog mirror, the Pi branch, and Calm all treat it as machinery with no second rule. Captain words that happen to be exactly `Context refreshed.` read the same way.
+- **`/ahoy` stays as it was.** Its only change is that this message is not a captain boundary, so a first real `/ahoy` after a refresh still gets Bearings, because the captain asked for it.
+- **Every `/stow` on T3 is treated as the button's.** The message looks the same whoever sent it, so a `/stow` typed in T3 also asks nothing, and its questions wait in held decisions.
+- **The swap test runs both fates of the Stop hook.** Whether Claude kills a running hook when it is signalled is its own choice, so the hook dying with the session and the hook living on as an orphan are both proven.
+
+The evidence is that suite, seven cases: the lock passing over, a session beside a live holder staying read-only, the dead session's Stop hook changing nothing, and a wake queued during the swap reaching the new session with one watcher left, on the supervision host and on the plain arm.
+
+Real Claude ran the swap too, in a throwaway home on T3's launch flags, with no way to reach the real one. It exited about half a second after SIGTERM and took its Stop hook and watcher with it, and the next session took the lock and kept the thread id. `Context refreshed.` ran no Bearings in five sessions out of five, four on Haiku and one on Opus, and a real `/ahoy` after it still gave Bearings. An undecided question before `/stow` became a held decision, and the next session's Bearings listed it under Captain's Call.
+
+The real home's own lock has not been exercised, by design. The first press of the button after this lands is that proof.

@@ -91,6 +91,16 @@ FirstMate notices the restart at its next start and nudges each interrupted work
 The T3 Code fork tells a FirstMate running inside it that the server restarted, so FirstMate restarts its session once the server is back.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
+## Refresh context on the FirstMate thread
+
+The T3 Code fork's Refresh context button swaps the agent session behind the FirstMate thread, so the context starts clean while the thread and the chat stay as they were.
+FirstMate does the other half.
+The old session stows without asking anything, because the swap waits for that turn to end, and whatever it would have asked becomes a held decision the new session reads.
+The new session takes over the session lock the old one left behind, and it comes up in charge, not read-only.
+T3 Code opens the new session with `Context refreshed.`, which FirstMate treats as a start and not as the captain speaking, so it answers in one short line and runs no Bearings.
+Wakes that arrive during the swap reach the new session, and one watcher cycle carries on.
+Details: [Refresh context](docs/t3code-backend.md#refresh-context).
+
 ## Current T3 Code releases
 
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.

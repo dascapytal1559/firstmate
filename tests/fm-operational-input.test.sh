@@ -107,6 +107,27 @@ test_isolated_legacy_matrix() {
   pass "operational input: historical prose compatibility is isolated from current parsing"
 }
 
+test_t3_refresh_opening_is_classified_only_when_exact() {
+  local parsed fixture
+  fm_operational_input_classify 'Context refreshed.' parsed \
+    || fail "T3's refresh opening was not classified"
+  [ "$parsed" = session-refresh ] || fail "T3's refresh opening became $parsed"
+  [ "$(classify_cli 'Context refreshed.')" = session-refresh ] || fail "CLI lost T3's refresh opening"
+  ! fm_operational_input_kind 'Context refreshed.' parsed \
+    || fail "T3's plain opening leaked into the envelope parser as $parsed"
+  while IFS= read -r fixture || [ -n "$fixture" ]; do
+    [ -z "$(classify_cli "$fixture" || true)" ] \
+      || fail "CLI classified a captain message: $fixture"
+  done <<'EOF'
+Context refreshed
+context refreshed.
+Context refreshed. What is next?
+Was the context refreshed?
+ Context refreshed.
+EOF
+  pass "operational input: only the exact T3 refresh opening is classified"
+}
+
 test_genuine_near_misses_remain_unclassified() {
   local marker fixture parsed
   marker=$FM_OPERATIONAL_MARK
@@ -251,6 +272,7 @@ test_current_generic_matrix
 test_current_from_firstmate_carrier
 test_landed_untyped_prefix_is_explicitly_legacy
 test_isolated_legacy_matrix
+test_t3_refresh_opening_is_classified_only_when_exact
 test_genuine_near_misses_remain_unclassified
 test_cross_language_adapter_uses_the_owner
 test_invalid_current_encodings_are_rejected

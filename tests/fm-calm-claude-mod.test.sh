@@ -462,6 +462,8 @@ write_parity_corpus() {
     $'text before \xE2\x81\xA3FIRSTMATE_OP: v1 watcher: body' \
     $'\xE2\x81\xA3' \
     $'\xE2\x81\xA3unrelated' \
+    'Context refreshed.' \
+    'Context refreshed' \
     'hello there' \
     '' \
     $'\n' \
