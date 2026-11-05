@@ -154,6 +154,7 @@ state/               runtime records and signals; gitignored
   .afk-contract      the away or quiet posture record; bin/fm-afk-contract.sh owns its mode, schema, entry, archive, and lock contract; its sibling .afk-contract.lock serializes actions authorized by the live record
   afk-contracts/     archived away and quiet records; bin/fm-afk-contract.sh owns their archive contract
   .afk               durable away/quiet-mode daemon flag on the harnesses that still launch the daemon (never on Pi); present = sub-supervisor may inject escalations, first line `away` (default, set by /afk, cleared on user return) or `quiet` (set by /quiet, cleared only on explicit /quiet off) per the single owner fm_afk_mode() in bin/fm-wake-lib.sh
+  t3-main-thread     the T3 thread id of the live FirstMate session, the single answer to "which T3 thread is FirstMate"; written by bin/fm-session-start.sh only in the session that took the lock, so a lock-refused session leaves it alone and a locked non-T3 session removes a stale one
   .lock-session      trusted Claude session-lock sidecar; written only by bin/fm-lock.sh; never touch
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .paseo-workspace.lock  Paseo backend lock serializing a spawn's workspace choice and tab creation against retiring an emptied workspace; bin/backends/paseo.sh owns it; never touch

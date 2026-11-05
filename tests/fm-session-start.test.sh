@@ -907,6 +907,80 @@ EOF
   pass "session start stays read-only when lock ownership cannot be published"
 }
 
+# --- state/t3-main-thread: which T3 thread is the live FirstMate ---------------
+
+test_t3_main_thread_recorded_by_locked_t3_session() {
+  local rec root home fakebin
+  rec=$(new_world t3-main-thread-locked)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'old-thread\n' > "$home/state/t3-main-thread"
+
+  T3CODE_THREAD_ID=live-thread-1 run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
+
+  [ "$(cat "$home/state/t3-main-thread" 2>/dev/null)" = live-thread-1 ] \
+    || fail "a locked T3 session did not record its thread id over the older one"
+  [ -z "$(find "$home/state" -maxdepth 1 -name '.t3-main-thread.*' 2>/dev/null)" ] \
+    || fail "the atomic write left a temporary file behind"
+
+  pass "a locked T3 session records its thread id in state/t3-main-thread"
+}
+
+test_t3_main_thread_untouched_by_lock_refused_session() {
+  local rec root home fakebin holder_pid
+  rec=$(new_world t3-main-thread-refused)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'live-thread\n' > "$home/state/t3-main-thread"
+
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+
+  T3CODE_THREAD_ID=refused-thread run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+
+  [ "$(cat "$home/state/t3-main-thread" 2>/dev/null)" = live-thread ] \
+    || fail "a lock-refused T3 session overwrote state/t3-main-thread"
+
+  # A refused non-T3 session must not remove it either.
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+  ( unset T3CODE_THREAD_ID; run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null )
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  [ "$(cat "$home/state/t3-main-thread" 2>/dev/null)" = live-thread ] \
+    || fail "a lock-refused non-T3 session removed state/t3-main-thread"
+
+  pass "a lock-refused session leaves state/t3-main-thread alone"
+}
+
+test_t3_main_thread_removed_by_locked_non_t3_session() {
+  local rec root home fakebin
+  rec=$(new_world t3-main-thread-non-t3)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'stale-thread\n' > "$home/state/t3-main-thread"
+
+  ( unset T3CODE_THREAD_ID; run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null )
+
+  [ ! -e "$home/state/t3-main-thread" ] \
+    || fail "a locked non-T3 session left a stale state/t3-main-thread"
+
+  pass "a locked non-T3 session removes a stale state/t3-main-thread"
+}
+
 test_trace_context_effective_state_is_frozen_after_lock() {
   local rec root home fakebin out frozen
   rec=$(new_world trace-context-session-state)
@@ -3097,6 +3171,9 @@ EOF
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
+test_t3_main_thread_recorded_by_locked_t3_session
+test_t3_main_thread_untouched_by_lock_refused_session
+test_t3_main_thread_removed_by_locked_non_t3_session
 test_trace_context_effective_state_is_frozen_after_lock
 test_session_lock_concurrent_single_winner
 test_output_ordering_diagnostics_lead

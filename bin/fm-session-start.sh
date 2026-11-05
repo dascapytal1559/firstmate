@@ -675,6 +675,25 @@ EOF
   fi
 }
 
+# state/t3-main-thread answers "which T3 thread is FirstMate" for anything that
+# must reach it (an incident listener, a notifier). The session lock already
+# decides which session is the live FirstMate, so only a session that holds the
+# lock may touch the record: a locked T3 session publishes its thread id by
+# atomic rename, a locked non-T3 session removes a stale record, and a refused
+# session never reaches this function. An id with characters outside the plain
+# id alphabet is treated as no usable id rather than written.
+record_t3_main_thread() {
+  local record="$STATE/t3-main-thread" id=${T3CODE_THREAD_ID:-} tmp
+  case "$id" in
+    ''|*[!A-Za-z0-9._-]*) rm -f "$record" 2>/dev/null || true; return 0 ;;
+  esac
+  tmp=$(mktemp "$STATE/.t3-main-thread.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n' "$id" > "$tmp" 2>/dev/null && mv -f "$tmp" "$record" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+}
+
 AGENTS_START_HASH=
 if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
   AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
@@ -733,6 +752,7 @@ FM_HOME="$FM_HOME" FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-role.sh" report 
   || printf 'fm-role: unknown (bin/fm-role.sh report failed)\n'
 
 if [ "$READ_ONLY" -eq 0 ]; then
+  record_t3_main_thread
   if [ "$REEMIT" -eq 0 ]; then
     rm -f "$COMPLETION_FILE" 2>/dev/null || true
   fi

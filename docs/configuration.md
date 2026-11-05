@@ -101,6 +101,7 @@ Each effective `FM_HOME` contains private operational directories.
 `state/` holds runtime records:
 
 - Task metadata, append-only status events, and endpoint signals.
+- The live FirstMate's T3 thread id in `state/t3-main-thread`, written at session start only by the session that holds the lock (`bin/fm-session-start.sh`).
 - Watcher and wake-queue coordination, away-mode state, and generated Relay artifacts.
 - Inactive terminal-outcome receipts under `state/terminal-outcomes/`.
 - Enabled extension working namespaces under `state/extensions/`.
