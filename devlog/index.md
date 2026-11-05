@@ -448,7 +448,7 @@ The skill wording itself has no automated test, so the first real `/bearings` an
 
 ## 18. Priorities, objectives, and ideas in one place (5 November 2026)
 
-![A Bearings digest with made-up items: Priorities and High level objectives open it, and Ideas follow Charted Next](media/focus-and-ideas-in-bearings.svg)
+![A Bearings digest with made-up items: Priorities and High level objectives open it, and Ideas follow Charted Next](../docs/media/fork/focus-and-ideas-in-bearings.svg)
 
 The ask:
 
@@ -534,3 +534,25 @@ The evidence is that suite, seven cases: the lock passing over, a session beside
 Real Claude ran the swap too, in a throwaway home on T3's launch flags, with no way to reach the real one. It exited about half a second after SIGTERM and took its Stop hook and watcher with it, and the next session took the lock and kept the thread id. `Context refreshed.` ran no Bearings in five sessions out of five, four on Haiku and one on Opus, and a real `/ahoy` after it still gave Bearings. An undecided question before `/stow` became a held decision, and the next session's Bearings listed it under Captain's Call.
 
 The real home's own lock has not been exercised, by design. The first press of the button after this lands is that proof.
+
+## 21. Every fork feature in both documents (6 November 2026)
+
+![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age](../docs/media/fork/worker-card-status.png)
+
+The ask:
+
+> Check that the fork has all of its features, meaning all of its deviations from upstream, documented both in the short description in the root README and in the full account with screenshots in `FORK.md`.
+
+The check read the whole diff against upstream, not just commit subjects.
+What changed:
+
+- `FORK.md` gained four entries it was missing: crew lineage, the live thread record, the credential guard, and the telemetry warning.
+- Existing entries were corrected or filled in: Muse and Antigravity were missing, OpenCode's refusal now states the verified reason, and the restart and approval entries now say what the code does beside them.
+- The README's fork section is now one short line per feature, each linking to its `FORK.md` entry, with every feature present.
+
+The choices made:
+
+- **The card picture is now a real screenshot.** The card status was an illustration while the T3 Code with the status spot was only staged; it is installed now, so a throwaway T3 with made-up projects took its place. The labels were set by FirstMate's T3 client on idle threads.
+- **The approval picture reuses measured numbers.** 10.8 s and 41 ms are the two live probes of 3 November, one each.
+- **Crew lineage, the thread record, the credential guard, and telemetry get no picture.** The crew already shows in two pictures, and the other three have nothing to show.
+- **The Bearings picture moved to `docs/media/fork/`**, so it lives once, and this devlog links to it.

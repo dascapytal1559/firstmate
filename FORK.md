@@ -2,7 +2,7 @@
 
 This fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) regularly merges upstream's `main` and carries the changes below on top.
 Each section says what the change does and why, with a picture where one shows it.
-The [README](README.md) keeps a one-line summary of each.
+The [README](README.md) keeps a one-line summary of each, and the [devlog](devlog/index.md) tells how each came about.
 
 ## Instant handoff
 
@@ -26,9 +26,22 @@ Details: [`FM_SIGNAL_GRACE`](docs/configuration.md#environment-variables) and [d
 On the T3 Code backend, FirstMate used to run only Claude and Codex workers.
 Every worker needs its own environment and a note that its instructions really come from FirstMate, and only Claude and Codex could be given those through files in their folder.
 Where a T3 Code build supports per-thread environment and instructions, FirstMate now sends both with the thread itself and reads them back to prove they took.
-That opens the backend to every agent whose T3 Code driver takes those settings; Claude, Codex, Grok, and Pi are verified live; Cursor, Gemini, Kimi, and Devin go through the ACP registry, found by agent; and OpenCode 2 is refused until the T3 fork's per-session environment is installed.
+That opens the backend to every agent whose T3 Code driver takes those settings.
+Claude, Codex, Grok, and Pi are verified live.
+Muse and Antigravity run on their own T3 Code drivers, and Cursor, Gemini, Kimi, and Devin go through the ACP registry, found by agent; those are covered by the test suites only.
+OpenCode 2 is refused, because its one shared server gives a thread no environment of its own.
 FirstMate now requires the T3 Code fork, which has those settings: a T3 Code without them is refused for every agent, Claude and Codex included, before anything starts, and the folder files are gone.
-Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement).
+A model and an effort are checked against T3 Code's own list for that agent before anything starts, and an effort the model does not offer is refused, never swapped for the nearest one.
+Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement) and [provider instances and models](docs/t3code-backend.md#provider-instances-and-models).
+
+## Workers listed as FirstMate's crew
+
+Each thread FirstMate launches names the FirstMate thread that started it as its parent, so T3 Code lists it as that thread's crew, as in the picture above.
+A worker sits under the FirstMate or second mate that spawned it, and a second mate sits under the main FirstMate.
+T3 Code used to guess the crew from folder names and `fm-` titles; now the grouping comes from a recorded field.
+A thread that does not read back as crew of exactly that parent is archived and refused.
+A T3 Code without crew lineage, a FirstMate not running in T3 Code, or a home with several live threads launches the thread with no parent, which changes only the grouping.
+Details: [task shape](docs/t3code-backend.md#task-shape-and-metadata).
 
 ## Readable project and task titles
 
@@ -43,19 +56,23 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 ## Full access and a clean stop
 
 A T3 Code worker is refused unless it runs with full access, because a worker stuck waiting on an approval FirstMate cannot give would stall silently.
+A setting T3 Code cannot honour, such as a narrower permission mode or a tool exclusion list, is refused the same way, before anything starts.
 Cleanup uses T3 Code's own Stop, which also stops any tasks the worker started itself, instead of leaving them running after the worker is gone.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 ## Approvals reach FirstMate at once
 
+![A worker's approval reaches FirstMate in 41 ms instead of 10.8 s, measured from the prompt appearing to FirstMate's wait ending](docs/media/fork/approval-at-once.png)
+
 When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it at once instead of at the end of its next 15-second wait.
 FirstMate can then allow or deny the approval itself, from its own session, instead of interrupting the worker and steering it again.
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
+In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
 ## Waiting for captain and Testing on the worker's card
 
-![A worker's card through its life: Working, then Testing during its no-mistakes run, Waiting for captain while only the captain can unblock it, Testing again once he answers, and Working when the run ends, with the title plain throughout](devlog/media/crew-card-status.svg)
+![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
 T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain or sits in a no-mistakes run.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
@@ -69,7 +86,7 @@ Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
 ## Priorities and high level objectives in every check-in
 
-![A Bearings digest with made-up lists: Priorities and High level objectives blocks sit above Captain's Call and the other three sections, with Ideas after Charted Next](devlog/media/focus-and-ideas-in-bearings.svg)
+![A Bearings digest with made-up lists: Priorities and High level objectives blocks sit above Captain's Call and the other three sections, with Ideas after Charted Next](docs/media/fork/focus-and-ideas-in-bearings.svg)
 
 Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
 They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
@@ -88,8 +105,25 @@ Details: [ideas](docs/configuration.md#ideas).
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
 FirstMate notices the restart at its next start and nudges each interrupted worker to check what is still running and report again.
+Until such a worker reports, its last `working:` or `paused:` line no longer counts as current.
 The T3 Code fork tells a FirstMate running inside it that the server restarted, so FirstMate restarts its session once the server is back.
+FirstMate pins its own thread as its project's coordinator, so that note arrives after every restart, even one that cut no worker's run.
+If the restart cut FirstMate's own turn, its first tool call is refused once with a reminder to run session start.
 Details: [server restart](docs/t3code-backend.md#server-restart).
+
+## The live FirstMate's thread on record
+
+Anything that must reach FirstMate, such as an incident listener or a notifier, can read the live session's T3 thread id from `state/t3-main-thread`.
+A fixed id went stale, and several FirstMate threads can exist at once.
+Only the session holding the session lock writes the record, a read-only session leaves it alone, and a session not running in T3 Code removes a stale one.
+Details: [`state/` records](docs/configuration.md#operational-home-layout-and-state).
+
+## The T3 Code credential stays out of transcripts
+
+`config/t3code-token` is a full-access credential, and a T3 Code thread keeps whatever its agent reads.
+So in a home signed in to T3 Code, FirstMate's own session is refused any read of that file, a search over `config/`, and a shell command that would print the file or a glob over `config/`.
+This guards against a mistake, not a determined reader, and only Claude runs the check.
+Details: [`fm-t3-main-pretool-check.sh`](bin/fm-t3-main-pretool-check.sh).
 
 ## Refresh context on the FirstMate thread
 
@@ -106,3 +140,9 @@ Details: [Refresh context](docs/t3code-backend.md#refresh-context).
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.
 FirstMate accepts both the old and the new forms, so it works with 0.1.3 and later as well as earlier builds.
 Details: [capability gate](docs/t3code-backend.md#capability-gate).
+
+## Telemetry warning that fits the T3 Code fork
+
+The T3 Code fork turns its product telemetry off by default, so a server with no telemetry setting now reads as off and draws no warning.
+FirstMate still warns when the server turns telemetry on, or when it cannot read the setting.
+Details: [setup](docs/t3code-backend.md#setup).

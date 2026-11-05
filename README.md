@@ -5,13 +5,24 @@ This fork and [the T3 Code fork](https://github.com/dascapytal1559/t3code) ship 
 A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`.
 Upstream can run workers in T3 Code as an experimental backend; with the T3 Code fork, this fork makes T3 Code FirstMate's home:
 
-- FirstMate's own session runs in T3 Code, and wakes again after a T3 restart.
-- T3 Code's Refresh context button swaps that session for a fresh one on the same thread, stowing first.
-- Hears a worker in seconds: a finish, a question or an approval reaches FirstMate at once, and FirstMate can answer the approval itself.
-- Any T3 Code agent can be a worker, not only Claude and Codex.
-- A worker's card says Waiting for captain while only the captain can unblock it, and Testing during its no-mistakes run.
+- [Restart recovery](FORK.md#recovery-after-a-t3-code-restart): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
+- [Refresh context](FORK.md#refresh-context-on-the-firstmate-thread): T3 Code's button swaps that session for a fresh one on the same thread, stowing first.
+- [Instant handoff](FORK.md#instant-handoff): a worker's finish reaches FirstMate in seconds.
+- [Approvals at once](FORK.md#approvals-reach-firstmate-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
+- [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex.
+- [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
+- [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
+- [Card status](FORK.md#waiting-for-captain-and-testing-on-the-workers-card): a worker's card says Waiting for captain or Testing.
+- [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
+- [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
+- [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.
+- [Current T3 releases](FORK.md#current-t3-code-releases): works with T3 Code 0.1.3 and later as well as earlier builds.
+- [Telemetry warning](FORK.md#telemetry-warning-that-fits-the-t3-code-fork): warns only when T3 telemetry is on or unreadable.
 
-Bearings and `/ahoy` also open with this home's priorities and high level objectives, and the backlog keeps ideas the captain may pick up apart from work.
+Outside T3 Code:
+
+- [Priorities and objectives](FORK.md#priorities-and-high-level-objectives-in-every-check-in): Bearings and `/ahoy` open with this home's priorities and high level objectives.
+- [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 
