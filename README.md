@@ -8,7 +8,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - FirstMate's own session runs in T3 Code, and wakes again after a T3 restart.
 - Hears a worker in seconds: a finish, a question or an approval reaches FirstMate at once, and FirstMate can answer the approval itself.
 - Any T3 Code agent can be a worker, not only Claude and Codex.
-- A worker's card says Waiting for captain while only the captain can unblock it.
+- A worker's card says Waiting for captain while only the captain can unblock it, and Testing during its no-mistakes run.
 
 Bearings and `/ahoy` also open with this home's priorities and high level objectives, and the backlog keeps ideas the captain may pick up apart from work.
 

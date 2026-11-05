@@ -199,17 +199,18 @@
 //     by the thread reading back coordinator:true, else exit 1
 //     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
 //     harmless.
-//   fm-t3-mcp.mjs title-label --thread <id> --label <text> --state on|off
-//     Makes the thread's live title start with "<text> · " (on) or not (off),
-//     keeping the rest of the title, and renames through t3_thread_update only
-//     when that changes it, so a repeat is harmless and a retry after a lost
-//     reply lands on the same title. A title is display only, never identity.
-//     T3's reply must name the new title, else exit 1 (rename_unproven). A
-//     thread the verified server no longer has reads exists:false. An archived
-//     thread has no card, so it reads archived:true and always loses the
-//     label, as T3 still renames one. t3_thread_update is checked here rather
-//     than in REQUIRED_TOOLS, so a T3 without it costs only this label: exit 4
-//     (rename_unsupported).
+//   fm-t3-mcp.mjs status-label --thread <id> [--label <text>]
+//     Makes the thread's crew card status read <text>, or carry none without
+//     --label, through t3_thread_update only when that changes it, so a repeat
+//     is harmless and a retry after a lost reply lands on the same label. A
+//     label is display only, never identity. T3's reply must name the new
+//     label, else exit 1 (status_label_unproven). A thread the verified server
+//     no longer has reads exists:false. An archived thread has no card, so it
+//     reads archived:true and always loses the label. A T3 whose
+//     t3_thread_update does not declare statusLabel has no label to clear, so
+//     only setting one refuses there: exit 4 (status_label_unsupported). That
+//     is checked here rather than in REQUIRED_TOOLS, so such a T3 costs only
+//     the label.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
@@ -1813,21 +1814,9 @@ async function pinCoordinator(flags) {
   return { ok: true, pinned: true, threadId };
 }
 
-// A title with any leading "<label> · " removed, then with one added when on.
-export function labelledTitle(title, label, on) {
-  const prefix = `${label} · `;
-  let base = title;
-  while (base.startsWith(prefix)) base = base.slice(prefix.length);
-  return on ? `${prefix}${base}` : base;
-}
-
-async function titleLabel(flags) {
+async function statusLabel(flags) {
   const threadId = need(flags, "thread");
-  const label = need(flags, "label");
-  const on = need(flags, "state") === "on";
-  if (!on && flags.state !== "off") usage("--state must be on or off");
   const { session } = await verifiedSession(flags);
-  if (!session.toolSchemas.has("t3_thread_update")) throw new Refusal("rename_unsupported", "this T3 has no t3_thread_update, so a thread title cannot be labelled", 4, { threadId });
   let t;
   try {
     t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
@@ -1836,11 +1825,14 @@ async function titleLabel(flags) {
     throw err;
   }
   const archived = t.archived === true || Boolean(t.archivedAt);
-  const title = labelledTitle(t.title, label, on && !archived);
-  if (title === t.title) return { ok: true, threadId, exists: true, archived, title, changed: false };
-  const out = await session.call("t3_thread_update", { threadId, action: "rename", title });
-  if (out?.title !== title) throw new Refusal("rename_unproven", `T3 accepted the rename of ${threadId} but answered with a different title`, 1, { threadId });
-  return { ok: true, threadId, exists: true, archived, title, changed: true };
+  const label = archived ? null : flags.label ?? null;
+  if (label === (t.statusLabel ?? null)) return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: false };
+  if (!toolOffers(session, "t3_thread_update", "statusLabel")) throw new Refusal("status_label_unsupported", "this T3 has no crew card status label", 4, { threadId });
+  const out = await session.call("t3_thread_update", label === null
+    ? { threadId, action: "clear_status_label" }
+    : { threadId, action: "set_status_label", statusLabel: label });
+  if ((out?.statusLabel ?? null) !== label) throw new Refusal("status_label_unproven", `T3 accepted the status label of ${threadId} but answered with a different one`, 1, { threadId });
+  return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: true };
 }
 
 const VERBS = {
@@ -1865,7 +1857,7 @@ const VERBS = {
   close,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
-  "title-label": titleLabel,
+  "status-label": statusLabel,
 };
 
 async function main(argv) {

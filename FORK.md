@@ -53,17 +53,19 @@ FirstMate can then allow or deny the approval itself, from its own session, inst
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
-## Waiting for captain on the worker's card
+## Waiting for captain and Testing on the worker's card
 
-![A worker's card through its life: Working, then Waiting for captain ahead of its title while only the captain can unblock it, then its plain title again once he answers](devlog/media/waiting-for-captain-card.svg)
+![A worker's card through its life: Working, then Testing during its no-mistakes run, Waiting for captain while only the captain can unblock it, Testing again once he answers, and Working when the run ends, with the title plain throughout](devlog/media/crew-card-status.svg)
 
-T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain.
-When FirstMate decides that only the captain can unblock a live worker, the worker's card title starts with "Waiting for captain", and the rest of the title stays.
-The words go when that wait ends, and when the worker is cleaned up.
+T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain or sits in a no-mistakes run.
+FirstMate says so in the status spot on the worker's card, and the title stays as it is.
+When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
 A worker's own question does not set it, because FirstMate settles most of those itself.
-Only T3 Code workers show this, and a failed rename is retried, so the title comes right within about a minute.
-A card can still read Done beside these words until it is opened, because T3 Code clears Done only when a thread is opened and gives FirstMate no way to mark one seen.
-Details: [waiting for captain](docs/t3code-backend.md#waiting-for-captain).
+While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
+The words go when the wait or the run ends, and when the worker is cleaned up.
+Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows neither word and nothing else changes.
+A failed update is retried, so the card comes right within about a minute, and Testing can take that long to appear or go.
+Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
 ## Priorities and high level objectives in every check-in
 

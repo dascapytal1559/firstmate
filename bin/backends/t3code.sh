@@ -205,12 +205,12 @@ fm_backend_t3code_pin_coordinator() {  # <home>
   fm_backend_t3code_mcp pin-coordinator --root "$real" >/dev/null 2>&1
 }
 
-# fm_backend_t3code_title_label <thread-id> <label> <on|off>: label or unlabel
-# a thread's title (bin/fm-t3-mcp.mjs title-label owns the rename and its
-# proof) and print the helper's one JSON object. Display only: no selector,
-# record, or recovery keys on a title.
-fm_backend_t3code_title_label() {  # <thread-id> <label> <on|off>
-  fm_backend_t3code_mcp title-label --thread "$1" --label "$2" --state "$3"
+# fm_backend_t3code_status_label <thread-id> [label]: set a thread's crew card
+# status, or clear it with no label (bin/fm-t3-mcp.mjs status-label owns the
+# update and its proof), and print the helper's one JSON object. Display only:
+# no selector, record, or recovery keys on a label.
+fm_backend_t3code_status_label() {  # <thread-id> [label]
+  fm_backend_t3code_mcp status-label --thread "$1" ${2:+--label "$2"}
 }
 
 # One logical delivery keeps one client request id across retries and

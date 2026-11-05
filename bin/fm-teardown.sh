@@ -3956,8 +3956,8 @@ fi
 # T3 project is deliberately left in place: project.delete refuses while the
 # archived thread exists and would take that transcript with it under force.
 if [ "$BACKEND" = t3code ]; then
-  # A captain wait can outlive its worker, so restore the title first: the
-  # archived thread stays in T3 under it. Failing here never stops cleanup.
+  # A captain wait can outlive its worker, so clear the card's status first: the
+  # archived thread stays in T3. Failing here never stops cleanup.
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-t3-captain-label.sh" clear "$ID" >&2 || true
   fm_backend_kill t3code "$T" || {

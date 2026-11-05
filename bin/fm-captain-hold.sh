@@ -55,8 +55,8 @@
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
-# card. A live T3 worker's title shows the hold (bin/fm-t3-captain-label.sh),
-# and every hold, answer, and reconcile close brings that title up to date.
+# card. A live T3 worker's card shows the hold (bin/fm-t3-captain-label.sh),
+# and every hold, answer, and reconcile close brings that card up to date.
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -280,8 +280,8 @@ captain_hold_cleanup() {
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
   fm_afk_contract_lock_release || true
-  # After the locks: a T3 thread's title follows the hold (the script's header
-  # owns how), and a slow or failed rename never changes this command's result.
+  # After the locks: a T3 crew card follows the hold (the script's header owns
+  # how), and a slow or failed label never changes this command's result.
   [ "$CAPTAIN_LABEL_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-captain-label.sh" sync >&2 || true
 }
 trap captain_hold_cleanup EXIT

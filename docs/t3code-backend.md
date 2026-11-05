@@ -148,7 +148,7 @@ Spawn refuses, before anything is leased and for every harness, a T3 provider in
 Spawn resolves the selection and channels against T3's catalog, matches the project (the home, for a secondmate) by real path against T3's live projects, creating one with `t3_project_create`, titled with the directory name, when absent (an existing project keeps its own title), and leases the worktree for a worker.
 It installs the Claude busy hooks and the Git hook entry, then launches an idle thread with `t3_thread_launch` (the title, the workspace strategy and branch, `full-access` runtime mode, the model selection, and the thread channels) and reads the thread and its configuration back through the [capability gate](#capability-gate)'s configuration tool; a thread T3 bound to another workspace, runtime mode, effective runtime mode, instance, model, option value, environment, or instructions is archived and the spawn refuses.
 It records metadata and sends the encoded brief (the charter, for a secondmate) as the thread's first message with `t3_thread_send`.
-A worker's thread title, its crew card label in T3, is its backlog item's title cut to 96 characters, so keep item titles short; it falls back to `fm-<id>`, which a secondmate always uses, and nothing keys on it.
+A worker's thread title, the name on its crew card in T3, is its backlog item's title cut to 96 characters, so keep item titles short; it falls back to `fm-<id>`, which a secondmate always uses, and nothing keys on it.
 Exact call payloads are owned by `bin/fm-t3-mcp.mjs` and `bin/backends/t3code.sh`.
 
 `fm-peek.sh` renders the newest items of the thread's activity view as `[type/status] text` lines followed by a `t3code: status=<status> run=<active run>` line.
@@ -204,17 +204,26 @@ The kill is idempotent, so an already archived thread, or one the verified serve
 Archiving keeps the transcript visible in T3 Code; this backend never deletes a thread.
 The T3 project of a torn-down secondmate home stays in T3 Code pointing at the removed directory until the operator deletes it there, because deleting a nonempty project takes the archived thread's transcript with it.
 
-### Waiting for captain
+### Crew card status
 
-A live worker's thread title reads `Waiting for captain · <title>` while a captain hold is open on it, because only Firstmate knows the worker is waiting on the captain.
+A live worker's card carries T3's status label where Working, Done, or the age would be, and the thread title stays plain.
+T3 still shows Approval, Input, Request, Limited, Failed, and Woke over it.
+
+It reads `Waiting for captain` while a captain hold is open on the worker, because only Firstmate knows the worker is waiting on the captain.
 A hold counts when it is on the worker's own task or on a task whose `--origin` is the worker, so firstmate holds the question as it escalates; a worker's `needs-decision` line alone does not count, because firstmate settles most of those itself.
 A hold on a task with no live T3 ship or scout has no card and changes nothing.
 
-The title is display only, and T3's `crewOf` stays what makes a thread crew.
-[`bin/fm-t3-captain-label.sh`](../bin/fm-t3-captain-label.sh) sets it after every hold, answer, and reconcile close, and cleanup restores it before archiving the thread, even while the hold stays open.
-It works from the thread's live title and a record of the worker's holds, so a rename that failed or a T3 that was down is repaired by the watcher within about a minute, and a rename already made survives a restart.
+It reads `Testing` while a ship's no-mistakes run is active, which is when [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads that run as working or parked at a gate.
+A run left only watching a PR with green checks reads as done there, so the card clears then.
+`Waiting for captain` outranks `Testing`, and `Testing` returns when the wait ends if the run is still active.
 
-The label sits in the title, not in T3's status label, so a waiting card can also read Done until it is opened: T3 clears Done only on a visit, and no `/mcp` tool marks a thread seen.
+The label is display only, and T3's `crewOf` stays what makes a thread crew.
+[`bin/fm-t3-captain-label.sh`](../bin/fm-t3-captain-label.sh) sets it after every hold, answer, and reconcile close, and cleanup clears it before archiving the thread, even while the hold stays open.
+The watcher's pass, about once a minute, also reads the run of every live T3 ship, so `Testing` can lag a run's start or end by that long.
+It works from the thread's live label and a record of each labelled worker, so a label that failed or a T3 that was down is repaired by that pass, a label already set survives a restart, and a hold or run that cannot be read leaves the card as it is.
+
+A T3 without the status label shows neither word, and holds and cleanup carry on as usual.
+Its records stay, so the card catches up on the first pass after T3 is updated.
 
 ## Restart and liveness behavior
 

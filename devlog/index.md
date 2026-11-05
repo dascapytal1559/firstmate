@@ -476,3 +476,30 @@ The choices made:
 The evidence is the suites for the snapshot, the fleet view, the wrapper, session start, captain holds, and dispatch, with new cases for each refusal and for promoting an idea to work.
 The skill wording has no automated test, so the first real `/bearings` and `/ahoy` after landing are its proof.
 The private files and the migration of open threads into the backlog are left to Firstmate, with the captain's look.
+
+## 19. The card's status spot, and Testing (5 November 2026)
+
+![A worker's card through its life: Working, then Testing during its no-mistakes run, Waiting for captain while only the captain can unblock it, Testing again once he answers, and Working when the run ends, with the title plain throughout](media/crew-card-status.svg)
+
+An illustration of the card, not a screenshot: the T3 Code with the status spot is staged, not yet installed, so this is proven against the fake T3 server.
+
+His words:
+
+> Replace fm-t3-captain-label.sh's title prefix with the new status label, and show Testing while a worker is in a no-mistakes run.
+
+What was built, in Firstmate alone, on the T3 fork's new crew card status:
+
+- `Waiting for captain` now sits in the card's status spot, and Firstmate no longer renames a thread at all.
+- A ship's card reads `Testing` while its no-mistakes run is active, and clears when the run ends.
+- Waiting for captain wins when both apply, and Testing comes back when the wait ends if the run is still going.
+- Because the label takes the status spot, a waiting card no longer reads Done beside it, which closes the half left open in section 16.
+
+The choices made:
+
+- **`bin/fm-crew-state.sh` decides whether a run is active.** Its reading of working or parked at a gate is the answer, so no second copy of its run attribution exists. A run it cannot read leaves the card as it is.
+- **A PR with green checks is not Testing.** The run may still be watching the PR, but `bin/fm-crew-state.sh` reads that as done, so the card clears.
+- **Only the watcher's pass looks for new runs.** A hold or an answer updates the workers already labelled, so it never waits on a run read for every worker. Testing can therefore lag a run's start or end by about a minute.
+- **An older T3 is told nothing it would refuse.** Its tool list shows it has no label, so holds and cleanup carry on, and the record stays so the card catches up after an update.
+- **The record is the worker's folder.** An empty folder means the card may carry a label, so a run needs no new kind of record.
+
+The evidence is the label and T3 helper suites against the fake T3 server, with new cases for Testing, the order of the two labels, a scout, an older T3, and the watcher finding a run on its own.

@@ -66,7 +66,11 @@
 //     ids, carrying settledBy and pendingRequests (see waitRun); without it
 //     both arguments are dropped.
 //   - t3_thread_update renames a thread, archived or not, and answers with its
-//     title (world renameAnswersTitle answers another one).
+//     title. A T3 with crew card status (world statusLabels, the T3 Code fork)
+//     declares statusLabel and also sets and clears a thread's label, stored and
+//     read back as statusLabel, answering with the label left (world
+//     statusLabelAnswers answers another one); without it those actions are
+//     unknown.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -144,6 +148,10 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "runId", "timeoutMs", "untilDelegatedWorkSettled",
       ...(w.pendingPush ? ["settleOnPendingRequest", "knownRequestIds"] : [])].map((k) => [k, {}])),
+  }),
+  t3_thread_update: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []), "clientRequestId"].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -477,9 +485,15 @@ async function callTool(w, name, a) {
     }
     case "t3_thread_update": {
       if (!t) return [notFound(a.threadId), false];
+      if (w.statusLabels && (a.action === "set_status_label" || a.action === "clear_status_label")) {
+        if (a.action === "set_status_label") t.statusLabel = a.statusLabel;
+        else delete t.statusLabel;
+        const label = w.statusLabelAnswers ?? t.statusLabel;
+        return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(label === undefined ? {} : { statusLabel: label }) }), true];
+      }
       if (a.action !== "rename") return [err("invalid_action", `unknown action ${a.action}`), false];
       t.title = a.title;
-      return [ok({ threadId: t.threadId, action: "rename", title: w.renameAnswersTitle ?? t.title }), true];
+      return [ok({ threadId: t.threadId, action: "rename", title: t.title }), true];
     }
     case "t3_pending_request":
       if (!["list", "read", "respond"].includes(a.action)) return [err("invalid_action", `unknown action ${a.action}`), false];

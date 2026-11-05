@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="396" viewBox="0 0 960 396" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="396" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A worker's card through a run and a captain's decision</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Illustration. The status spot is T3's; FirstMate fills it, and the title never changes.</text>
+
+  <g font-size="14" fill="#1f2328">
+    <rect x="24" y="84" width="912" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="44" y="113" font-weight="600" fill="#0969da">Working</text>
+    <text x="210" y="113">Print view for one recipe</text>
+    <text x="916" y="113" text-anchor="end" fill="#57606a">the worker runs</text>
+
+    <rect x="24" y="142" width="912" height="48" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="44" y="171" font-weight="600" fill="#0969da">Testing</text>
+    <text x="210" y="171">Print view for one recipe</text>
+    <text x="916" y="171" text-anchor="end" fill="#57606a">its no-mistakes run is active</text>
+
+    <rect x="24" y="200" width="912" height="48" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="44" y="229" font-weight="600" fill="#9a6700">Waiting for captain</text>
+    <text x="210" y="229">Print view for one recipe</text>
+    <text x="916" y="229" text-anchor="end" fill="#57606a">FirstMate holds a question for the captain, and that wins</text>
+
+    <rect x="24" y="258" width="912" height="48" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="44" y="287" font-weight="600" fill="#0969da">Testing</text>
+    <text x="210" y="287">Print view for one recipe</text>
+    <text x="916" y="287" text-anchor="end" fill="#57606a">the answer ends the wait, and the run is still going</text>
+
+    <rect x="24" y="316" width="912" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="44" y="345" font-weight="600" fill="#0969da">Working</text>
+    <text x="210" y="345">Print view for one recipe</text>
+    <text x="916" y="345" text-anchor="end" fill="#57606a">the run ends, and T3's own status comes back</text>
+  </g>
+</svg>

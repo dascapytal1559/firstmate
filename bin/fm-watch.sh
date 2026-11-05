@@ -3854,7 +3854,7 @@ t3_captain_label_sync_detached() {
   fi
   touch "$STATE/.t3-captain-wait-sync"
   FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-    "$SCRIPT_DIR/fm-t3-captain-label.sh" sync </dev/null >/dev/null 2>&1 &
+    "$SCRIPT_DIR/fm-t3-captain-label.sh" sync --runs </dev/null >/dev/null 2>&1 &
   T3_CAPTAIN_LABEL_PID=$!
 }
 
@@ -4019,11 +4019,11 @@ while :; do
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
 
-  # A T3 thread's captain-wait title is repaired here: a rename that failed,
-  # or a thread that came back, converges on the next pass. Nothing to do and
-  # no call to T3 without a record, which is every home but a T3 one with a
-  # captain wait.
-  if [ -d "$STATE/t3-captain-wait" ] && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
+  # A T3 crew card's status follows its holds and its run here: a label that
+  # failed, a thread that came back, or a run that started or ended converges on
+  # the next pass. Only a home with the T3 credential has cards to keep.
+  if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
+    && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
     t3_captain_label_sync_detached
   fi
 
