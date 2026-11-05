@@ -323,7 +323,7 @@ A T3 without `approvalResponses` lists and answers questions only: the approval 
 
 The away daemon can supervise a captain that runs inside a T3 thread.
 [`configuration.md`](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target) owns discovery precedence and the explicit-selection and credential prerequisites.
-T3 puts nothing about the thread into the agent's environment, so eligible discovery matches this home's real path to a live project's `workspaceRoot`, lists its threads with an active run through every `t3_thread_list` page, and selects the one unarchived thread with no worktree of its own.
+T3 puts the thread's id in the agent's environment as `T3CODE_THREAD_ID`, which session start records in `state/t3-main-thread`, but away-mode discovery does not read it: eligible discovery matches this home's real path to a live project's `workspaceRoot`, lists its threads with an active run through every `t3_thread_list` page, and selects the one unarchived thread with no worktree of its own.
 A forked conversation counts; a delegated subagent does not.
 Multiple matching threads print an ambiguity diagnostic naming their ids and fall through to the legacy tmux fallback, as do no matches or an unreachable server.
 Resolve ambiguity by explicitly setting both `FM_SUPERVISOR_BACKEND=t3code` and `FM_SUPERVISOR_TARGET` to the intended thread id.
@@ -361,19 +361,17 @@ If a task's thread no longer reads back, release the task by hand:
 
 ## Active limits
 
-- T3 Code remains experimental; its harnesses are the [adapter table](#provider-instances-and-models), and every harness but `claude` and `codex` needs a T3 with per-thread environment and instructions.
+- T3 Code remains experimental; its harnesses are the [adapter table](#provider-instances-and-models), and every harness needs a T3 with per-thread environment and instructions ([thread channels required](#thread-channels-required)).
   `claude`, `codex`, `grok`, and `pi` have dated live evidence on this backend ([`verification/runtime-backends.md`](verification/runtime-backends.md#t3-code)); the other rows are covered by the portable suites only.
 - T3 starts every agent at `full-access` with its provider instance's account and environment, so a spawn refuses any posture setting that asks for less (`config/claude-permission-mode` other than `bypass`, `config/codex-approval-mode=approve-for-me`, or `config/codex-permission-mode=restricted`), `config/launch-env-allowlist`, `config/crew-exclude-tools`, a worker account pin, and a raw launch command; select the account through `config/t3code-instances` instead.
 - T3 owns the Claude provider command, so Firstmate cannot add its command-line prompt-suggestion, feedback-draft, or attribution controls; configure equivalent provider-instance settings in T3 when those policies are required.
-  Unless `config/keep-ai-trailers` is present, the per-worktree environment selects Firstmate's Git commit hook to strip known AI trailers, including on T3 workers.
+  Unless `config/keep-ai-trailers` is present, the thread's environment selects Firstmate's Git commit hook to strip known AI trailers, including on T3 workers.
 - T3 also owns the Codex provider command, so Firstmate cannot apply the pane-backed worker's hook-disable or turn-end notify options.
   Firstmate's pane-backed hook-trust workaround therefore does not apply; supervision uses T3's [thread status table](#restart-and-liveness-behavior).
 - `fm-control.sh exit` is refused because the V2 `/mcp` tools have no session stop, and `relaunch` is refused because a thread keeps its conversation, so no fresh agent can replace it.
 - The WebSocket event stream is not available to an `mcp-client` credential; the [run wait](#push-events-and-polling-fallback) stands in for it.
 - A permission approval can be answered through `/mcp` only on a T3 that advertises `approvalResponses`; elsewhere firstmate interrupts and steers the worker instead.
 - Request-id deduplication holds within one T3 auth session only: every sign-in starts a new session, so resending an unconfirmed send, or retrying a frozen away-mode digest, after the captain signs in again can deliver it twice; verify such a message in T3 Code first.
-- A tracked `.codex/config.toml` that already defines `[shell_environment_policy]` is refused by file and table name before a slot is leased.
-- While a tracked Codex overlay is installed, do not edit that file or clear its `skip-worktree` flag; configuration changes require cleanup first.
 - Shell typing and Ctrl-U are unsupported; runtime Escape and Ctrl-C still interrupt the turn.
 - A Firstmate main session in a T3 thread is verified only for Claude; a Codex supervisor has no away mode on this backend because it has no tracked background tool for `start-native`, and T3 has no terminal for `start` to create.
 - T3 checkpoints each turn as hidden refs under `refs/t3/orchestration-v2/checkpoints/` in the project clone; they are never pushed and do not affect the landed-work test.
