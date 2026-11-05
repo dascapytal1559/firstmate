@@ -73,6 +73,11 @@
 # waste capacity, and --all-landed switches back to the complete global newest-first
 # order. Which closed rows either side contributes is bin/fm-landed-lib.sh's rule.
 #
+# The objectives field carries this home's high level objectives, as {name,text}
+# rows from bin/fm-objectives.sh, which owns their source and format. It is [] when
+# the home has none. They are not fleet state, so the canonical snapshot never holds
+# them.
+#
 # Flags:
 #   (default)        compact projection with bounded remote-ledger collection, TOON
 #   --json           the same projected model as JSON (machine/debug; parity form)
@@ -145,7 +150,8 @@ Default collection performs bounded concurrent remote-ledger reads for registere
 remote homes under one shared snapshot budget and may refresh the parent-side cache.
 --include-prs additionally performs live GitHub discovery and checks.
 
-Default fields: schema, home, generated, prs, in_flight{id,kind,state,repo,name,doing},
+Default fields: schema, home, generated, objectives{name,text}, prs,
+  in_flight{id,kind,state,repo,name,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
@@ -351,12 +357,14 @@ case "$BEARINGS_TODAY" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
   *) BEARINGS_TODAY=$(date -u +%Y-%m-%d) ;;
 esac
+OBJECTIVES=$("$SCRIPT_DIR/fm-objectives.sh") || { echo "fm-bearings-snapshot: objectives read failed" >&2; exit 1; }
 MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg today "$BEARINGS_TODAY" \
   --arg prs "$PR_STATUS" \
   --arg fields "$FIELDS" \
+  --argjson objectives "$OBJECTIVES" \
   --argjson landed_n "$FM_BEARINGS_LANDED" \
   --argjson landed_per_home_n "$FM_BEARINGS_LANDED_PER_HOME" \
   --argjson in_flight_n "$FM_BEARINGS_IN_FLIGHT" \
@@ -606,6 +614,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       schema: "fm-bearings.v1",
       home: $home,
       generated: $now,
+      objectives: $objectives,
       prs: $prs,
       contributions:(
         ([$snap.contributions + {owner:"(main)"}]

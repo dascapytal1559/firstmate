@@ -71,17 +71,18 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 
 3. **Compose the four-section chat digest from the fresh snapshot.**
    The gather step is deterministic; your judgment is scoped to ranking the command's facts by what matters right now and writing scannable captain-facing prose.
-   The chat response uses the four complete sections in the chat-response contract below, in the same order, each always present.
+   The chat response opens with the high level objectives block and then uses the four complete sections in the chat-response contract below, in the same order, each always present.
    Plain mode stops here and writes no report artifact.
 
 4. **In explicit file mode only, compose and replace the detailed report file.**
-   The report uses the same four complete sections as the chat, in the same order, and adds the detail the chat omits.
+   The report uses the same opening objectives block and four complete sections as the chat, in the same order, and adds the detail the chat omits.
    Never read an earlier `data/status-report-*.md` to decide what to omit, include, describe as changed, or call current.
    Write the full report to `data/status-report-<YYYY-MM-DD>.md` using today's date.
    If today's file already exists, delete it first, then create a new file from scratch.
    This is the only file-mode write allowed by the skill.
    The detailed report includes:
    - **Title** - `# Bearings - <day> <YYYY-MM-DD>` (use "Morning status" only when the captain specifically asks for a morning brief), followed by two or three sentences framing where things stand.
+   - **High level objectives** - the opening block from the chat-response contract, left out under the same rule.
    - **Captain's Call** - every unsuppressed open decision summarized with its options from the structured decision record, plus each PR ready to merge and each needed credential or login, every PR with the full `https://...` URL, never a bare `#number`.
    - **Recently Landed** - the bounded current recent-completions baseline from structured state across the main fleet and every registered secondmate home, rendered in full on every run.
    - **Underway** - each live direct report making progress, with its current state, and the plans or main pickup pointers worth reopening (`data/<id>/report.md` files, `.lavish/*.html` boards).
@@ -94,7 +95,8 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 `/bearings lavish` adds one deliverable beside the unchanged chat digest: the interactive fleet board, a myfirstmate-styled Lavish page where the captain answers Captain's Call items directly instead of replying in chat.
 `bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is composing the payload and running its `build`.
 
-Compose the payload from the same snapshot with the same ranking judgment as the chat digest, plus these board rules:
+Compose the payload from the same snapshot with the same ranking judgment as the chat digest, plus these board rules.
+The board does not show the high level objectives; the chat digest beside it carries them.
 
 - A Captain's Call decision key is the captain-held TASK ID from `decisions_open` (legacy `<origin>-decision-<key>` rows are already task ids); a merge card's key is `merge.<task-id>`; the Charted Next dispatch picker's key is `dispatch.charted`.
 - Before carding a hold, check that its SUBJECT has not already landed, and omit it when it has. `build` drops a card whose task or PR appears in the payload's own landed rows, and one whose task is no longer an open captain call. When a hold waits on one specific PR, put that PR in the card's `pr_url`. When it concerns a published version, put the artifact and numeric three-part version in the card's structured `subject`; landed rows for releases carry the same identity, and a matching or newer version drops the card. Identity matching is structured only, so verify any subject without one of these identities against current reality before carding it.
@@ -143,7 +145,10 @@ Only the exact answer value `merge` authorizes a merge; an answer carrying a fre
 ## Chat-response contract
 
 This skill is the one owner of the `/bearings` chat-response format; the snapshot and classifier own the data that feeds it, and no other file restates this contract.
-Every `/bearings` chat response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
+Every `/bearings` chat response, in every mode, opens with the high level objectives block when the snapshot's `objectives` is non-empty: one short line per objective, led by its name, under a "High level objectives" label.
+When `objectives` is empty, the block is left out, with no empty-state sentence.
+The block is not a section.
+After it, every response renders EXACTLY these four sections, in THIS order, and nothing else structural (there is no At Anchor section):
 
 1. **Captain's Call** - ONLY unsuppressed items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
    Deferred or aged holds follow the presentation safety rule above instead.

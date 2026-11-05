@@ -1081,6 +1081,69 @@ test_default_is_bounded_and_local_only() {
   pass "default output is bounded, local-only, and marks omitted surfaces"
 }
 
+test_objectives_come_from_their_home_section() {
+  local home fakebin json toon direct
+  home=$(make_home objectives); write_fixture "$home"
+  cat > "$home/data/OBJECTIVES.md" <<'EOF'
+# Made-up notes
+
+- **High level objectives:** a lookalike bullet above the section
+
+## High level objectives
+
+Some prose that is not an objective.
+
+- **Tidy harbour:** every berth labelled, and the charts up to date
+- a plain bullet with no name
+- **Calm seas:** fewer interruptions
+
+## Something else
+
+- **Not an objective:** a lookalike bullet below the section
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  toon=$(run "$home" "$fakebin")
+  printf '%s' "$json" | jq -e '.objectives == [
+    {name:"Tidy harbour", text:"every berth labelled, and the charts up to date"},
+    {name:"Calm seas", text:"fewer interruptions"}]' >/dev/null \
+    || fail "objectives must be exactly the section's bullets: $json"
+  assert_contains "$toon" 'objectives[2]{name,text}:' "TOON must carry the objectives table"
+  assert_contains "$toon" 'Tidy harbour,"every berth labelled, and the charts up to date"' "TOON must carry each objective"
+  direct=$(FM_HOME="$home" "$ROOT/bin/fm-objectives.sh")
+  [ "$direct" = "$(printf '%s' "$json" | jq -c .objectives)" ] \
+    || fail "the reader and the bearings field must agree: $direct"
+  pass "objectives are the home section's bullets, in JSON and TOON"
+}
+
+assert_no_objectives() {  # <home> <label>
+  local home=$1 label=$2 fakebin json toon err direct
+  fakebin=$(make_fakebin "$home")
+  err="$home/objectives.err"
+  json=$(run "$home" "$fakebin" --json 2> "$err") || fail "$label must not fail bearings"
+  [ ! -s "$err" ] || fail "$label must print no error: $(cat "$err")"
+  toon=$(run "$home" "$fakebin")
+  printf '%s' "$json" | jq -e '.objectives == []' >/dev/null || fail "$label must mean no objectives: $json"
+  assert_contains "$toon" 'objectives: []' "$label must render an empty TOON field"
+  direct=$(FM_HOME="$home" "$ROOT/bin/fm-objectives.sh" 2> "$err") || fail "$label must not fail the reader"
+  [ "$direct" = '[]' ] && [ ! -s "$err" ] || fail "$label must give the reader an empty list: $direct"
+}
+
+test_objectives_section_missing_means_none() {
+  local home
+  home=$(make_home objectives-no-section); write_fixture "$home"
+  printf '# Made-up notes\n\n## Something else\n\n- **Not an objective:** elsewhere\n' > "$home/data/OBJECTIVES.md"
+  assert_no_objectives "$home" "a missing section"
+  pass "a missing objectives section means no objectives and no error"
+}
+
+test_objectives_file_missing_means_none() {
+  local home
+  home=$(make_home objectives-no-file); write_fixture "$home"
+  assert_no_objectives "$home" "a missing file"
+  pass "a missing objectives file means no objectives and no error"
+}
+
 test_toon_json_parity() {
   local home fakebin toon json keys k
   home=$(make_home parity); write_fixture "$home"
@@ -3380,6 +3443,9 @@ fm_test_run \
   test_current_landed_baseline_is_repeatable_and_prior_report_independent \
   test_default_is_bounded_and_local_only \
   test_toon_json_parity \
+  test_objectives_come_from_their_home_section \
+  test_objectives_section_missing_means_none \
+  test_objectives_file_missing_means_none \
   test_landed_includes_secondmate_home_merges \
   test_landed_accepts_only_kind_owned_delivery_artifacts \
   test_kind_fallback_matches_tasks_axi_word_boundaries \

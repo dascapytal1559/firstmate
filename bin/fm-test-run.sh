@@ -1795,7 +1795,7 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh|bin/fm-contributions.sh|bin/fm-contributions.jq|\
-    bin/fm-home-summary-refresh.sh)
+    bin/fm-home-summary-refresh.sh|bin/fm-objectives.sh)
       printf '%s\n' snapshot-bearings
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)

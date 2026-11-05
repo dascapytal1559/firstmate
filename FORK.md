@@ -65,6 +65,15 @@ Only T3 Code workers show this, and a failed rename is retried, so the title com
 A card can still read Done beside these words until it is opened, because T3 Code clears Done only when a thread is opened and gives FirstMate no way to mark one seen.
 Details: [waiting for captain](docs/t3code-backend.md#waiting-for-captain).
 
+## High level objectives in every check-in
+
+![A Bearings digest with made-up objectives: a High level objectives block sits above Captain's Call and the other three sections](devlog/media/objectives-in-bearings.svg)
+
+Bearings and `/ahoy` now open with this home's high level objectives, one short line each, so the broad aim of the work is in view whenever FirstMate checks in.
+They come from the home's private `data/OBJECTIVES.md`, and a home without any simply shows no block.
+A Bearings board stays as it was; the chat digest beside it carries them.
+Details: [`fm-objectives.sh`](bin/fm-objectives.sh).
+
 ## Recovery after a T3 Code restart
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.

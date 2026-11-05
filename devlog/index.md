@@ -421,3 +421,27 @@ The evidence is two throwaway threads on the live T3, a parent and a crew card, 
 The label landed mid-run and stayed when the run ended, the thread still read as crew of the same parent, and the title restored and relabelled cleanly on the finished thread.
 A rename on an archived thread also works, which is why an archived thread always loses the label.
 Firstmate's own rename command ran only against the fake T3 server, with the hold, answer, cleanup, watcher, and capability suites, because this worker had no sign-in for the live one.
+
+## 17. Every check-in opens with the high level objectives (5 November 2026)
+
+![A Bearings digest with made-up objectives: a High level objectives block sits above Captain's Call and the other three sections](media/objectives-in-bearings.svg)
+
+The ask:
+
+> I also want a Hoi or Bearings to announce our like high level objectives which I think you called it directions, although I'm not even sure why you called it directions. But yeah, I'm just gonna refer to it as our high level objectives. Um, which is kind of a good thing to just be reminded of anytime we're getting our bearings or any time we're checking in on what's happening.
+
+What was built:
+
+- One small reader, `bin/fm-objectives.sh`, returns the bullets under `## High level objectives` in this home's private `data/OBJECTIVES.md`. A missing file or section means none, and no error.
+- Bearings gets them as an `objectives` field and opens every digest and file report with one short line each, above the four sections.
+- A normal `/ahoy` recap opens with the same block. It may run that one reader and still nothing else. When `/ahoy` falls back to Bearings, the objectives arrive through Bearings, so they are not printed twice.
+
+The choices made:
+
+- **The block is not a fifth section.** The four sections always render, and an empty one says so. A home with no objectives has nothing to report, so the block is simply left out.
+- **The chat shortens, the reader does not.** The field carries each objective's full text, and the chat writes the short line.
+- **The Bearings board is unchanged.** The chat digest beside it carries the objectives.
+- **One name throughout.** Tracked text says "high level objectives", and the captain approved renaming the private file to match, so it is now `data/OBJECTIVES.md`.
+
+The evidence is the Bearings snapshot suite, with new cases for objectives present, section missing, and file missing, all using made-up objectives. The present case also plants lookalike bullets above and below the section, because the real file has one above it.
+The skill wording itself has no automated test, so the first real `/bearings` and `/ahoy` after landing are its proof.

@@ -10,6 +10,8 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - Any T3 Code agent can be a worker, not only Claude and Codex.
 - A worker's card says Waiting for captain while only the captain can unblock it.
 
+Bearings and `/ahoy` also open with this home's high level objectives.
+
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 
 <h1 align="center">firstmate</h1>
