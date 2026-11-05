@@ -1081,39 +1081,34 @@ test_default_is_bounded_and_local_only() {
   pass "default output is bounded, local-only, and marks omitted surfaces"
 }
 
-test_objectives_come_from_their_home_section() {
+test_priorities_and_objectives_come_from_their_files() {
   local home fakebin json toon direct
   home=$(make_home objectives); write_fixture "$home"
-  cat > "$home/data/OBJECTIVES.md" <<'EOF'
+  cat > "$home/data/high-level-objectives.md" <<'EOF'
 # Made-up notes
-
-- **High level objectives:** a lookalike bullet above the section
-
-## High level objectives
 
 Some prose that is not an objective.
 
-- **Tidy harbour:** every berth labelled, and the charts up to date
-- a plain bullet with no name
-- **Calm seas:** fewer interruptions
-
-## Something else
-
-- **Not an objective:** a lookalike bullet below the section
+- Tidy harbour: every berth labelled, and the charts up to date
+  - a nested note that is not an objective
+- Calm seas
 EOF
+  printf -- '- Paint the hull\n- Book the pilot (2026-07-11)\n' > "$home/data/priorities.md"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   toon=$(run "$home" "$fakebin")
-  printf '%s' "$json" | jq -e '.objectives == [
-    {name:"Tidy harbour", text:"every berth labelled, and the charts up to date"},
-    {name:"Calm seas", text:"fewer interruptions"}]' >/dev/null \
-    || fail "objectives must be exactly the section's bullets: $json"
-  assert_contains "$toon" 'objectives[2]{name,text}:' "TOON must carry the objectives table"
-  assert_contains "$toon" 'Tidy harbour,"every berth labelled, and the charts up to date"' "TOON must carry each objective"
+  printf '%s' "$json" | jq -e '
+    .objectives == [{text:"Tidy harbour: every berth labelled, and the charts up to date"},{text:"Calm seas"}]
+      and .priorities == [{text:"Paint the hull"},{text:"Book the pilot (2026-07-11)"}]
+      and ((keys_unsorted | index("priorities")) < (keys_unsorted | index("objectives")))
+  ' >/dev/null || fail "each list must be exactly its file's top-level bullets, priorities first: $json"
+  assert_contains "$toon" 'priorities[2]{text}:' "TOON must carry the priorities table"
+  assert_contains "$toon" 'objectives[2]{text}:' "TOON must carry the objectives table"
+  assert_contains "$toon" '"Tidy harbour: every berth labelled, and the charts up to date"' "TOON must carry each objective"
   direct=$(FM_HOME="$home" "$ROOT/bin/fm-objectives.sh")
-  [ "$direct" = "$(printf '%s' "$json" | jq -c .objectives)" ] \
-    || fail "the reader and the bearings field must agree: $direct"
-  pass "objectives are the home section's bullets, in JSON and TOON"
+  [ "$direct" = "$(printf '%s' "$json" | jq -c '{priorities,objectives}')" ] \
+    || fail "the reader and the bearings fields must agree: $direct"
+  pass "priorities and objectives are their files' bullets, in JSON and TOON"
 }
 
 assert_no_objectives() {  # <home> <label>
@@ -1123,25 +1118,77 @@ assert_no_objectives() {  # <home> <label>
   json=$(run "$home" "$fakebin" --json 2> "$err") || fail "$label must not fail bearings"
   [ ! -s "$err" ] || fail "$label must print no error: $(cat "$err")"
   toon=$(run "$home" "$fakebin")
-  printf '%s' "$json" | jq -e '.objectives == []' >/dev/null || fail "$label must mean no objectives: $json"
+  printf '%s' "$json" | jq -e '.objectives == [] and .priorities == []' >/dev/null \
+    || fail "$label must mean no objectives and no priorities: $json"
   assert_contains "$toon" 'objectives: []' "$label must render an empty TOON field"
+  assert_contains "$toon" 'priorities: []' "$label must render an empty TOON field"
   direct=$(FM_HOME="$home" "$ROOT/bin/fm-objectives.sh" 2> "$err") || fail "$label must not fail the reader"
-  [ "$direct" = '[]' ] && [ ! -s "$err" ] || fail "$label must give the reader an empty list: $direct"
+  [ "$direct" = '{"priorities":[],"objectives":[]}' ] && [ ! -s "$err" ] \
+    || fail "$label must give the reader empty lists: $direct"
 }
 
-test_objectives_section_missing_means_none() {
+test_objectives_files_without_bullets_mean_none() {
   local home
-  home=$(make_home objectives-no-section); write_fixture "$home"
-  printf '# Made-up notes\n\n## Something else\n\n- **Not an objective:** elsewhere\n' > "$home/data/OBJECTIVES.md"
-  assert_no_objectives "$home" "a missing section"
-  pass "a missing objectives section means no objectives and no error"
+  home=$(make_home objectives-no-bullets); write_fixture "$home"
+  printf '# Made-up notes\n\nNothing listed yet.\n' > "$home/data/high-level-objectives.md"
+  : > "$home/data/priorities.md"
+  assert_no_objectives "$home" "files with no bullets"
+  pass "files with no bullets mean empty lists and no error"
 }
 
-test_objectives_file_missing_means_none() {
+test_objectives_files_missing_mean_none() {
   local home
   home=$(make_home objectives-no-file); write_fixture "$home"
-  assert_no_objectives "$home" "a missing file"
-  pass "a missing objectives file means no objectives and no error"
+  assert_no_objectives "$home" "missing files"
+  pass "missing files mean empty lists and no error"
+}
+
+# An idea is its own group: never a gate, never a decision, whatever its row says.
+test_ideas_are_their_own_group() {
+  local home mate fakebin json toon
+  home=$(make_home ideas)
+  mate="$TMP_ROOT/ideas-mate-home"
+  write_domain_alpha_fixture "$home" "$mate"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] mate-idea - Idea in a second home (repo: sample) (kind: idea) (since 2026-07-05)
+- [ ] mate-work - Real second-home work (repo: sample) (kind: ship) (since 2026-07-01)
+
+## Done
+EOF
+  refresh_local_secondmate_ledgers "$home"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] old-idea - Oldest idea (repo: alpha) (kind: idea) (since 2026-07-01)
+- [ ] same-day-first - Filed first that day (repo: alpha) (kind: idea) (since 2026-07-09)
+- [ ] same-day-last - Filed last that day (kind: idea) (since 2026-07-09)
+- [ ] held-idea - Idea with a stray captain hold (repo: alpha) (kind: idea) (since 2026-07-02) (hold: pick this up?) (hold-kind: captain)
+- [ ] real-work - Real queued work (repo: alpha) (kind: ship) (since 2026-07-03)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(FM_BEARINGS_IDEAS=3 run "$home" "$fakebin" --json)
+  toon=$(FM_BEARINGS_IDEAS=3 run "$home" "$fakebin")
+  printf '%s' "$json" | jq -e '
+    ([.gates[].id] | index("real-work") != null and index("mate-work") != null
+      and index("old-idea") == null and index("held-idea") == null and index("mate-idea") == null)
+      and (.decisions_open == [])
+      and .ideas.total == 5
+      and .ideas.list == "bin/fm-tasks-axi.sh list --state queued --kind idea"
+      and ([.ideas.newest[].id] == ["same-day-last","same-day-first","mate-idea"])
+      and (.ideas.newest[0] == {id:"same-day-last",title:"Filed last that day",repo:null,owner:"(main)",filed:"2026-07-09"})
+      and (.ideas.newest[2].owner == "domain-alpha")
+  ' >/dev/null || fail "ideas must leave the gates and decisions and form one bounded group: $json"
+  assert_contains "$toon" 'newest[3]{id,title,repo,owner,filed}:' "TOON must carry the newest ideas"
+  json=$(run "$home" "$fakebin" --json --all-decisions)
+  printf '%s' "$json" | jq -e '.decisions_open == []' >/dev/null \
+    || fail "--all-decisions must not turn an idea into a captain call: $json"
+  pass "ideas leave every work and decision bucket for their own bounded group"
 }
 
 test_toon_json_parity() {
@@ -3443,9 +3490,10 @@ fm_test_run \
   test_current_landed_baseline_is_repeatable_and_prior_report_independent \
   test_default_is_bounded_and_local_only \
   test_toon_json_parity \
-  test_objectives_come_from_their_home_section \
-  test_objectives_section_missing_means_none \
-  test_objectives_file_missing_means_none \
+  test_priorities_and_objectives_come_from_their_files \
+  test_objectives_files_without_bullets_mean_none \
+  test_objectives_files_missing_mean_none \
+  test_ideas_are_their_own_group \
   test_landed_includes_secondmate_home_merges \
   test_landed_accepts_only_kind_owned_delivery_artifacts \
   test_kind_fallback_matches_tasks_axi_word_boundaries \

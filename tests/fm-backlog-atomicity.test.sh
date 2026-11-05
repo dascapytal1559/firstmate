@@ -997,6 +997,37 @@ SH
   pass "dispatch refuses held rows before creating resources"
 }
 
+test_dispatch_refuses_an_idea_before_creating_resources() {
+  local case_dir id out rc=0
+  id=atomic-dispatch-idea-b1
+  case_dir=$(make_home dispatch-idea "$id")
+  add_item "$case_dir" "$id" idea
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *new-window*) : > "$case_dir/task-endpoint-created" ;;
+  *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
+  *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "\${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+
+  out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
+  [ "$rc" -ne 0 ] || fail "spawn accepted an idea"
+  assert_contains "$out" "is an idea" "idea refusal did not say why"
+  assert_absent "$(home_of "$case_dir")/state/$id.meta" \
+    "idea refusal published a task record"
+  assert_absent "$case_dir/task-endpoint-created" \
+    "idea refusal created an unowned endpoint"
+  assert_absent "$case_dir/local-copy-requested" \
+    "idea refusal requested an unowned local copy"
+  [ "$(row_state "$case_dir" "$id")" = queued ] \
+    || fail "idea refusal changed the backlog state"
+  pass "dispatch refuses an idea before creating resources"
+}
+
 test_dispatch_refuses_a_blocked_row_before_creating_resources() {
   local case_dir id blocker out rc=0
   id=atomic-dispatch-blocked-b16
@@ -3074,6 +3105,7 @@ test_a_leftover_markdown_symlink_does_not_brick_a_beads_home
 test_completion_omits_the_file_for_a_beads_done
 test_dispatch_refuses_a_pending_authoritative_close
 test_dispatch_refuses_a_held_row_before_creating_resources
+test_dispatch_refuses_an_idea_before_creating_resources
 test_dispatch_refuses_a_blocked_row_before_creating_resources
 test_dispatch_refuses_a_held_in_flight_row_before_relaunch
 test_dispatch_reads_the_row_from_the_backlog_root

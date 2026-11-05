@@ -680,6 +680,24 @@ test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type() {
 # prose, no held backlog item or open status exists, and the authoritative
 # Bearings view correctly omits it. Completion must now refuse before teardown can
 # erase the source.
+test_hold_refuses_an_idea() {
+  local home out
+  home=$(make_home hold-idea)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] loose-idea - Maybe someday (repo: sample) (kind: idea) (since 2026-07-14)
+
+## Done
+EOF
+  out=$(run_captain "$home" hold loose-idea --reason "pick this up?" 2>&1) \
+    && fail "a captain hold was accepted on an idea"
+  assert_contains "$out" "is an idea" "the refused hold did not say why"
+  assert_not_contains "$(cat "$home/data/backlog.md")" "hold:" "the refused hold changed the row"
+  pass "an idea never takes a captain hold"
+}
+
 test_uninventoried_report_decision_refuses_completion() {
   local home id json rc
   home=$(make_home omitted-decision)
@@ -5160,5 +5178,6 @@ test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
 test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
+test_hold_refuses_an_idea
 test_archived_answered_hold_still_satisfies_the_gate
 test_archived_answer_in_a_user_configured_archive_satisfies_the_gate

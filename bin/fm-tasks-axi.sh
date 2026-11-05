@@ -14,6 +14,9 @@
 # stores it verbatim as a link, which lifecycle transitions record relative to
 # that same root.
 #
+# `ready` leaves out ideas, which are never dispatchable, and `start <id>` refuses
+# one (docs/configuration.md "Ideas").
+#
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
 # Decoded reasons use quoted strings so embedded line breaks remain intact.
@@ -143,11 +146,20 @@ else
   unset TASKS_AXI_FILE
 fi
 
+if [ "${1:-}" = start ] && fm_backlog_row_probe "$DATA" "${2:-}" && [ "${FM_BACKLOG_ROW_STATE%% *}" = idea ]; then
+  fail "$2 is an idea, which is never dispatched; to start it, change its kind first (update $2 --kind ship)"
+fi
+
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
 case "${1:-}" in
   show|view|list)
     set -o pipefail
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
+    exit $?
+    ;;
+  ready)
+    set -o pipefail
+    tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_tasks_axi_ready_without_ideas
     exit $?
     ;;
 esac

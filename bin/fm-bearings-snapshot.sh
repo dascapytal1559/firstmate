@@ -73,10 +73,15 @@
 # waste capacity, and --all-landed switches back to the complete global newest-first
 # order. Which closed rows either side contributes is bin/fm-landed-lib.sh's rule.
 #
-# The objectives field carries this home's high level objectives, as {name,text}
-# rows from bin/fm-objectives.sh, which owns their source and format. It is [] when
-# the home has none. They are not fleet state, so the canonical snapshot never holds
-# them.
+# The priorities and objectives fields carry this home's priorities and high level
+# objectives, as {text} rows from bin/fm-objectives.sh, which owns their source and
+# format. Each is [] when the home has none. They are not fleet state, so the
+# canonical snapshot never holds them.
+#
+# The ideas field carries Queued rows of kind idea from this home and every readable
+# secondmate home (docs/configuration.md "Ideas"), which are never gates: total, the
+# list command, and the newest FM_BEARINGS_IDEAS rows, newest filed first. The list
+# command reads this home's backlog; a row's owner names any other home.
 #
 # Flags:
 #   (default)        compact projection with bounded remote-ledger collection, TOON
@@ -114,6 +119,7 @@ FM_BEARINGS_IN_FLIGHT=${FM_BEARINGS_IN_FLIGHT:-20}
 FM_BEARINGS_DECISIONS=${FM_BEARINGS_DECISIONS:-20}
 FM_BEARINGS_SECONDMATES=${FM_BEARINGS_SECONDMATES:-20}
 FM_BEARINGS_GATES=${FM_BEARINGS_GATES:-20}
+FM_BEARINGS_IDEAS=${FM_BEARINGS_IDEAS:-5}
 FM_BEARINGS_REPORTS=${FM_BEARINGS_REPORTS:-20}
 FM_BEARINGS_RECORDED_PRS=${FM_BEARINGS_RECORDED_PRS:-20}
 FM_BEARINGS_UNHEALTHY=${FM_BEARINGS_UNHEALTHY:-20}
@@ -130,6 +136,7 @@ validate_bound FM_BEARINGS_IN_FLIGHT "$FM_BEARINGS_IN_FLIGHT"
 validate_bound FM_BEARINGS_DECISIONS "$FM_BEARINGS_DECISIONS"
 validate_bound FM_BEARINGS_SECONDMATES "$FM_BEARINGS_SECONDMATES"
 validate_bound FM_BEARINGS_GATES "$FM_BEARINGS_GATES"
+validate_bound FM_BEARINGS_IDEAS "$FM_BEARINGS_IDEAS"
 validate_bound FM_BEARINGS_REPORTS "$FM_BEARINGS_REPORTS"
 validate_bound FM_BEARINGS_RECORDED_PRS "$FM_BEARINGS_RECORDED_PRS"
 validate_bound FM_BEARINGS_UNHEALTHY "$FM_BEARINGS_UNHEALTHY"
@@ -150,12 +157,13 @@ Default collection performs bounded concurrent remote-ledger reads for registere
 remote homes under one shared snapshot budget and may refresh the parent-side cache.
 --include-prs additionally performs live GitHub discovery and checks.
 
-Default fields: schema, home, generated, objectives{name,text}, prs,
+Default fields: schema, home, generated, priorities{text}, objectives{text}, prs,
   in_flight{id,kind,state,repo,name,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,owner}, landed{id,what,artifact,owner},
-  gates{id,title,blocked_by,reason,owner,filed}, reports{id,path}, recorded_prs{id,url},
+  gates{id,title,blocked_by,reason,owner,filed},
+  ideas{total,list,newest{id,title,repo,owner,filed}}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
   retain input order after dated gates.
@@ -357,20 +365,21 @@ case "$BEARINGS_TODAY" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
   *) BEARINGS_TODAY=$(date -u +%Y-%m-%d) ;;
 esac
-OBJECTIVES=$("$SCRIPT_DIR/fm-objectives.sh") || { echo "fm-bearings-snapshot: objectives read failed" >&2; exit 1; }
+FOCUS=$("$SCRIPT_DIR/fm-objectives.sh") || { echo "fm-bearings-snapshot: objectives read failed" >&2; exit 1; }
 MODEL=$(printf '%s' "$SNAP" | jq \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg today "$BEARINGS_TODAY" \
   --arg prs "$PR_STATUS" \
   --arg fields "$FIELDS" \
-  --argjson objectives "$OBJECTIVES" \
+  --argjson focus "$FOCUS" \
   --argjson landed_n "$FM_BEARINGS_LANDED" \
   --argjson landed_per_home_n "$FM_BEARINGS_LANDED_PER_HOME" \
   --argjson in_flight_n "$FM_BEARINGS_IN_FLIGHT" \
   --argjson decisions_n "$FM_BEARINGS_DECISIONS" \
   --argjson secondmates_n "$FM_BEARINGS_SECONDMATES" \
   --argjson gates_n "$FM_BEARINGS_GATES" \
+  --argjson ideas_n "$FM_BEARINGS_IDEAS" \
   --argjson reports_n "$FM_BEARINGS_REPORTS" \
   --argjson recorded_prs_n "$FM_BEARINGS_RECORDED_PRS" \
   --argjson unhealthy_n "$FM_BEARINGS_UNHEALTHY" \
@@ -439,6 +448,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
     {id, title:(.title | trunc(60)),
      blocked_by:((.unresolved_blocker_ids // []) | if length > 0 then join(",") else "-" end | trunc(120)),
      reason:(hold_gate_reason | trunc(40)), owner:$owner,
+     filed:((.since // null) | trunc(40))};
+  def as_idea($owner):
+    {id, title:(.title | trunc(70)), repo:(.repo // null), owner:$owner,
      filed:((.since // null) | trunc(40))};
   def round_robin_landed($n):
     . as $groups
@@ -585,15 +597,22 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.structured and
              (.hold_bucket != null or .state == "queued" or
               (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
-         | select(.captain_actionable != true)
+         | select(.captain_actionable != true and .current_role != "idea")
          | select((.hold_bucket == null) or ($all_decisions == 0))
          | as_gate("(main)") ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
-         | select(.captain_actionable != true)
+         | select(.captain_actionable != true and .kind != "idea")
          | select((.hold_bucket == null) or ($all_decisions == 0))
          | as_gate($m.id) ]) as $gates_all
+  | ([ .backlog.records[] | select(.structured and .current_role == "idea")
+       | as_idea("(main)") ]
+     + [ (.secondmate_current.records // [])[] as $m
+         | select($m.provenance.selected == "structured-home")
+         | $m.queued[]?
+         | select(.kind == "idea")
+         | as_idea($m.id) ]) as $ideas_all
   | ([ .scout_reports[]
        | . as $r
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
@@ -614,7 +633,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       schema: "fm-bearings.v1",
       home: $home,
       generated: $now,
-      objectives: $objectives,
+      priorities: $focus.priorities,
+      objectives: $focus.objectives,
       prs: $prs,
       contributions:(
         ([$snap.contributions + {owner:"(main)"}]
@@ -655,6 +675,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       gates: ($return_catchup_gate
               + ($gates_all | newest_filed_first
                  | if $all_queued == 1 then . else .[:$gates_n] end)),
+      ideas: {total:($ideas_all | length),
+              list:"bin/fm-tasks-axi.sh list --state queued --kind idea",
+              newest:($ideas_all | reverse | newest_filed_first | .[:$ideas_n])},
       reports: (if $all_reports == 1 then $reports_all else $reports_all[:$reports_n] end),
       recorded_prs: (if $all_recorded_prs == 1 then $recorded_prs_all else $recorded_prs_all[:$recorded_prs_n] end)
     }

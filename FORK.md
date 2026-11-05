@@ -65,14 +65,22 @@ Only T3 Code workers show this, and a failed rename is retried, so the title com
 A card can still read Done beside these words until it is opened, because T3 Code clears Done only when a thread is opened and gives FirstMate no way to mark one seen.
 Details: [waiting for captain](docs/t3code-backend.md#waiting-for-captain).
 
-## High level objectives in every check-in
+## Priorities and high level objectives in every check-in
 
-![A Bearings digest with made-up objectives: a High level objectives block sits above Captain's Call and the other three sections](devlog/media/objectives-in-bearings.svg)
+![A Bearings digest with made-up lists: Priorities and High level objectives blocks sit above Captain's Call and the other three sections, with Ideas after Charted Next](devlog/media/focus-and-ideas-in-bearings.svg)
 
-Bearings and `/ahoy` now open with this home's high level objectives, one short line each, so the broad aim of the work is in view whenever FirstMate checks in.
-They come from the home's private `data/OBJECTIVES.md`, and a home without any simply shows no block.
+Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
+They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
 A Bearings board stays as it was; the chat digest beside it carries them.
 Details: [`fm-objectives.sh`](bin/fm-objectives.sh).
+
+## Ideas in the backlog
+
+The backlog has an `idea` kind for something the captain may pick up, with no work on it yet, so one list answers "what's open".
+An idea is never dispatched, never counts as ready, and never reads as waiting on the captain.
+Bearings shows them after Charted Next: a count, the newest few, and how to list them all.
+Changing an idea's kind turns it into work.
+Details: [ideas](docs/configuration.md#ideas).
 
 ## Recovery after a T3 Code restart
 

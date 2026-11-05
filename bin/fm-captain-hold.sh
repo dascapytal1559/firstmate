@@ -1128,6 +1128,8 @@ command_hold() {
     state=$(show_field "$show" state)
     [ "$state" != "done" ] \
       || fail "task $id is already closed; a new captain call needs its own task"
+    [ "$(show_field_value "$show" kind)" != idea ] \
+      || fail "task $id is an idea, which never waits on the captain; change its kind first (bin/fm-tasks-axi.sh update $id --kind ship)"
     existing_hold_kind=$(show_field_value "$show" hold_kind)
     existing_held=$(show_field_value "$show" held)
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then

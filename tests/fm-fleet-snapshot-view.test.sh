@@ -377,6 +377,35 @@ EOF
   pass "main_inventory discloses orphan/unstructured and clears when inventory is consistent"
 }
 
+test_ideas_are_neither_queued_work_nor_captain_calls() {
+  local home fakebin out view
+  home=$(make_home idea-role)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] loose-idea - Maybe someday (repo: alpha) (kind: idea) (since 2026-07-01)
+- [ ] held-idea - Idea with a stray hold (repo: alpha) (kind: idea) (since 2026-07-01) (hold: pick this up?) (hold-kind: captain)
+- [ ] real-work - Real queued work (repo: alpha) (kind: ship) (since 2026-07-01)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    (.backlog.records[] | select(.id == "loose-idea")
+      | .current_role == "idea" and .hold_bucket == null and .captain_actionable == false)
+      and (.backlog.records[] | select(.id == "held-idea")
+        | .current_role == "idea" and .hold_bucket == null and .captain_actionable == false)
+      and (.backlog.records[] | select(.id == "real-work") | .current_role == "queued")
+  ' >/dev/null || fail "an idea must have its own role and never a hold bucket: $out"
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  assert_contains "$view" "| real-work |" "the view lost real queued work"
+  assert_not_contains "$view" "| loose-idea |" "the view listed an idea as queued work"
+  assert_contains "$view" "Ideas, not queued work: 2" "the view did not count the ideas"
+  pass "an idea has its own role, no hold bucket, and stays out of the view's queue"
+}
+
 test_normalized_roles_and_plural_blocker_readiness() {
   local home fakebin out
   home=$(make_home normalized-records)
@@ -1160,6 +1189,7 @@ fm_test_run \
   test_hold_buckets_are_total_and_text_blind \
   test_main_inventory_orphan_and_unstructured_disclosure \
   test_normalized_roles_and_plural_blocker_readiness \
+  test_ideas_are_neither_queued_work_nor_captain_calls \
   test_event_hints_follow_reconciled_current_state \
   test_open_decision_survives_later_unrelated_event \
   test_secondmate_open_decision_survives_live_endpoint \

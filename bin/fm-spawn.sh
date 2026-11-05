@@ -714,7 +714,8 @@
 # endpoint, worktree, or record exists, unless the home's backlog has an
 # unheld, unblocked Queued or In flight item for the id; a transition that fails
 # after publication removes the record it just wrote rather than leaving a
-# worker the backlog does not own. A relaunch re-reads the row instead of
+# worker the backlog does not own. An idea is never dispatchable: change its kind
+# first (docs/configuration.md "Ideas"). A relaunch re-reads the row instead of
 # re-running the transition, so an eligible In-flight item is left untouched.
 # The transition is
 # skipped entirely for --secondmate spawns (persistent agents are not work
@@ -4900,6 +4901,12 @@ if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
     echo "error: task $ID's backlog item could not be read before dispatch ($FM_BACKLOG_ROW_ERROR)" >&2
     exit 1
   fi
+  case "$BACKLOG_ROW_STATE" in
+    idea\ *)
+      echo "error: backlog item $ID is an idea, which is never dispatched; to start it, change its kind first (bin/fm-tasks-axi.sh update $ID --kind ship) and re-run" >&2
+      exit 1
+      ;;
+  esac
   spawn_preflight_actor=$(fm_lease_actor) || exit "$FM_LEASE_REFUSE_EXIT"
   if [ "$RELAUNCH" -ne 1 ] && [ "$spawn_preflight_actor" = branch ] && fm_lease_away_relocated; then
     if [ "$BACKLOG_ROW_STATE" != "queued no no" ]; then

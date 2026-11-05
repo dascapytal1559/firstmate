@@ -31,11 +31,11 @@ Give the captain a concise session-only recap without gathering fresh fleet stat
 3. If no prior real captain message exists, load [`../bearings/SKILL.md`](../bearings/SKILL.md) and follow it exactly.
    Bearings alone owns its gathering, artifact, and response contract.
    Do not restate that contract or combine a session recap with Bearings output.
-   Bearings carries the high level objectives on this path, so do not print them a second time.
+   Bearings carries the priorities and high level objectives on this path, so do not print them a second time.
 4. If a prior real captain message exists, preserve the ordinary recap interval: recap what happened after that message and before the current invocation.
    Include concrete outcomes, landed work, failures, decisions made, new decisions needed, and work still running only when those events appear in that visible interval.
    Use captain-facing outcome language and preserve every full PR URL present in that interval.
-   Every normal recap, including step 7's, opens with the high level objectives from `bin/fm-objectives.sh`: one short line per objective, led by its name, under a "High level objectives" label, as in the Bearings chat-response contract, and no block when it prints none.
+   Every normal recap, including step 7's, opens with the priorities and then the high level objectives from `bin/fm-objectives.sh`, as in the Bearings chat-response contract, with no block for a list that is empty.
 5. Additionally inspect the entire session history visible to the current first mate before the current invocation for every explicit captain decision that remains unanswered, including decisions raised before the ordinary recap boundary.
    A later unrelated captain message establishes a recap boundary but does not close an earlier decision.
    Treat a decision as closed only when a later visible response substantively resolves it, chooses an option, declines it, grants or denies the requested approval, or otherwise directly addresses that decision.

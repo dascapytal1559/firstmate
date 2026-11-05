@@ -163,6 +163,8 @@
 # (`--state in_flight`, `--state held`, `--state queued --blocked`, and
 # `tasks-axi ready`), so this script never reimplements task state; the groups
 # can overlap, because an in-flight item that is also held appears under both.
+# Ideas are not dispatchable, so both renderers leave them out of the ready rows
+# and say how many (docs/configuration.md "Ideas").
 # When manual mode is selected, or tasks-axi is unavailable or incompatible,
 # this script prints only backlog section headings and item title lines, so
 # title-line hold and blocked-by metadata remain visible while indented bodies
@@ -468,6 +470,7 @@ print_backlog_manual_compact() {
     }
     state == "in_flight" && /^[-*][[:space:]]+/ { in_flight++; print $0; next }
     state == "done" && /^[-*][[:space:]]+/ { done_total++; next }
+    state == "queued" && /^[-*][[:space:]]+/ && /[(]kind: idea[)]/ { ideas++; next }
     state == "queued" && /^[-*][[:space:]]+/ {
       queued_total++
       if ($0 ~ keep_re) { gated++; print $0; next }
@@ -476,7 +479,7 @@ print_backlog_manual_compact() {
     }
     END {
       plain_total = queued_total - gated
-      if (in_flight + queued_total + done_total == 0) {
+      if (in_flight + queued_total + done_total + ideas == 0) {
         print "(no backlog item title lines found)"
       } else {
         printf "(shown %d in-flight, %d held or blocked queued, %d of %d other queued title line(s); %d done row(s) omitted)\n", \
@@ -484,6 +487,7 @@ print_backlog_manual_compact() {
         if (plain_total > plain_shown) {
           printf "(%d more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)\n", plain_total - plain_shown
         }
+        if (ideas > 0) printf "(%d idea(s) left out, never dispatchable)\n", ideas
       }
     }
   ' "$path" | fm_hold_reason_decode_stream markdown
@@ -544,7 +548,7 @@ print_backlog_tasks_axi_compact() {
     printf '\nblocked queued:\n'
     printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nready queued (dispatchable now):\n'
-    print_ready_queued_bounded "$ready"
+    print_ready_queued_bounded "$(printf '%s\n' "$ready" | fm_tasks_axi_ready_without_ideas)"
     return 0
   fi
   printf 'tasks-axi compact listing failed; falling back to title-line rendering.\n'

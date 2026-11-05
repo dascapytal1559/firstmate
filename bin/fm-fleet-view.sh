@@ -74,13 +74,18 @@ printf '%s\n' "$SNAPSHOT" | jq -r '
    end),
   "",
   "## Queued",
-  (if ([.backlog.records[]? | select(.state == "queued")] | length) == 0 then
+  (if ([.backlog.records[]? | select(.state == "queued" and .current_role != "idea")] | length) == 0 then
     "No queued backlog records found."
    else
     "| ID | Title | Repo | Kind | Blocked By | Artifact |",
     "| --- | --- | --- | --- | --- | --- |",
-    (.backlog.records[] | select(.state == "queued") | backlog_row(.))
+    (.backlog.records[] | select(.state == "queued" and .current_role != "idea") | backlog_row(.))
    end),
+  (([.backlog.records[]? | select(.current_role == "idea")] | length) as $ideas
+   | if $ideas > 0 then
+       "",
+       "Ideas, not queued work: \($ideas) (bin/fm-tasks-axi.sh list --state queued --kind idea)"
+     else empty end),
   "",
   "## Done",
   (if ([.backlog.records[]? | select(.state == "done")] | length) == 0 then

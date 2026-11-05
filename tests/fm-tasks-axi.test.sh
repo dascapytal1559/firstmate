@@ -227,6 +227,40 @@ test_wrapper_refuses_add_start() {
   pass "fm-tasks-axi.sh refuses add --start while plain add and start <id> pass through"
 }
 
+test_wrapper_keeps_ideas_out_of_ready() {
+  local dir out
+  dir=$(make_split ideas)
+  wrapper_from_code "$dir" add idea-1 "a loose idea" --kind idea --repo alpha >/dev/null || fail "add --kind idea failed"
+  wrapper_from_code "$dir" add idea-2 "another idea" --kind idea >/dev/null || fail "add --kind idea failed"
+  out=$(wrapper_from_code "$dir" ready) || fail "ready failed with only ideas queued"
+  assert_contains "$out" "count: 0" "ready counted an idea"
+  assert_contains "$out" "ready: 0 unblocked queued tasks" "ready with only ideas did not read as empty"
+  assert_contains "$out" "ideas: 2 left out" "ready did not say how many ideas it left out"
+  assert_not_contains "$out" "idea-1" "ready listed an idea"
+
+  wrapper_from_code "$dir" add work-1 "real work" --kind ship >/dev/null || fail "add failed"
+  out=$(wrapper_from_code "$dir" ready)
+  assert_contains "$out" "count: 1" "ready miscounted around an idea"
+  assert_contains "$out" "ready[1]{" "ready kept the idea rows' length"
+  assert_contains "$out" "work-1,queued,ship" "ready dropped real work"
+  assert_not_contains "$out" "idea-2" "ready listed an idea beside real work"
+  assert_contains "$out" "ready_public_followups:" "ready lost its other lines"
+
+  out=$(wrapper_from_code "$dir" list --state queued --kind idea)
+  assert_contains "$out" "idea-1" "the idea list command did not find an idea"
+
+  out=$(wrapper_from_code "$dir" start idea-1 2>&1) && fail "start accepted an idea"
+  assert_contains "$out" "is an idea" "start did not say why it refused"
+  assert_grep "idea-1 - a loose idea" "$dir/home/data/backlog.md" "the refused start lost the row"
+  pass "fm-tasks-axi.sh keeps ideas out of ready and refuses to start one"
+
+  wrapper_from_code "$dir" update idea-1 --kind ship >/dev/null || fail "update --kind failed"
+  out=$(wrapper_from_code "$dir" ready)
+  assert_contains "$out" "idea-1,queued,ship" "a promoted idea did not become ready"
+  wrapper_from_code "$dir" start idea-1 >/dev/null || fail "start refused a promoted idea"
+  pass "changing an idea's kind promotes it to work"
+}
+
 test_wrapper_single_home() {
   local dir
   dir="$TMP_ROOT/single-wrapper"
@@ -248,6 +282,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_overrides_ambient_file
   test_wrapper_refusals
   test_wrapper_refuses_add_start
+  test_wrapper_keeps_ideas_out_of_ready
   test_wrapper_single_home
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"

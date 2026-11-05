@@ -484,15 +484,29 @@ Captain rows have no Beads due semantics, so that create path waives a Beads `du
 
 Do not register a Beads `types.custom` `captain` type for this: captain is a hold kind, and the fleet Beads `due.required` policy for ordinary work stays in the federated beads config.
 
+### Ideas
+
+A Queued row of kind `idea` is something the captain may pick up, with no work on it yet.
+It is never dispatchable, never ready, and never reads as waiting on the captain:
+
+- [`bin/fm-backlog-transition-lib.sh`](../bin/fm-backlog-transition-lib.sh) reports its row state as `idea`, not `queued`, so dispatch refuses it and no `queued` check can take it for work.
+- [`bin/fm-tasks-axi.sh`](../bin/fm-tasks-axi.sh) leaves it out of `ready` and refuses `start`, and session start and the fleet view leave it out of queued work and say how many there are.
+- [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) refuses to hold it, and the fleet snapshot gives it no hold bucket even when its row carries a captain hold.
+- Bearings shows ideas only in their own group, never in Charted Next.
+
+Add one with `bin/fm-tasks-axi.sh add "<title>" --mint --kind idea --repo <project> --body "<the words>"`, leaving out `--repo` when no project fits, and list them all with `bin/fm-tasks-axi.sh list --state queued --kind idea`.
+An idea becomes work by changing its kind: `bin/fm-tasks-axi.sh update <id> --kind ship`.
+A home on the manual backend has no dispatch gate, so there it is only the row's `(kind: idea)` that says so.
+
 ### Automatic dispatch and completion
 
 When the automatic transition gate applies, dispatch and completion each move the work item in the same run that creates or removes its task record.
 The ordinary successful path therefore keeps the backlog and live task set in sync ([`bin/fm-backlog-transition-lib.sh`](../bin/fm-backlog-transition-lib.sh)).
-Under that gate, dispatch accepts only an unheld, unblocked Queued or In flight item in this home; a missing, Done, held, or dependency-blocked item is refused before any endpoint or local copy is created.
+Under that gate, dispatch accepts only an unheld, unblocked Queued or In flight item in this home; a missing, Done, held, or dependency-blocked item, or an idea, is refused before any endpoint or local copy is created.
 
 [`bin/fm-tasks-axi.sh`](../bin/fm-tasks-axi.sh) refuses `add --start` and its `create --start` alias.
 Either would place a row In flight without a task record, status file, or inbox, counting it as live work that nobody is doing.
-The wrapper still passes through the documented direct transition `tasks-axi start <id>`.
+The wrapper still passes through the documented direct transition `tasks-axi start <id>`, except for an idea.
 Completion refuses to report success until the item is closed, and session start reconciles this home's own books after an interrupted run.
 
 When a spawn is interrupted after launch delivery began, its exit path re-reads the paired task record and the backlog row under the same per-task lock as the commit, repairs a row the commit believed it had moved, and reports only what was verified or honestly attempted, never intent phrased as outcome ([`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-backlog-atomicity.test.sh`](../tests/fm-backlog-atomicity.test.sh)).

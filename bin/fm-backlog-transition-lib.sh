@@ -424,7 +424,7 @@ fm_backlog_row_list() {  # <resolved-data-dir> [flag...]
 }
 
 fm_backlog_row_probe() {  # <data-dir> <id>
-  local data authorized_data=$1 id=$2 out state held blocked hold_kind command_status source_status
+  local data authorized_data=$1 id=$2 out state held blocked kind hold_kind command_status source_status
   if ! data=$(fm_backlog_data_absolute "$1"); then
     FM_BACKLOG_ROW_RESULT=error
     FM_BACKLOG_ROW_STATE=
@@ -462,12 +462,18 @@ fm_backlog_row_probe() {  # <data-dir> <id>
   state=$(printf '%s\n' "$out" | sed -n 's/^  state: *//p' | head -1)
   held=$(printf '%s\n' "$out" | sed -n 's/^  held: *//p' | head -1)
   blocked=$(printf '%s\n' "$out" | sed -n 's/^  blocked: *//p' | head -1)
+  kind=$(printf '%s\n' "$out" | sed -n 's/^  kind: *//p' | head -1)
   hold_kind=$(printf '%s\n' "$out" | sed -n 's/^  hold_kind: *//p' | head -1)
   if [ -z "$state" ]; then
     FM_BACKLOG_ROW_ERROR="tasks-axi show $id returned no state"
     return 1
   fi
   FM_BACKLOG_ROW_RESULT=found
+  # A queued idea reports the state word "idea", so no "queued" check can take it
+  # for dispatchable work (docs/configuration.md "Ideas").
+  if [ "$state" = queued ] && [ "$kind" = idea ]; then
+    state=idea
+  fi
   FM_BACKLOG_ROW_STATE="$state ${held:-no} ${blocked:-no}"
   case "$hold_kind" in
     ''|'"-"'|-) FM_BACKLOG_ROW_HOLD_KIND= ;;

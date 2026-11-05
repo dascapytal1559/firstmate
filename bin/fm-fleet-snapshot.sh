@@ -36,7 +36,10 @@
 #     when hold_until is still in the future, else "aged" when an undated hold
 #     is at least FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; legacy
 #     unstamped holds fall back to `since`), else "live". A non-captain or Done
-#     row carries null.
+#     row carries null, and so does an idea.
+#     A Queued row of kind idea has current_role "idea": something the captain may
+#     pick up, with no work on it yet, so it is never ready and never waits on the
+#     captain (docs/configuration.md "Ideas").
 #     captain_actionable means "waiting on the captain now" and is exactly
 #     hold_bucket == "live".
 #     hold_age_days is the hold's age when computable, else null.
@@ -94,8 +97,9 @@
 #     in the bounded queued inventory with its structured classification metadata.
 #     Before that queued bound is applied, non-captain-actionable rows are selected
 #     ahead of captain-actionable rows so separately projected live decisions cannot
-#     crowd Charted-Next-eligible work out of the summary. Each group is ordered by
-#     filed date newest first, with undated rows stable at the end.
+#     crowd Charted-Next-eligible work out of the summary, and ideas come last so they
+#     cannot crowd out either. Each group is ordered by filed date newest first, with
+#     undated rows stable at the end.
 #     Structured-home input must declare the current home-summary and hold-classifier
 #     schemas; a live ledger or cached copy missing either declaration or declaring
 #     an unsupported version is unavailable even when it contains no captain holds.
@@ -558,12 +562,14 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
               (if .state == "in_flight" and .hold_reason != null and .hold_kind != null then "held"
                elif .state == "in_flight" and .kind == "program" then "program"
                elif .state == "in_flight" then "worker"
+               elif .state == "queued" and .kind == "idea" then "idea"
                elif .state == "queued" then "queued"
                else "done" end)
           | .requires_child_metadata = (.current_role == "worker")
           | .hold_age_days = days_between((.hold_set // .since); $now)
           | .hold_bucket =
-              (if .hold_kind != "captain" or .hold_reason == null or .state == "done" then null
+              (if .hold_kind != "captain" or .hold_reason == null or .state == "done"
+                  or .current_role == "idea" then null
                elif (.unresolved_blocker_ids | length) > 0 then "blocked"
                elif .hold_until != null and .hold_until > $today then "dated"
                elif .hold_until == null and .hold_age_days != null
@@ -1127,8 +1133,9 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           repo:((.repo // null) | if . == null then null else trunc(120) end),
           kind:((.kind // null) | if . == null then null else trunc(40) end),
           since:((.since // null) | if . == null then null else trunc(40) end)}]
-          | ((map(select(.captain_actionable != true)) | newest_filed_first)
-             + (map(select(.captain_actionable == true)) | newest_filed_first))
+          | ((map(select(.captain_actionable != true and .kind != "idea")) | newest_filed_first)
+             + (map(select(.captain_actionable == true)) | newest_filed_first)
+             + (map(select(.kind == "idea" and .captain_actionable != true)) | newest_filed_first))
           | .[:$queued_n]),
         landed:(if $landed_n == 0 then $landed_all else $landed_all[:$landed_n] end),
         endpoints:([$tasks[] | {id,state:.current_state.state,source:.current_state.source,

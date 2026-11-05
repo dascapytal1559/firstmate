@@ -154,8 +154,14 @@ case "${1:-}" in
     ;;
   ready)
     require_file "$@"
-    printf 'count: %s\n' "$ready_count"
-    printf 'ready[%s]{id,state,kind,repo,title}:\n' "$ready_count"
+    idea_count=${FM_FAKE_TASKS_AXI_READY_IDEAS:-0}
+    printf 'count: %s\n' "$((ready_count + idea_count))"
+    printf 'ready[%s]{id,state,kind,repo,title}:\n' "$((ready_count + idea_count))"
+    i=1
+    while [ "$i" -le "$idea_count" ]; do
+      printf '  idea-%s,queued,idea,firstmate,Idea %s\n' "$i" "$i"
+      i=$((i + 1))
+    done
     i=1
     while [ "$i" -le "$ready_count" ]; do
       printf '  ready-%s,queued,ship,firstmate,Ready item %s\n' "$i" "$i"
@@ -2193,6 +2199,44 @@ EOF
   pass "the startup backlog bound cuts only dispatchable queued rows and discloses the remainder exactly"
 }
 
+test_backlog_compact_leaves_ideas_out_of_ready() {
+  local rec root home fakebin out
+  rec=$(new_world backlog-compact-ideas)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+
+  out=$(FM_FAKE_TASKS_AXI_READY=2 FM_FAKE_TASKS_AXI_READY_IDEAS=3 FM_SESSION_START_QUEUED_LIMIT=2 \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_not_contains "$out" "idea-1,queued" "an idea appeared as dispatchable work"
+  assert_contains "$out" "ready-2,queued,ship,firstmate,Ready item 2" \
+    "ideas took the place of real work under the bound"
+  assert_contains "$out" "(shown 2 of 2 ready queued item(s))" "ideas were counted as ready work"
+  assert_contains "$out" "ideas: 3 left out" "the listing did not say how many ideas it left out"
+
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] manual-idea - Maybe someday (repo: firstmate) (kind: idea)
+- [ ] manual-work - Real queued work (repo: firstmate) (kind: ship)
+
+## Done
+EOF
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "manual-idea" "the manual listing showed an idea among queued work"
+  assert_contains "$out" "- [ ] manual-work - Real queued work" "the manual listing lost real work"
+  assert_contains "$out" "(1 idea(s) left out, never dispatchable)" \
+    "the manual listing did not say how many ideas it left out"
+  pass "the startup backlog leaves ideas out of dispatchable work and says how many"
+}
+
 test_backlog_compact_manual_backend_skips_indented_bodies() {
   local rec root home fakebin out
   rec=$(new_world backlog-compact-manual)
@@ -3206,6 +3250,7 @@ test_non_pi_session_start_leaves_branch_state_untouched
 test_session_start_seeds_the_outcome_display_tail_while_away
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_queued_bound_discloses_its_remainder
+test_backlog_compact_leaves_ideas_out_of_ready
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet

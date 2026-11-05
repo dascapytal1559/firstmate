@@ -445,3 +445,34 @@ The choices made:
 
 The evidence is the Bearings snapshot suite, with new cases for objectives present, section missing, and file missing, all using made-up objectives. The present case also plants lookalike bullets above and below the section, because the real file has one above it.
 The skill wording itself has no automated test, so the first real `/bearings` and `/ahoy` after landing are its proof.
+
+## 18. Priorities, objectives, and ideas in one place (5 November 2026)
+
+![A Bearings digest with made-up items: Priorities and High level objectives open it, and Ideas follow Charted Next](media/focus-and-ideas-in-bearings.svg)
+
+The ask:
+
+> honestly I would actually like a bit more of just um high level objectives.md and priorities.md and then backlog.md if we need one.
+
+And on open threads:
+
+> I do think open threads functions in every way like your backlog. It's just an idea that hasn't gotten any work done about it yet because these days I still ask you it's like hey what's open right now and you give everything from your backlog but you really should also r tell me about the open threads as well right so then I can like see if I want to move on them. So I personally like to merge backlog with open threads.
+
+What was built:
+
+- `bin/fm-objectives.sh` now reads two plain bullet lists, `data/priorities.md` and `data/high-level-objectives.md`. A missing file is an empty list.
+- Bearings and `/ahoy` open with the priorities and then the high level objectives.
+- The backlog has an `idea` kind. An idea is never dispatched, never counts as ready, and never reads as waiting on the captain.
+- Bearings shows ideas after Charted Next: a count, the newest few, and the command that lists them all.
+- Changing an idea's kind turns it into work.
+
+The choices made:
+
+- **One state word does most of the work.** The backlog row reader reports a queued idea's state as `idea`, so spawn and every other `queued` check refuse it without each learning about ideas.
+- **`tasks-axi` itself is unchanged.** It has no notion of an idea, so its `ready` output is filtered on the way out, in the wrapper and in the startup digest.
+- **A captain hold on an idea is refused.** An idea with a stray hold from before this change still reads as an idea, not a decision.
+- **Rows are `{text}`.** The old `**Name:** text` shape is gone, because the files are plain bullets now.
+
+The evidence is the suites for the snapshot, the fleet view, the wrapper, session start, captain holds, and dispatch, with new cases for each refusal and for promoting an idea to work.
+The skill wording has no automated test, so the first real `/bearings` and `/ahoy` after landing are its proof.
+The private files and the migration of open threads into the backlog are left to Firstmate, with the captain's look.

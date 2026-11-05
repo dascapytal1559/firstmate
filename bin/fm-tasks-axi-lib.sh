@@ -24,6 +24,10 @@
 # fm_tasks_axi_backend delegates to that resolver and preserves its status;
 # callers must check it before selecting backend-specific flags or exemptions.
 #
+# fm_tasks_axi_ready_without_ideas filters `tasks-axi ready` output for its callers:
+# tasks-axi has no idea of its own, so it lists every unblocked Queued row, and an
+# idea is never ready (docs/configuration.md "Ideas").
+#
 # This file is the single owner of FM_TASKS_AXI_MIN. bin/fm-bootstrap.sh turns a
 # failing check into the operator-facing OUTDATED diagnostic, whose requirement
 # text renders the check reason below.
@@ -259,4 +263,47 @@ fm_tasks_axi_backend_available() {
   local config_dir=$1
   fm_backlog_backend_manual "$config_dir" && return 1
   fm_tasks_axi_compatible
+}
+
+# Copy `tasks-axi ready` output from stdin to stdout without its idea rows, keeping
+# the count and the row table's length true and naming how many were dropped. Any
+# other text passes through unchanged.
+fm_tasks_axi_ready_without_ideas() {
+  awk '
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR && !header; i++) {
+        if (line[i] ~ /^ready\[[0-9]+\]\{.*\}:$/) header = i
+      }
+      if (header) {
+        fields = line[header]
+        sub(/^[^{]*\{/, "", fields)
+        sub(/\}:$/, "", fields)
+        columns = split(fields, name, ",")
+        for (i = 1; i <= columns; i++) if (name[i] == "kind") kind = i
+      }
+      last = header
+      if (kind) {
+        for (i = header + 1; i <= NR && line[i] ~ /^[[:space:]]/; i++) {
+          split(line[i], cell, ",")
+          if (cell[kind] == "idea") { drop[i] = 1; ideas++ } else rows++
+          last = i
+        }
+      }
+      for (i = 1; i <= NR; i++) {
+        if (ideas && i == last + 1) note()
+        if (i in drop) continue
+        if (ideas && i < header && line[i] ~ /^count: /) print "count: " rows + 0
+        else if (ideas && i == header) {
+          if (rows) { sub(/^ready\[[0-9]+\]/, "ready[" rows "]", line[i]); print line[i] }
+          else print "ready: 0 unblocked queued tasks"
+        }
+        else print line[i]
+      }
+      if (ideas && last == NR) note()
+    }
+    function note() {
+      printf "ideas: %d left out, never dispatchable (bin/fm-tasks-axi.sh list --state queued --kind idea)\n", ideas
+    }
+  '
 }
