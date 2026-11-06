@@ -33,10 +33,11 @@
 #     message names none, 2 when it names more than one or a malformed id.
 #
 # Wanted state, per task: a live or aged hold is an active thread (under
-# FirstMate's card) for a day after it was raised or last updated, then snoozed
-# with no date (the Snoozed shelf) until an update brings it back for another
-# day; a context rewrite without --changed is not an update; a dated hold (--until) is
-# snoozed until 00:00 UTC on that date, when the snapshot's bucket turns live; a
+# FirstMate's card) for a day after it was raised, last updated, or its --until
+# date came due, then snoozed with no date (the Snoozed shelf) until an update
+# brings it back for another day; a context rewrite without --changed is not an
+# update; a dated hold (--until) is snoozed until 00:00 UTC on that date, when
+# the snapshot's bucket turns live and its day at the top starts; a
 # blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
 # that closed or was released is settled, then archived a day after that
 # settle was proven. The payload is the context record from this hold (same
@@ -170,7 +171,7 @@ plan() {
          | ($locs[$r.id]) as $l
          | (if $c != null and ($c.entries | length) > 0 then $c.entries else
               [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | ([($r.hold_set // $r.since | iso), ($entries[] | select(.kind == "update") | .at)]
+         | ([($r.hold_set // $r.since | iso), ($r.hold_until | iso), ($entries[] | select(.kind == "update") | .at)]
             | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $fresh
          | (($r.hold_bucket == "live" or $r.hold_bucket == "aged") and $fresh != null and ($now - $fresh) >= $shelveAfter) as $shelved
          | (if $shelved then "snoozed" elif $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase

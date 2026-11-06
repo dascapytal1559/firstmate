@@ -358,7 +358,7 @@ test_parked_holds_sit_in_settled() {
   pass "fm-t3-needs-me.sh: a blocked call stays out of the top level"
 }
 
-test_aged_holds_stay_at_the_top() {
+test_aged_holds_are_not_shelved_for_age() {
   make_home aged
   FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "aged" "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 home_env "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input | jq -r '.backlog.records[] | select(.id == "w1") | .hold_bucket')" "the hold reads as aged"
@@ -366,7 +366,7 @@ test_aged_holds_stay_at_the_top() {
   assert_contains "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 needs_me status)" "waiting: 1" "and counts as waiting on him"
   FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 sync_now >/dev/null || fail "the next sync should succeed"
   assert_equals "false" "$(decision w1 't.settled')" "later passes keep it there"
-  pass "fm-t3-needs-me.sh: a call that has waited long stays an active top-level thread"
+  pass "fm-t3-needs-me.sh: an aged call is not shelved just for being aged"
 }
 
 test_day_old_calls_move_to_the_snoozed_shelf() {
@@ -379,6 +379,38 @@ test_day_old_calls_move_to_the_snoozed_shelf() {
   assert_equals "true" "$(decision w1 't.snoozedUntil == null')" "with no date"
   assert_contains "$(FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me status)" "waiting: 0" "and no longer counts as waiting under FirstMate"
   pass "fm-t3-needs-me.sh: a call older than a day moves to the Snoozed shelf with no date"
+}
+
+test_an_update_brings_a_shelved_call_back() {
+  make_home shelve-update
+  FM_CAPTAIN_HOLD_NOW=$(jq -nr --argjson t "$(( $(date +%s) - 2 * 86400 ))" '$t | todateiso8601') \
+    captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "a call raised two days ago is on the shelf"
+  captain context w1 --text-file "$(say 'Grid or list?')" >/dev/null 2>&1 || fail "raise should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed')" "a context rewrite without --changed leaves it there"
+  captain context w1 --changed "A third layout came up" --text-file "$(say 'Grid, list, or cards?')" >/dev/null 2>&1 \
+    || fail "update should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "a recorded update brings it back under FirstMate"
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me sync >/dev/null || fail "a day later sync should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "for a day, then it is shelved again"
+  pass "fm-t3-needs-me.sh: an update brings a shelved call back for another day"
+}
+
+test_dated_hold_gets_its_day_when_it_comes_due() {
+  make_home dated-due
+  FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w1 --reason "Pick the layout" --until 2099-01-04 >/dev/null 2>&1 \
+    || fail "dated hold should succeed"
+  assert_equals "2099-01-04T00:00:00Z" "$(decision w1 't.snoozedUntil')" "a dated hold is snoozed until its date"
+  local due_morning=2099-01-04T06:00:00Z next_day=2099-01-05T01:00:00Z
+  FM_SNAPSHOT_NOW=$due_morning FM_NEEDS_ME_NOW=$(jq -n --arg t "$due_morning" '$t | fromdateiso8601') needs_me sync >/dev/null \
+    || fail "sync on the due date should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "the morning its date comes due it is back under FirstMate"
+  assert_contains "$(FM_SNAPSHOT_NOW=$due_morning FM_NEEDS_ME_NOW=$(jq -n --arg t "$due_morning" '$t | fromdateiso8601') needs_me status)" \
+    "waiting: 1" "and counts as waiting on him"
+  FM_SNAPSHOT_NOW=$next_day FM_NEEDS_ME_NOW=$(jq -n --arg t "$next_day" '$t | fromdateiso8601') needs_me sync >/dev/null \
+    || fail "sync a day after the due date should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "a day after its date it moves to the shelf"
+  pass "fm-t3-needs-me.sh: a dated hold gets its day at the top when its date comes due"
 }
 
 test_status_and_mentioned() {
@@ -444,8 +476,10 @@ test_failed_call_and_restart_converge
 test_lost_launch_reply_makes_no_duplicate
 test_a_decision_with_a_turn_is_never_kept
 test_parked_holds_sit_in_settled
-test_aged_holds_stay_at_the_top
+test_aged_holds_are_not_shelved_for_age
 test_day_old_calls_move_to_the_snoozed_shelf
+test_an_update_brings_a_shelved_call_back
+test_dated_hold_gets_its_day_when_it_comes_due
 test_status_and_mentioned
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part
