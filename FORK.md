@@ -82,6 +82,7 @@ While a worker's no-mistakes run is active, the card reads Testing, and Waiting 
 The words go when the wait or the run ends, and when the worker is cleaned up.
 Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows neither word and nothing else changes.
 A failed update is retried, so the card comes right within about a minute, and Testing can take that long to appear or go.
+Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
 ## Priorities and high level objectives in every check-in
