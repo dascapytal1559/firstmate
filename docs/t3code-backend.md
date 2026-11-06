@@ -229,7 +229,7 @@ Its records stay, so the card catches up on the first pass after T3 is updated.
 
 Each open captain call is its own thread in FirstMate's project, listed in the captain's sidebar under the FirstMate card after its workers, reading Needs captain.
 A decision thread has no agent and no turn.
-It carries the call's question, its options, its project (the task's repo, shown on the card), and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
+It carries the call's question, its options, its project (the task's repo, shown on the card), when it started waiting (the hold's start, which the card's age counts from), and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
 A call with no recorded context still appears, with its hold reason as the question.
 
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:

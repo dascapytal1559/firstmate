@@ -3,8 +3,8 @@
 # open captain calls (docs/t3code-backend.md "Decision threads").
 #
 # Each captain-held task gets one agent-less T3 thread under FirstMate's own,
-# carrying the call's question, options, its project (the task's repo), and
-# the words Firstmate raised and
+# carrying the call's question, options, its project (the task's repo), when
+# it started waiting (the hold's start), and the words Firstmate raised and
 # updated it with, so the captain's sidebar shows what needs him. The
 # wanted state comes from structured records only: the backlog's captain holds
 # and their hold_bucket (bin/fm-fleet-snapshot.sh), the call's context record
@@ -173,6 +173,7 @@ plan() {
             holdSet: ($r.hold_set // ""),
             decision: ({taskId: $r.id, title: ($r.title[:200])}
               + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
+              + (if ($r.hold_set // "") != "" then {since: ($r.hold_set | iso)} else {} end)
               + {question: ((($c.question // null) // $r.hold_reason)[:4000]),
               options: [($c.options // [])[] | {label} + (if .detail then {detail} else {} end)],
               entries: [$entries[] | entry],
