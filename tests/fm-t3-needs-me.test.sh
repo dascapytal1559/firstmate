@@ -213,6 +213,7 @@ test_hold_creates_an_agentless_decision() {
   assert_equals "$FM_THREAD" "$(decision w1 't.decisionOf')" "it belongs to FirstMate's thread"
   assert_equals "proj-fm" "$(decision w1 't.projectId')" "in FirstMate's project"
   assert_equals "Pick the print layout" "$(decision w1 't.title')" "titled by the task"
+  assert_equals "sample" "$(decision w1 't.decision.projectName')" "naming the task's repo as its project"
   assert_equals "0" "$(decision w1 't.runs.length')" "no turn ran"
   assert_equals "Grid or list for the print view?" "$(decision w1 't.decision.question')" "the hold reason is the question"
   assert_equals "raised" "$(decision w1 't.decision.entries[0].kind')" "and its only entry"
