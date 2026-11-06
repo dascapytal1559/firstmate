@@ -83,9 +83,9 @@
 //     decisionStartsRun makes such a launch start a turn, as a broken peer.
 //   - t3_thread_launch answers a repeated clientRequestId with the thread it
 //     already made; t3_thread_organize settle, unsettle, snooze (with
-//     snoozedUntil), unsnooze, mark_unread, mark_read, and unarchive change
-//     what t3_thread_read reports as settled, settledAt, snoozed, and
-//     snoozedUntil.
+//     snoozedUntil, or with no date), unsnooze, mark_unread, mark_read, and
+//     unarchive change what t3_thread_read reports as settled, settledAt,
+//     snoozed, and snoozedUntil.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the

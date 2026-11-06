@@ -383,14 +383,20 @@ test_day_old_calls_move_to_the_snoozed_shelf() {
 
 test_an_update_brings_a_shelved_call_back() {
   make_home shelve-update
-  FM_CAPTAIN_HOLD_NOW=$(jq -nr --argjson t "$(( $(date +%s) - 2 * 86400 ))" '$t | todateiso8601') \
+  local raised=$(( $(date +%s) - 2 * 86400 ))
+  FM_CAPTAIN_HOLD_NOW=$(jq -nr --argjson t "$raised" '$t | todateiso8601') \
     captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "a call raised two days ago is on the shelf"
+  FM_NEEDS_ME_NOW=$(( raised + 3600 )) needs_me mentioned w1 || fail "mentioned should succeed"
+  assert_present "$HOME_DIR/state/needs-me-mentioned/w1" "the captain was told of it while it was at the top"
   captain context w1 --text-file "$(say 'Grid or list?')" >/dev/null 2>&1 || fail "raise should succeed"
   assert_equals "true" "$(decision w1 't.snoozed')" "a context rewrite without --changed leaves it there"
+  assert_present "$HOME_DIR/state/needs-me-mentioned/w1" "a shelved call keeps its mention record"
   captain context w1 --changed "A third layout came up" --text-file "$(say 'Grid, list, or cards?')" >/dev/null 2>&1 \
     || fail "update should succeed"
   assert_equals "false" "$(decision w1 't.snoozed')" "a recorded update brings it back under FirstMate"
+  assert_contains "$(needs_me status)" "$(printf 'changed\tw1\tPick the print layout\tA third layout came up')" \
+    "and status names it as changed, with what changed"
   FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me sync >/dev/null || fail "a day later sync should succeed"
   assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "for a day, then it is shelved again"
   pass "fm-t3-needs-me.sh: an update brings a shelved call back for another day"

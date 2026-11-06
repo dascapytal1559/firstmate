@@ -233,8 +233,8 @@
 //     without one, and an archived item's thread is archived. With apply (or
 //     on a new thread) the payload is set (t3_thread_update set_decision) and
 //     the thread is unarchived, unsettled, unsnoozed, snoozed until
-//     snoozedUntil, or settled to match the phase, marked unread when
-//     markUnread, and read back to prove it. Without apply only a payload
+//     snoozedUntil (with no date when it is null), or settled to match the
+//     phase, marked unread when markUnread, and read back to prove it. Without apply only a payload
 //     whose revision differs is set again, so a settle, snooze, or archive
 //     the captain made himself stands. Prints {parent, projectId, items[]},
 //     each item {taskId, ok, thread, generation, created, changed[]} or ok

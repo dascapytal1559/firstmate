@@ -340,11 +340,13 @@ else
   rm -f -- "$SYNCS/.synced"
 fi
 
-# A decision no longer waiting needs no mention record.
+# A decision no longer waiting needs no mention record; one on the Snoozed
+# shelf still waits, so an update that brings it back reads as changed.
 if [ -d "$MENTIONED" ]; then
   for f in "$MENTIONED"/*; do
     [ -f "$f" ] || continue
-    jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and .phase == "active")' "$WORK/plan.json" >/dev/null || rm -f -- "$f"
+    jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and (.phase == "active" or (.phase == "snoozed" and .snoozedUntil == null)))' \
+      "$WORK/plan.json" >/dev/null || rm -f -- "$f"
   done
 fi
 exit "$failed"
