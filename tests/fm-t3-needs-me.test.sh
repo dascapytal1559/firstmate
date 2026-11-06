@@ -381,6 +381,25 @@ test_day_old_calls_move_to_the_snoozed_shelf() {
   pass "fm-t3-needs-me.sh: a call older than a day moves to the Snoozed shelf with no date"
 }
 
+test_shelving_leaves_the_captains_own_placement() {
+  make_home shelve-captain
+  (cd "$HOME_DIR" && tasks-axi add w3 "Third call" --repo sample) >/dev/null 2>&1 || fail "could not seed a third row"
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
+  captain hold w3 --reason "Name the release" >/dev/null 2>&1 || fail "hold should succeed"
+  set_decision_thread w1 't.snoozed = true; t.snoozedUntil = "2099-01-05T00:00:00Z";'
+  set_decision_thread w2 't.archived = true;'
+  set_decision_thread w3 't.settled = true; t.settledAt = new Date().toISOString();'
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me sync >/dev/null || fail "a day later sync should succeed"
+  assert_equals "2099-01-05T00:00:00Z" "$(decision w1 't.snoozedUntil')" "his own dated snooze keeps its date"
+  assert_equals "true" "$(decision w2 't.archived === true && t.snoozed !== true')" "his own archive stands"
+  assert_equals "true" "$(decision w3 't.settled === true && t.snoozed !== true')" "his reply's settle stands until the answer is recorded"
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 120 )) needs_me sync >/dev/null || fail "the next sync should succeed"
+  assert_equals "2099-01-05T00:00:00Z" "$(decision w1 't.snoozedUntil')" "and later passes leave them alone"
+  assert_contains "$(FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 120 )) needs_me status)" "in_sync: yes" "while the records match"
+  pass "fm-t3-needs-me.sh: moving a day-old call to the shelf leaves the captain's own snooze, archive, or settle"
+}
+
 test_an_update_brings_a_shelved_call_back() {
   make_home shelve-update
   local raised=$(( $(date +%s) - 2 * 86400 ))
@@ -484,6 +503,7 @@ test_a_decision_with_a_turn_is_never_kept
 test_parked_holds_sit_in_settled
 test_aged_holds_are_not_shelved_for_age
 test_day_old_calls_move_to_the_snoozed_shelf
+test_shelving_leaves_the_captains_own_placement
 test_an_update_brings_a_shelved_call_back
 test_dated_hold_gets_its_day_when_it_comes_due
 test_status_and_mentioned

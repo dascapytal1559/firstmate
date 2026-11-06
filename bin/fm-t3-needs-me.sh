@@ -269,6 +269,7 @@ jq -n --slurpfile plan "$WORK/plan.json" --rawfile hashes "$WORK/hashes.tsv" --a
           thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
           requestId: "fm-needs-me:\($key):\($p.taskId)",
           apply: ($h[$p.taskId] != ($p.local.hash // null)),
+          shelve: ($p.phase == "snoozed" and $p.snoozedUntil == null and ($p.local.phase // null) == "active"),
           markUnread: ($p.local != null and ($p.local.holdSet // "") == $p.holdSet
             and $p.newestKind == "update" and ($p.decision.revision // 0) > ($p.local.revision // 0))}]}
 ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; exit 1; }
