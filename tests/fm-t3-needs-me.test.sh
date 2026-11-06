@@ -353,7 +353,18 @@ test_parked_holds_sit_in_settled() {
   captain hold w3 --reason "Choose after w1 lands" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "true" "$(decision w3 't.settled')" "a blocked call is parked in Settled"
   assert_equals "false" "$(decision w3 't.archived')" "and kept"
-  pass "fm-t3-needs-me.sh: a blocked or long-waiting call stays out of the top level"
+  pass "fm-t3-needs-me.sh: a blocked call stays out of the top level"
+}
+
+test_aged_holds_stay_at_the_top() {
+  make_home aged
+  FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals "aged" "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 home_env "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input | jq -r '.backlog.records[] | select(.id == "w1") | .hold_bucket')" "the hold reads as aged"
+  assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "an aged call is an active top-level thread"
+  assert_contains "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 needs_me status)" "waiting: 1" "and counts as waiting on him"
+  FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 sync_now >/dev/null || fail "the next sync should succeed"
+  assert_equals "false" "$(decision w1 't.settled')" "later passes keep it there"
+  pass "fm-t3-needs-me.sh: a call that has waited long stays an active top-level thread"
 }
 
 test_status_and_mentioned() {
@@ -419,6 +430,7 @@ test_failed_call_and_restart_converge
 test_lost_launch_reply_makes_no_duplicate
 test_a_decision_with_a_turn_is_never_kept
 test_parked_holds_sit_in_settled
+test_aged_holds_stay_at_the_top
 test_status_and_mentioned
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part

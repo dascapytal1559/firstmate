@@ -31,9 +31,10 @@
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
 #     message names none, 2 when it names more than one or a malformed id.
 #
-# Wanted state, per task: a live hold is an active thread (top level); a dated
-# hold (--until) is snoozed until 00:00 UTC on that date, when the snapshot's
-# bucket turns live; an aged or blocked hold is parked in Settled, kept; a call
+# Wanted state, per task: a live or aged hold is an active thread (top level; a
+# call that has waited long still waits on him); a dated hold (--until) is
+# snoozed until 00:00 UTC on that date, when the snapshot's bucket turns live; a
+# blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
 # that closed or was released is settled, then archived a day after that
 # settle was proven. The payload is the context record from this hold (same
 # hold-set stamp) or, without one, the hold reason as the question and the
@@ -165,7 +166,7 @@ plan() {
          | ($locs[$r.id]) as $l
          | (if $c != null and ($c.entries | length) > 0 then $c.entries else
               [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | (if $r.hold_bucket == "live" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
+         | (if $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
          | {taskId: $r.id, title: ($r.title[:200]), phase: $phase,
             snoozedUntil: (if $phase == "snoozed" then ($r.hold_until | iso) else null end),
             holdSet: ($r.hold_set // ""),

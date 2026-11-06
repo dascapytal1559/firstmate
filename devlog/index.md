@@ -604,6 +604,19 @@ The T3 Code fork draws the threads; this is FirstMate's half, which keeps them t
 The choices made:
 
 - **His own moves stand.** If he settles, snoozes, or archives a decision thread himself (replying settles it), the sync leaves it so until FirstMate's records for that call change. A reply that leaves the call open gets an update, which brings it back to the top.
-- **Long-waiting and blocked calls go to Settled, not the top.** Bearings already keeps those out of Captain's Call; they stay findable and come back up when they turn live again.
+- **Long-waiting and blocked calls go to Settled, not the top.** Bearings already keeps those out of Captain's Call; they stay findable and come back up when they turn live again. (Long-waiting calls were moved back to the top in entry 24.)
 - **One T3 call per pass.** The whole pass runs in one session, and creating a thread is retried under the same request id, so a lost reply never makes a second thread.
 - **Secondmate homes make none.** Their calls already reach him through the main FirstMate.
+
+## 24. A call that has waited long stays at the top (6 November 2026)
+
+The rule behind the decision threads, in his words:
+
+> it should be at the same level as first mate ... everything at the top level needs my attention. Everything one layer deep, such as like the first mates workers, they don't need my attention.
+
+Entry 23 sent calls that had waited a long time to Settled, to match Bearings' Captain's Call. That was wrong under this rule: a call that has waited a long time still waits on him.
+
+- **Aged calls are active threads now.** `bin/fm-t3-needs-me.sh` treats a call past the aging threshold exactly like a live one: on top of the sidebar, counted in the waiting total, and named in chat while new or changed.
+- **Blocked calls stay in Settled.** They wait on other work, not on him, and come back up when they unblock.
+- **Bearings is unchanged.** Its Captain's Call still lists only live calls and shows long-waiting ones as gates; the two views now differ on purpose.
+- **Threads settled under the old rule come back up** on the next pass, since the wanted state for those calls changed.

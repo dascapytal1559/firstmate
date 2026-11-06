@@ -234,9 +234,9 @@ A call with no recorded context still appears, with its hold reason as the quest
 
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
 
-- a live call is an active thread;
+- a live call, or one that has waited longer than the aging threshold, is an active thread, since it still waits on him;
 - a call deferred with `--until` is snoozed until 00:00 UTC on that date;
-- a blocked call, or one waiting longer than the aging threshold, sits in Settled;
+- a blocked call sits in Settled until it unblocks;
 - an answered or released call is settled, then archived a day later;
 - an update marks the thread unread.
 
