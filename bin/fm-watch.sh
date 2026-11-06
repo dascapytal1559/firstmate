@@ -3853,8 +3853,12 @@ t3_captain_label_sync_detached() {
     T3_CAPTAIN_LABEL_PID=
   fi
   touch "$STATE/.t3-captain-wait-sync"
-  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-    "$SCRIPT_DIR/fm-t3-captain-label.sh" sync --runs </dev/null >/dev/null 2>&1 &
+  {
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-t3-captain-label.sh" sync --runs
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
+  } </dev/null >/dev/null 2>&1 &
   T3_CAPTAIN_LABEL_PID=$!
 }
 
@@ -4019,9 +4023,10 @@ while :; do
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
 
-  # A T3 crew card's status follows its holds and its run here: a label that
-  # failed, a thread that came back, or a run that started or ended converges on
-  # the next pass. Only a home with the T3 credential has cards to keep.
+  # A T3 crew card's status follows its holds and its run here, and so do the
+  # captain's decision threads (bin/fm-t3-needs-me.sh): a label or decision
+  # that failed, a thread that came back, or a run that started or ended
+  # converges on the next pass. Only a home with the T3 credential takes part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
     && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
     t3_captain_label_sync_detached

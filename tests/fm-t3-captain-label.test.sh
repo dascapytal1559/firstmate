@@ -258,7 +258,9 @@ test_only_t3_workers_are_labelled() {
   : > "$T3_FAKE_LOG"
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
   assert_absent "$HOME_DIR/state/t3-captain-wait" "another backend records nothing"
-  assert_equals "" "$(cat "$T3_FAKE_LOG")" "another backend makes no T3 call"
+  # The hold's decision-thread sync (bin/fm-t3-needs-me.sh) may still open a
+  # session; no thread of a worker on another backend is read or changed.
+  assert_equals "" "$(t3_fake_calls t3_thread_read)$(t3_fake_mutations)" "another backend makes no T3 thread call"
   make_home secondmate
   worker_meta w1 secondmate
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"

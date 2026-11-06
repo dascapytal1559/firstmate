@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="454" viewBox="0 0 960 454" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="454" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">Where a captain call's decision thread sits, as FirstMate's records change</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Illustration. The sync reads only the backlog, the call's context record, and its own records.</text>
+
+  <g font-size="14" fill="#1f2328">
+    <rect x="24" y="84" width="912" height="48" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="44" y="113" font-weight="600" fill="#9a6700">Top of the sidebar</text>
+    <text x="250" y="113">hold, then context: the question, options and the words as sent</text>
+    <text x="916" y="113" text-anchor="end" fill="#57606a">needs him now</text>
+
+    <rect x="24" y="142" width="912" height="48" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="44" y="171" font-weight="600" fill="#9a6700">Unread, age resets</text>
+    <text x="250" y="171">context --changed: an update entry with what changed</text>
+    <text x="916" y="171" text-anchor="end" fill="#57606a">a new decision may be needed</text>
+
+    <rect x="24" y="200" width="912" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="44" y="229" font-weight="600" fill="#57606a">Snoozed</text>
+    <text x="250" y="229">"Later": hold --until a date</text>
+    <text x="916" y="229" text-anchor="end" fill="#57606a">wakes on that date</text>
+
+    <rect x="24" y="258" width="912" height="48" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="44" y="287" font-weight="600" fill="#0969da">Settled</text>
+    <text x="250" y="287">he replies in the thread; FirstMate records his words with answer</text>
+    <text x="916" y="287" text-anchor="end" fill="#57606a">reply open? back on top</text>
+
+    <rect x="24" y="316" width="912" height="48" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="44" y="345" font-weight="600" fill="#57606a">Archived</text>
+    <text x="250" y="345">a day after the answered call settled</text>
+    <text x="916" y="345" text-anchor="end" fill="#57606a">gone from the sidebar</text>
+  </g>
+  <text x="24" y="398" font-size="14" fill="#57606a">A settle, snooze or archive he makes himself stands until FirstMate's records for that call change.</text>
+  <text x="24" y="422" font-size="14" fill="#57606a">A failed call or a T3 restart is caught by the next pass, about a minute later.</text>
+</svg>

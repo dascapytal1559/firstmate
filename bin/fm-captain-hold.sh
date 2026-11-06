@@ -22,6 +22,9 @@
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#   fm-captain-hold.sh context <task-id> --text-file <path> [--changed <one line>] \
+#     [--question <text>] [--option <label> [--detail <text>]]... \
+#     [--attach report|picture|link|file=<path-or-url> [--label <text>]]...
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
@@ -57,6 +60,28 @@
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card. A live T3 worker's card shows the hold (bin/fm-t3-captain-label.sh),
 # and every hold, answer, and reconcile close brings that card up to date.
+# The same commands, and `context`, also run bin/fm-t3-needs-me.sh sync, which
+# keeps the captain's T3 decision threads in line with his open calls.
+#
+# `context` records what Firstmate told the captain about an open captain call,
+# in data/needs-me/<task-id>.json, the only writer of that record (schema
+# fm-needs-me-context.v1). Without --changed it is the raise: the message
+# section exactly as sent (--text-file, at most 8192 bytes), the question, and
+# its options, each with an optional --detail. With --changed it appends an
+# update entry carrying that one-line "what changed" and the new message text,
+# and a --question or any --option given replaces the current one. Every write
+# bumps `revision`; an exact retry of the raise or of the newest update changes
+# nothing, and a second, different raise is refused. --attach names a report,
+# picture, or file (a path, absolute or under the home, that must exist) or a
+# link, with an optional --label; pictures travel by path, never inline. The
+# record belongs to one hold: it carries the task's hold-set stamp, so a task
+# released and held again starts a new record (its revision still counting
+# up). The record keeps the raise and the newest updates, at most
+# NEEDS_ME_ENTRY_MAX entries. Only an open captain call takes a context. Every
+# field must fit T3's decision bounds, so a record never fails at its thread:
+# a question of at most 4000 characters, at most 12 options (label 200,
+# detail 2000), a what-changed line of 500, and at most 12 attachments
+# (path 2048, label 200).
 #
 # `answer` records the captain's exact words and resolves the call in the same
 # act. It requires a non-empty captain decision file of at most 8192 bytes and
@@ -266,6 +291,7 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
 }
 
 CAPTAIN_LABEL_SYNC=0
+NEEDS_ME_SYNC=0
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
@@ -280,9 +306,11 @@ captain_hold_cleanup() {
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
   fm_afk_contract_lock_release || true
-  # After the locks: a T3 crew card follows the hold (the script's header owns
-  # how), and a slow or failed label never changes this command's result.
+  # After the locks: a T3 crew card and the captain's decision threads follow
+  # the hold (the script's header owns how), and a slow or failed sync never
+  # changes this command's result.
   [ "$CAPTAIN_LABEL_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-captain-label.sh" sync >&2 || true
+  [ "$CAPTAIN_LABEL_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
 }
 trap captain_hold_cleanup EXIT
 
@@ -2268,8 +2296,148 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   exit 2
 }
 
+# The context record of one captain call (data/needs-me/<task-id>.json): what
+# Firstmate said when it raised the call and each later update, so T3's
+# decision thread can show the original words. The header owns the contract.
+NEEDS_ME_ENTRY_MAX=12
+# T3's bounds on a decision (the T3 Code fork's threadDecision.ts), checked
+# here so a recorded context always fits its thread.
+context_fits() {  # <label> <value> <max-characters>
+  [ "${#2}" -le "$3" ] || fail "$1 exceeds $3 characters"
+}
+command_context() {  # <task-id> --text-file <path> [...]
+  local id=${1:-} text_file='' question='' changed='' have_question=0 text show body hold_set dir record tmp now
+  local options='[]' attachments='[]' last_kind='' path
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --text-file) shift; text_file=${1:-} ;;
+      --question) shift; question=${1:-}; have_question=1; validate_one_line question "$question"; context_fits question "$question" 4000 ;;
+      --option)
+        shift
+        validate_one_line option "${1:-}"; context_fits option "$1" 200
+        options=$(jq -c --arg l "$1" '. + [{label:$l, detail:null}]' <<< "$options")
+        last_kind=option
+        ;;
+      --detail)
+        shift
+        [ "$last_kind" = option ] || fail "--detail follows the --option it describes"
+        validate_one_line detail "${1:-}"; context_fits detail "$1" 2000
+        options=$(jq -c --arg d "$1" '.[-1].detail = $d' <<< "$options")
+        ;;
+      --attach)
+        shift
+        case "${1:-}" in
+          report=?*|picture=?*|link=?*|file=?*) ;;
+          *) fail "--attach takes report|picture|link|file=<path or URL>: ${1:-}" ;;
+        esac
+        validate_one_line attachment "$1"; context_fits "attachment path" "${1#*=}" 2048
+        attachments=$(jq -c --arg k "${1%%=*}" --arg p "${1#*=}" '. + [{kind:$k, path:$p, label:null}]' <<< "$attachments")
+        last_kind=attach
+        ;;
+      --label)
+        shift
+        [ "$last_kind" = attach ] || fail "--label follows the --attach it names"
+        validate_one_line label "${1:-}"; context_fits label "$1" 200
+        attachments=$(jq -c --arg l "$1" '.[-1].label = $l' <<< "$attachments")
+        ;;
+      --changed) shift; changed=${1:-}; validate_one_line changed "$changed"; context_fits changed "$changed" 500 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  command -v jq >/dev/null 2>&1 || fail "jq is required to write a context record"
+  [ "$(jq length <<< "$options")" -le 12 ] || fail "at most 12 options"
+  [ "$(jq length <<< "$attachments")" -le 12 ] || fail "at most 12 attachments"
+  [ -n "$text_file" ] || fail "--text-file is required: the message text exactly as sent"
+  [ -f "$text_file" ] || fail "text file does not exist: $text_file"
+  text=$(cat "$text_file")
+  [ -n "$text" ] || fail "text file must not be empty"
+  [ "$(printf '%s' "$text" | LC_ALL=C wc -c | tr -d ' ')" -le 8192 ] || fail "text file exceeds 8192 bytes"
+  while IFS= read -r path; do
+    case "$path" in
+      '') ;;
+      /*) [ -e "$path" ] || fail "attachment does not exist: $path" ;;
+      *) [ -e "$FM_HOME/$path" ] || fail "attachment does not exist under the home: $path" ;;
+    esac
+  done <<< "$(jq -r '.[] | select(.kind != "link") | .path' <<< "$attachments")"
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  task_show_or_fail "$id" "task $id does not exist"
+  if [ "$(show_field "$show" state)" = "done" ] || [ "$(show_field_value "$show" hold_kind)" != captain ]; then
+    fail "task $id is not an open captain call; hold it first"
+  fi
+  body=$(show_field_value "$show" body)
+  hold_set=$(body_hold_set_timestamp "$body")
+  dir="$DATA/needs-me"
+  record="$dir/$id.json"
+  mkdir -p "$dir" || fail "could not create $dir"
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  tmp=$(mktemp "$dir/.$id.XXXXXX") || fail "could not stage the context record"
+  # A record from an earlier hold of the same task is another call: it is
+  # replaced, keeping only its revision count so T3 never sees one go back.
+  if ! jq -n --arg id "$id" --arg holdSet "$hold_set" --arg now "$now" --rawfile text "$text_file" \
+      --arg question "$question" --argjson haveQuestion "$have_question" --arg changed "$changed" \
+      --argjson options "$options" --argjson attachments "$attachments" --argjson max "$NEEDS_ME_ENTRY_MAX" \
+      --slurpfile old <(if [ -f "$record" ]; then cat "$record"; else printf 'null'; fi) '
+    ($old[0]) as $prev
+    | (if $prev != null and $prev.holdSet == $holdSet then $prev else null end) as $cur
+    | ($text | sub("\n$"; "")) as $text
+    | ({at:$now, kind:(if $changed == "" then "raised" else "update" end)}
+       + (if $changed == "" then {} else {changed:$changed} end)
+       + {text:$text, attachments:$attachments}) as $entry
+    | if $changed == "" then
+        if $cur != null and any($cur.entries[]; .kind == "raised") then
+          (first($cur.entries[] | select(.kind == "raised"))) as $raised
+          | if $raised.text == $text and $cur.question == (if $haveQuestion == 1 then $question else $cur.question end)
+               and ($options == [] or $cur.options == $options)
+            then {unchanged:true, record:$cur}
+            else error("already raised; record what changed with --changed")
+            end
+        else
+          {record:{schema:"fm-needs-me-context.v1", taskId:$id, holdSet:$holdSet,
+             question:(if $haveQuestion == 1 then $question else ($cur.question // null) end),
+             options:(if $options != [] then $options else ($cur.options // []) end),
+             entries:([$entry] + (($cur.entries // []) | map(select(.kind == "update")))),
+             revision:((($cur // $prev).revision // 0) + 1)}}
+        end
+      else
+        ($cur // {schema:"fm-needs-me-context.v1", taskId:$id, holdSet:$holdSet, question:null, options:[], entries:[],
+                  revision:(($prev.revision // 0))}) as $base
+        | if ($base.entries | length) > 0 and ($base.entries[-1] | .kind == "update" and .changed == $changed and .text == $text)
+          then {unchanged:true, record:$base}
+          else ($base.entries + [$entry]) as $all
+            | ([$all[] | select(.kind == "raised")][:1]) as $raised
+            | {record:($base
+                + {question:(if $haveQuestion == 1 then $question else $base.question end),
+                   options:(if $options != [] then $options else $base.options end),
+                   entries:($raised + ([$all[] | select(.kind == "update")] | .[-($max - ($raised | length)):])),
+                   revision:($base.revision + 1)})}
+          end
+      end
+  ' > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "could not record the context of $id"
+  fi
+  if jq -e '.unchanged == true' "$tmp" >/dev/null; then
+    rm -f -- "$tmp"
+    printf '%s\n' "$record"
+    return 0
+  fi
+  if ! { jq '.record' "$tmp" > "$tmp.json" && mv -f -- "$tmp.json" "$record"; }; then
+    rm -f -- "$tmp" "$tmp.json"
+    fail "could not write $record"
+  fi
+  rm -f -- "$tmp"
+  NEEDS_ME_SYNC=1
+  printf '%s\n' "$record"
+}
+
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
+  context) shift; command_context "$@" ;;
   answer) shift; CAPTAIN_LABEL_SYNC=1; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;

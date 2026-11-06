@@ -225,6 +225,41 @@ It works from the thread's live label and a record of each labelled worker, so a
 A T3 without the status label shows neither word, and holds and cleanup carry on as usual.
 Its records stay, so the card catches up on the first pass after T3 is updated.
 
+### Decision threads
+
+Each open captain call is its own thread at the top of the captain's sidebar, beside FirstMate, in FirstMate's project: the top level is what needs him, and FirstMate's workers sit one level down.
+A decision thread has no agent and no turn.
+It carries the call's question, its options, and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
+A call with no recorded context still appears, with its hold reason as the question.
+
+[`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
+
+- a live call is an active thread;
+- a call deferred with `--until` is snoozed until 00:00 UTC on that date;
+- a blocked call, or one waiting longer than the aging threshold, sits in Settled;
+- an answered or released call is settled, then archived a day later;
+- an update marks the thread unread.
+
+A settle, snooze, or archive the captain makes himself stands until FirstMate's records for that call change, and replying settles the thread at once.
+FirstMate's thread is the project's pinned coordinator, else the live thread at the home's root; with neither, nothing is made.
+Only a main home takes part, because a secondmate's calls reach the captain through its parent.
+A T3 without decision threads gets none, and holds carry on as usual.
+
+The T3 Code fork's `fork/README.md` "Decision threads" owns the T3 side: the payload schema and its bounds, the reply message, and the stale-reply guard.
+What FirstMate sends and relies on:
+
+- Create: `t3_thread_launch` with `projectId`, `title`, `decisionOf` (FirstMate's thread id), `decision`, and `clientRequestId`, and no `message` or workspace strategy; a retry with the same request id answers with the thread already made.
+  The thread must read back with that `decisionOf`, the payload's `revision`, and no run.
+- Payload: FirstMate always sends its own `revision`, which T3 stores as given: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision.
+  `detail`, `changed`, and `label` are left out when absent, and an attachment's path is absolute, or a URL for a link.
+  Entries are oldest first, at most 12, each text at most 8192 bytes; `bin/fm-captain-hold.sh context` checks every other field against the fork's bounds when it records it.
+  FirstMate sends no `message` reference yet, because it cannot know the message id of what it is saying.
+- Update: `t3_thread_update` `set_decision` replaces the payload and must answer with `decisionRevision`; FirstMate retires a decision by settling or archiving it, never with `clear_decision`.
+- Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil`, `unsnooze`, `mark_unread`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
+- Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
+
+When `bin/fm-t3-needs-me.sh status` says the threads match the records, Captain's Call in chat gives their count and names only new or changed decisions (`AGENTS.md` section 9).
+
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
@@ -373,7 +408,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-captain-label.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-captain-label.test.sh tests/fm-t3-needs-me.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 bin/fm-test-run.sh tests/fm-t3-clear-session.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh

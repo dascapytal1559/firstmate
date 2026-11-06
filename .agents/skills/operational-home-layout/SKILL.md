@@ -84,6 +84,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  needs-me/<id>.json the words Firstmate raised and updated a captain call with, for its T3 decision thread; written only by bin/fm-captain-hold.sh context, which owns the schema
   <id>/status.log <id>/status.<N>.log <id>/children/<child>/...  optional teardown archives; see docs/architecture.md "Task status archives"
   pipeline-spend.jsonl  optional per-task no-mistakes pipeline spend, written only when config/pipeline-spend is present; bin/fm-pipeline-spend.sh owns the schema
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
@@ -133,6 +134,8 @@ state/               runtime records and signals; gitignored
   pr-health.json     the health monitor's fm-pr-health.v1 record: per-PR fingerprints of the conditions already reported, the task branch-to-PR lookup cache, and the GitHub notifications cursor, replaced by rename under .pr-health.lock; bin/fm-pr-health.sh owns the format
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   t3-captain-wait/   live T3 workers whose card may show a status label; bin/fm-t3-captain-label.sh owns it
+  t3-needs-me/       each captain call's T3 decision thread, the hash of the state last proven on it, the FirstMate thread they belong to, and the in-sync mark; bin/fm-t3-needs-me.sh owns it
+  needs-me-mentioned/ the revision of each waiting decision Firstmate last named in chat; bin/fm-t3-needs-me.sh mentioned writes it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

@@ -71,6 +71,21 @@
 //     read back as statusLabel, answering with the label left (world
 //     statusLabelAnswers answers another one); without it those actions are
 //     unknown.
+//   - a T3 with decision threads (world decisions, the T3 Code fork) declares
+//     t3_thread_launch's decisionOf and decision and t3_thread_update's
+//     decision: a launch with decisionOf makes an idle, agent-less thread
+//     carrying both (refusing one without the other, a message, or a
+//     payload outside the fork's bounds, including a revision that is not a
+//     positive integer; an omitted revision is 1, or the stored one plus one),
+//     t3_thread_update set_decision and clear_decision replace or drop the
+//     payload, answering with decisionRevision, and t3_thread_read reports
+//     decisionOf, decision, and unread (a fake-only field tests read); world
+//     decisionStartsRun makes such a launch start a turn, as a broken peer.
+//   - t3_thread_launch answers a repeated clientRequestId with the thread it
+//     already made; t3_thread_organize settle, unsettle, snooze (with
+//     snoozedUntil), unsnooze, mark_unread, mark_read, and unarchive change
+//     what t3_thread_read reports as settled, settledAt, snoozed, and
+//     snoozedUntil.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -134,7 +149,8 @@ const TOOL_SCHEMAS = {
   t3_thread_launch: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
-      "environment", "instructions", "message", ...(w.crewLineage ? ["parentThreadId"] : [])].map((k) => [k, {}])),
+      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
+      ...(w.decisions ? ["decisionOf", "decision"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -151,7 +167,8 @@ const TOOL_SCHEMAS = {
   }),
   t3_thread_update: (w) => ({
     type: "object",
-    properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []), "clientRequestId"].map((k) => [k, {}])),
+    properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []),
+      ...(w.decisions ? ["decision"] : []), "clientRequestId"].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -300,6 +317,27 @@ function settle(w) {
 
 const notFound = (id) => err("thread_not_found", `Thread ${id} is no longer available.`);
 
+// The fork's ThreadDecisionInput (packages/contracts/src/threadDecision.ts):
+// bounded, trimmed non-empty text, and a revision that is a positive integer
+// when given. Returns the first problem, or null.
+function decisionProblem(d) {
+  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.length <= max;
+  const optionalText = (v, max) => v === undefined || text(v, max);
+  if (!d || typeof d !== "object") return "decision must be an object";
+  if (!text(d.taskId, 200) || !text(d.title, 200) || !text(d.question, 4000)) return "taskId, title and question must be bounded non-empty text";
+  if (d.revision !== undefined && !(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
+  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
+  for (const o of d.options) if (!text(o.label, 200) || !optionalText(o.detail, 2000)) return "an option needs a bounded label and detail";
+  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
+  for (const e of d.entries) {
+    if (!Number.isFinite(Date.parse(e.at))) return `entry time ${e.at} is not a date`;
+    if (!["raised", "update"].includes(e.kind) || !text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs a kind and bounded text";
+    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
+    for (const x of e.attachments ?? []) if (!text(x.kind, 32) || !text(x.path, 2048) || !optionalText(x.label, 200)) return "an attachment needs a bounded kind and path";
+  }
+  return null;
+}
+
 function listItem(x) {
   return {
     threadId: x.threadId, title: x.title, status: x.status, latestRunId: x.latestRunId ?? null,
@@ -351,6 +389,28 @@ async function callTool(w, name, a) {
       return [ok(p), true];
     }
     case "t3_thread_launch": {
+      w.launchRequests = w.launchRequests ?? {};
+      if (a.clientRequestId && w.launchRequests[a.clientRequestId]) return [ok(w.launchRequests[a.clientRequestId]), false];
+      if (w.decisions && (a.decisionOf !== undefined || a.decision !== undefined)) {
+        // The fork's agent-less decision thread: no session, no turn.
+        if (a.decisionOf === undefined || a.decision === undefined) return [err("invalid_request", "Pass decisionOf and decision together."), false];
+        if (a.message !== undefined || a.parentThreadId !== undefined || (a.workspaceStrategy && a.workspaceStrategy.type !== "root")) {
+          return [err("invalid_request", "A decision thread has no agent: omit message, attachments, scratch, parentThreadId and workspaceStrategy."), false];
+        }
+        const problem = decisionProblem(a.decision);
+        if (problem) return [err("invalid_params", problem), false];
+        if (!threads[a.decisionOf]) return [notFound(a.decisionOf), false];
+        const id = `mcp:${randomUUID()}`;
+        threads[id] = {
+          threadId: id, projectId: a.projectId, title: a.title, status: "idle", latestRunId: null, activeRunId: null,
+          parentThreadId: null, relationshipToParent: null, pendingRequestCount: 0, archived: false, items: [], runs: [],
+          decisionOf: a.decisionOf, decision: { ...a.decision, revision: a.decision.revision ?? 1 }, settled: false, settledAt: null, snoozed: false, snoozedUntil: null, unread: true,
+        };
+        if (w.decisionStartsRun) startRun(threads[id], a.title);
+        const out = { threadId: id, projectId: a.projectId, runId: threads[id].activeRunId, status: null };
+        if (a.clientRequestId) w.launchRequests[a.clientRequestId] = out;
+        return [ok(out), true];
+      }
       const parent = w.crewLineage ? a.parentThreadId : undefined;
       if (parent !== undefined && !threads[parent]) return [notFound(parent), false];
       const ws = a.workspaceStrategy ?? {};
@@ -402,7 +462,10 @@ async function callTool(w, name, a) {
       // T3 pages forward from afterPosition (exclusive), oldest first.
       const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1));
       const items = matching.slice(0, a.limit ?? 50);
-      const thread = { ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}) };
+      const thread = {
+        ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}),
+        settled: t.settled === true, settledAt: t.settledAt ?? null, snoozed: t.snoozed === true, snoozedUntil: t.snoozedUntil ?? null,
+      };
       return [ok({ thread, recentRuns: byOrdinal(t).slice(0, a.runLimit ?? 5), items, nextPosition: items.at(-1)?.position ?? null, hasMore: matching.length > items.length }), false];
     }
     case "t3_thread_list": {
@@ -471,6 +534,19 @@ async function callTool(w, name, a) {
     }
     case "t3_thread_organize": {
       if (!t) return [notFound(a.threadId), false];
+      const at = now();
+      switch (a.action) {
+        case "settle": t.settled = true; t.settledAt = at; t.snoozed = false; t.snoozedUntil = null; break;
+        case "unsettle": t.settled = false; t.settledAt = null; break;
+        case "snooze":
+          if (!a.snoozedUntil) return [err("invalid_request", "snooze needs snoozedUntil"), false];
+          t.snoozed = true; t.snoozedUntil = a.snoozedUntil; t.settled = false; t.settledAt = null; break;
+        case "unsnooze": t.snoozed = false; t.snoozedUntil = null; break;
+        case "mark_unread": t.unread = true; break;
+        case "mark_read": t.unread = false; break;
+        case "unarchive": t.archived = false; break;
+        default: break;
+      }
       if (a.action === "archive") {
         t.archived = true;
         const run = latestActiveRun(t);
@@ -490,6 +566,17 @@ async function callTool(w, name, a) {
         else delete t.statusLabel;
         const label = w.statusLabelAnswers ?? t.statusLabel;
         return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(label === undefined ? {} : { statusLabel: label }) }), true];
+      }
+      if (w.decisions && (a.action === "set_decision" || a.action === "clear_decision")) {
+        if (t.decisionOf === undefined) return [err("invalid_request", "not a decision thread"), false];
+        if (a.action === "set_decision") {
+          if (!a.decision) return [err("invalid_request", "set_decision needs decision"), false];
+          const problem = decisionProblem(a.decision);
+          if (problem) return [err("invalid_params", problem), false];
+          t.decision = { ...a.decision, revision: a.decision.revision ?? (t.decision?.revision ?? 0) + 1 };
+          t.title = a.decision.title;
+        } else t.decision = null;
+        return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(t.decision ? { decisionRevision: t.decision.revision } : {}) }), true];
       }
       if (a.action !== "rename") return [err("invalid_action", `unknown action ${a.action}`), false];
       t.title = a.title;

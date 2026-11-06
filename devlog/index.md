@@ -579,3 +579,31 @@ The choices made:
   The parts about `Context refreshed.` and the button's `/stow` backed nothing any more.
 - **One thing to keep in the T3 Code fork.**
   Its Claude adapter waits for the old process to exit before the new session opens; upstream does not, and without that wait the new FirstMate session can come up read-only.
+
+## 23. Decisions as their own threads, FirstMate's half (6 November 2026)
+
+![A captain call's decision thread: on top of the sidebar once held, unread with its age reset after an update, snoozed for Later, settled when he replies, and archived a day after the call is answered](media/decision-thread-lifecycle.svg)
+
+The ask:
+
+> show the needs me um items with all of its original context in T3 code ... in a running chat sometimes it gets lost, like what needs me, and when I get reminded of what needs me, I'm often only shown the the summary snippet, but not the original context that it came with it.
+
+> it's also yeah a place that first mate can always check like what still needs me um and it doesn't have to mention it again. It can just sort of check if all of that is still up to date. If it is, assume the captain's looking at it.
+
+Of the mocked-up directions he chose the one where each decision is its own thread:
+
+> everything at the top level needs my attention. Everything one layer deep, such as like the first mates workers, they don't need my attention.
+
+The T3 Code fork draws the threads; this is FirstMate's half, which keeps them true:
+
+- **The original words are kept.** Before FirstMate raises a call in chat it saves the same text, the question, the options, and any report or picture with `bin/fm-captain-hold.sh context`. Telling him something new about a call adds an update with a one-line "what changed".
+- **A level-triggered sync**, `bin/fm-t3-needs-me.sh`, runs after every hold, answer, and context, and once a minute from the watcher. It reads only structured records and gives each open call one thread: on top while it is live, snoozed until its date for Later, settled when answered, then archived a day later. An update marks the thread unread, so its age goes back to the time of the update.
+- **His reply is an ordinary message.** T3 sends it into FirstMate's chat with a `needs-me-task:` line naming the call, and FirstMate records his words exactly as for any answer.
+- **Chat stops repeating.** While the threads match the records, Captain's Call gives the count and names only decisions that are new or changed since FirstMate last named them.
+
+The choices made:
+
+- **His own moves stand.** If he settles, snoozes, or archives a decision thread himself (replying settles it), the sync leaves it so until FirstMate's records for that call change. A reply that leaves the call open gets an update, which brings it back to the top.
+- **Long-waiting and blocked calls go to Settled, not the top.** Bearings already keeps those out of Captain's Call; they stay findable and come back up when they turn live again.
+- **One T3 call per pass.** The whole pass runs in one session, and creating a thread is retried under the same request id, so a lost reply never makes a second thread.
+- **Secondmate homes make none.** Their calls already reach him through the main FirstMate.
