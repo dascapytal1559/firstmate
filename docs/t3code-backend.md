@@ -227,7 +227,7 @@ Its records stay, so the card catches up on the first pass after T3 is updated.
 
 ### Decision threads
 
-Each open captain call is its own thread at the top of the captain's sidebar, beside FirstMate, in FirstMate's project: the top level is what needs him, and FirstMate's workers sit one level down.
+Each open captain call is its own thread in FirstMate's project, listed in the captain's sidebar under the FirstMate card after its workers, reading Needs captain.
 A decision thread has no agent and no turn.
 It carries the call's question, its options, and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
 A call with no recorded context still appears, with its hold reason as the question.

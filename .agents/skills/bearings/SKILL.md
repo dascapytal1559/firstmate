@@ -153,7 +153,7 @@ After them, every response renders EXACTLY these four sections, in THIS order, a
 
 1. **Captain's Call** - ONLY unsuppressed items that need the captain's own action now: a decision to make, a PR to approve or merge, a credential or login to provide, or a blocker only the captain can clear.
    Deferred or aged holds follow the presentation safety rule above instead.
-   When `bin/fm-t3-needs-me.sh status` prints `in_sync: yes`, the captain's decisions already stand at the top of his T3 sidebar with their full context, so say how many are waiting there and name only the ones it lists as new or changed, then record them with `bin/fm-t3-needs-me.sh mentioned <task-id>...`; otherwise summarize every decision as below.
+   When `bin/fm-t3-needs-me.sh status` prints `in_sync: yes`, the captain's decisions already show in his T3 sidebar with their full context, so say how many are waiting there and name only the ones it lists as new or changed, then record them with `bin/fm-t3-needs-me.sh mentioned <task-id>...`; otherwise summarize every decision as below.
    Include `contributions.captain` rows in this section, deduplicating any row already represented by its live captain hold or merge call.
    Show the other contribution actors only as counts beside the checked/known coverage, and disclose `captain_omitted`, `unmeasured_homes`, stale verdicts and checks with no verdict when nonzero.
    Empty-state: "Nothing needs your action right now" is allowed only when `contributions.proven_clear` is true and the existing decision set is empty.

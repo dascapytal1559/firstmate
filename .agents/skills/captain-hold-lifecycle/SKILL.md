@@ -26,7 +26,7 @@ Write the ask once and say it twice: before raising a held call in chat, record 
 When you tell the captain something new about a held call, record it with `context <id> --changed "<one line>"` in the same turn.
 That record is the original context the captain's T3 decision thread shows; without it the thread falls back to the hold reason.
 A captain message carrying a `needs-me-task: <task-id>` line is his reply from that decision thread (`bin/fm-t3-needs-me.sh reply-task` reads the id): it is his answer to that task, recorded with `answer <id> --decision-file` in his words, or `hold <id> --until <date>` for Later, exactly as any chat answer, through no other channel.
-When such a reply leaves the call open, record what changed with `context --changed` so the call returns to the top of his sidebar instead of staying settled.
+When such a reply leaves the call open, record what changed with `context --changed` so the call shows as unsettled in his sidebar again instead of staying settled.
 After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
 A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
 For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.

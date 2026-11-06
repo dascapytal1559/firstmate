@@ -2,9 +2,9 @@
 # fm-t3-needs-me.sh - keep the captain's T3 decision threads in line with his
 # open captain calls (docs/t3code-backend.md "Decision threads").
 #
-# Each captain-held task gets one agent-less T3 thread beside FirstMate's own,
+# Each captain-held task gets one agent-less T3 thread under FirstMate's own,
 # carrying the call's question, options, and the words Firstmate raised and
-# updated it with, so the top of the captain's sidebar is what needs him. The
+# updated it with, so the captain's sidebar shows what needs him. The
 # wanted state comes from structured records only: the backlog's captain holds
 # and their hold_bucket (bin/fm-fleet-snapshot.sh), the call's context record
 # (data/needs-me/<task-id>.json, written only by bin/fm-captain-hold.sh
@@ -16,7 +16,7 @@
 #     context, and bin/fm-watch.sh about once a minute. One pass, one T3 call.
 #   fm-t3-needs-me.sh status
 #     Read-only, no T3 call: whether the last pass matched the records, how
-#     many decisions wait at the top of the sidebar, and which of them are new
+#     many decisions wait in the sidebar, and which of them are new
 #     or changed since `mentioned` last recorded them. Prints
 #       in_sync: yes|no
 #       waiting: <n>
