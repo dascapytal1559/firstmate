@@ -17,8 +17,9 @@
 #     context, and bin/fm-watch.sh about once a minute. One pass, one T3 call.
 #   fm-t3-needs-me.sh status
 #     Read-only, no T3 call: whether the last pass matched the records, how
-#     many decisions wait in the sidebar, and which of them are new
-#     or changed since `mentioned` last recorded them. Prints
+#     many decisions wait under FirstMate's card (a snoozed one, dated or on
+#     the Snoozed shelf, is not counted), and which of them are new or changed
+#     since `mentioned` last recorded them. Prints
 #       in_sync: yes|no
 #       waiting: <n>
 #     then one TAB-separated line per waiting decision not yet mentioned at
