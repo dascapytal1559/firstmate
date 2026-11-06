@@ -32,8 +32,10 @@
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
 #     message names none, 2 when it names more than one or a malformed id.
 #
-# Wanted state, per task: a live or aged hold is an active thread (top level; a
-# call that has waited long still waits on him); a dated hold (--until) is
+# Wanted state, per task: a live or aged hold is an active thread (under
+# FirstMate's card) for a day after it was raised or last updated, then snoozed
+# with no date (the Snoozed shelf) until an update brings it back for another
+# day; a context rewrite without --changed is not an update; a dated hold (--until) is
 # snoozed until 00:00 UTC on that date, when the snapshot's bucket turns live; a
 # blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
 # that closed or was released is settled, then archived a day after that
@@ -79,6 +81,7 @@ SYNCS="$STATE/t3-needs-me"
 MENTIONED="$STATE/needs-me-mentioned"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 ARCHIVE_AFTER=86400
+SHELVE_AFTER=86400
 BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
 
@@ -152,7 +155,7 @@ plan() {
   slurp_dir "$CONTEXTS" > "$WORK/contexts.json" || return 1
   slurp_dir "$SYNCS" > "$WORK/locals.json" || return 1
   jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" \
-    --slurpfile loc "$WORK/locals.json" --arg home "$FM_HOME" --argjson now "$NOW" --argjson archiveAfter "$ARCHIVE_AFTER" '
+    --slurpfile loc "$WORK/locals.json" --arg home "$FM_HOME" --argjson now "$NOW" --argjson archiveAfter "$ARCHIVE_AFTER" --argjson shelveAfter "$SHELVE_AFTER" '
     def iso: if . == null then null elif test("T") then . else . + "T00:00:00Z" end;
     def abs: if .kind == "link" or (.path | startswith("/")) then . else .path = ($home + "/" + .path) end;
     def entry: {at, kind} + (if .changed then {changed} else {} end) + {text}
@@ -167,9 +170,12 @@ plan() {
          | ($locs[$r.id]) as $l
          | (if $c != null and ($c.entries | length) > 0 then $c.entries else
               [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | (if $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
+         | ([($r.hold_set // $r.since | iso), ($entries[] | select(.kind == "update") | .at)]
+            | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $fresh
+         | (($r.hold_bucket == "live" or $r.hold_bucket == "aged") and $fresh != null and ($now - $fresh) >= $shelveAfter) as $shelved
+         | (if $shelved then "snoozed" elif $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
          | {taskId: $r.id, title: ($r.title[:200]), phase: $phase,
-            snoozedUntil: (if $phase == "snoozed" then ($r.hold_until | iso) else null end),
+            snoozedUntil: (if $phase == "snoozed" and ($shelved | not) then ($r.hold_until | iso) else null end),
             holdSet: ($r.hold_set // ""),
             decision: ({taskId: $r.id, title: ($r.title[:200])}
               + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)

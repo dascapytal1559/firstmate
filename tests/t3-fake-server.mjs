@@ -539,8 +539,8 @@ async function callTool(w, name, a) {
         case "settle": t.settled = true; t.settledAt = at; t.snoozed = false; t.snoozedUntil = null; break;
         case "unsettle": t.settled = false; t.settledAt = null; break;
         case "snooze":
-          if (!a.snoozedUntil) return [err("invalid_request", "snooze needs snoozedUntil"), false];
-          t.snoozed = true; t.snoozedUntil = a.snoozedUntil; t.settled = false; t.settledAt = null; break;
+          // The T3 fork allows a snooze with no date (it waits until woken by hand).
+          t.snoozed = true; t.snoozedUntil = a.snoozedUntil ?? null; t.settled = false; t.settledAt = null; break;
         case "unsnooze": t.snoozed = false; t.snoozedUntil = null; break;
         case "mark_unread": t.unread = true; break;
         case "mark_read": t.unread = false; break;

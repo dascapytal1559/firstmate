@@ -2001,7 +2001,7 @@ async function decisionItem(session, parent, it, result) {
   }
   if (it.phase === "active" && t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
   if (it.phase === "snoozed" && !(t.snoozed === true && sameInstant(t.snoozedUntil, it.snoozedUntil))) {
-    result.changed.push(await organize(session, id, "snooze", { snoozedUntil: it.snoozedUntil }));
+    result.changed.push(await organize(session, id, "snooze", it.snoozedUntil ? { snoozedUntil: it.snoozedUntil } : {}));
   }
   if (it.phase === "parked" || it.phase === "closed") {
     if (t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));

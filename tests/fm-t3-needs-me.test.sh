@@ -369,6 +369,18 @@ test_aged_holds_stay_at_the_top() {
   pass "fm-t3-needs-me.sh: a call that has waited long stays an active top-level thread"
 }
 
+test_day_old_calls_move_to_the_snoozed_shelf() {
+  make_home shelve
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 3600 )) needs_me sync >/dev/null || fail "an hour later sync should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed === true')" "a call raised an hour ago stays under FirstMate"
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me sync >/dev/null || fail "a day later sync should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed')" "a call raised over a day ago is snoozed"
+  assert_equals "true" "$(decision w1 't.snoozedUntil == null')" "with no date"
+  assert_contains "$(FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me status)" "waiting: 0" "and no longer counts as waiting under FirstMate"
+  pass "fm-t3-needs-me.sh: a call older than a day moves to the Snoozed shelf with no date"
+}
+
 test_status_and_mentioned() {
   make_home status
   captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
@@ -433,6 +445,7 @@ test_lost_launch_reply_makes_no_duplicate
 test_a_decision_with_a_turn_is_never_kept
 test_parked_holds_sit_in_settled
 test_aged_holds_stay_at_the_top
+test_day_old_calls_move_to_the_snoozed_shelf
 test_status_and_mentioned
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part
