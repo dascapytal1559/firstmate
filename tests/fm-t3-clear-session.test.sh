@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# tests/fm-session-swap.test.sh - the session swap behind T3 Code's Refresh
-# context button (docs/t3code-backend.md "Refresh context").
+# tests/fm-t3-clear-session.test.sh - the session swap behind T3 Code's /clear
+# on the FirstMate thread (docs/t3code-backend.md "Fresh session with /clear").
 #
-# T3 keeps the FirstMate thread and replaces its agent session: the old session
-# runs one /stow turn, its Stop hook may fire, T3 ends the process with SIGTERM
-# about two seconds later without anything releasing the session lock, and a new
-# process starts on the same thread. These are real-process cases: a fake Claude
+# T3 keeps the FirstMate thread and replaces its agent session: the old session's
+# last turn ends, its Stop hook may fire, T3 ends the process with SIGTERM about
+# two seconds later without anything releasing the session lock, and a new process
+# starts on the same thread. These are real-process cases: a fake Claude
 # session runs the real SessionStart entry point, the real Stop hook, the real
 # supervision host or arm, and the real watcher, and it dies by a real SIGTERM.
 # Only the engine and the worker endpoint are stubs.
@@ -19,7 +19,7 @@ set -u
 # shellcheck source=tests/supervision-host-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/supervision-host-helpers.sh"
 
-THREAD='d72e06eb-0000-4c54-b48c-refreshthread'
+THREAD='d72e06eb-0000-4c54-b48c-clearthread00'
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 SWAP_NOTE='check: captain inbox note left during the swap'
 
@@ -122,7 +122,7 @@ run_in_session() {  # <home> <session-id> <shell command>
   wait_until 300 test -s "$dir/run.rc" || fail "session $2 never ran: $3"
 }
 
-# T3 ends the old session with SIGTERM once the stow turn ends, and nothing runs
+# T3 ends the old session with SIGTERM once its last turn ends, and nothing runs
 # in it to release the lock.
 sigterm_session() {  # <home> <session-id> <session-pid> <killed|orphaned>
   local home=$1 id=$2 pid=$3 hook_fate=$4 pgid
@@ -189,7 +189,7 @@ assert_took_the_helm() {  # <home> <session-id> <session-pid> <label>
 test_fresh_session_takes_the_lock_from_a_sigtermed_one() {
   local home old new
   home=$(make_swap_home swap-lock plain)
-  start_session "$home" sess-old /stow
+  start_session "$home" sess-old 'check the build'
   old=$SESSION_PID
   assert_took_the_helm "$home" sess-old "$old" "old session"
 
@@ -197,7 +197,7 @@ test_fresh_session_takes_the_lock_from_a_sigtermed_one() {
   [ "$(cat "$home/state/.lock")" = "$old" ] || fail "fixture: the dead session must leave its lock behind"
   [ "$(cat "$home/state/.lock-session")" = sess-old ] || fail "fixture: the dead session must leave its session record behind"
 
-  start_session "$home" sess-new 'Context refreshed.'
+  start_session "$home" sess-new 'what is next?'
   new=$SESSION_PID
   [ "$new" != "$old" ] || fail "fixture: the two sessions must be distinct processes"
   assert_took_the_helm "$home" sess-new "$new" "fresh session"
@@ -205,17 +205,17 @@ test_fresh_session_takes_the_lock_from_a_sigtermed_one() {
   pass "swap: the fresh session takes the lock a SIGTERMed session left and records the same thread"
 }
 
-# T3 waits for the old process to exit for this reason: a fresh session that
+# The T3 Code fork waits for the old process to exit for this reason: a fresh session that
 # starts beside a live holder comes up read-only and changes nothing.
 test_fresh_session_beside_a_live_holder_stays_read_only() {
   local home old new digest
   home=$(make_swap_home swap-live-holder plain)
-  start_session "$home" sess-old /stow
+  start_session "$home" sess-old 'check the build'
   old=$SESSION_PID
   append_wake "$home/state" check swap-note "$SWAP_NOTE"
   printf 'earlier-thread\n' > "$home/state/t3-main-thread"
 
-  start_session "$home" sess-new 'Context refreshed.'
+  start_session "$home" sess-new 'what is next?'
   new=$SESSION_PID
   digest=$(cat "$(session_dir "$home" sess-new)/digest")
   assert_contains "$digest" 'READ-ONLY SESSION' "a session beside a live holder must come up read-only"
@@ -246,14 +246,14 @@ fire_dead_sessions_stop_hook() {  # <home> <session-id> <dead-session-pid>
 test_dead_sessions_stop_hook_changes_nothing() {
   local home old new
   home=$(make_swap_home swap-late-hook plain)
-  start_session "$home" sess-old /stow
+  start_session "$home" sess-old 'check the build'
   old=$SESSION_PID
   sigterm_session "$home" sess-old "$old" killed
 
   fire_dead_sessions_stop_hook "$home" sess-old "$old"
   [ "$(cat "$home/state/.lock")" = "$old" ] || fail "a Stop hook with no live session rewrote the lock"
 
-  start_session "$home" sess-new 'Context refreshed.'
+  start_session "$home" sess-new 'what is next?'
   new=$SESSION_PID
   assert_took_the_helm "$home" sess-new "$new" "after the late hook"
 
@@ -271,15 +271,15 @@ assert_supervision_survives_the_swap() {  # <host|plain> <killed|orphaned>
   old_dir=$(session_dir "$home" sess-old)
   new_dir=$(session_dir "$home" sess-new)
 
-  start_session "$home" sess-old /stow
+  start_session "$home" sess-old 'check the build'
   old=$SESSION_PID
   turn_ends "$home" sess-old
-  wait_until 300 watcher_live "$home" || fail "the stow turn's Stop hook never armed: $(cat "$old_dir/hook.err" 2>/dev/null)"
+  wait_until 300 watcher_live "$home" || fail "the last turn's Stop hook never armed: $(cat "$old_dir/hook.err" 2>/dev/null)"
 
   sigterm_session "$home" sess-old "$old" "$hook_fate"
   append_wake "$home/state" check swap-note "$SWAP_NOTE"
 
-  start_session "$home" sess-new 'Context refreshed.'
+  start_session "$home" sess-new 'what is next?'
   new=$SESSION_PID
   assert_took_the_helm "$home" sess-new "$new" "fresh session"
   digest=$(cat "$new_dir/digest")

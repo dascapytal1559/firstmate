@@ -2905,9 +2905,9 @@ Each of the four instances advertised both channels, so spawn sent the environme
 `FM_HOME` was unset in every worker shell, as expected for a ship or scout worker.
 The same catalog lists a short set of models per instance with an `omittedModels` count, and its `search` argument returns every model whose id or label contains the text; this is why resolve-selection searches for an exact slug, such as Codex `gpt-5.6-luna` or OpenCode `kimi-code/k3`, that the short list leaves out.
 
-### Refresh context swap on real Claude
+### Fresh session swap on real Claude
 
-Verified on 2026-11-05 with Claude Code 2.1.318, Claude Haiku 5.5 and Claude Opus 5.5, in a throwaway home built from the [Refresh context](../t3code-backend.md#refresh-context) change with no T3 credential.
+Verified on 2026-11-05 with Claude Code 2.1.318 and Claude Haiku 5.5, in a throwaway home with no T3 credential, for the process swap behind a [fresh session with `/clear`](../t3code-backend.md#fresh-session-with-clear).
 Each session was the real CLI on T3 Code's launch shape, sent one stream-json user message, with `T3CODE_THREAD_ID` set and the supervision host off, then signalled with SIGTERM two seconds after the turn ended:
 
 ```text
@@ -2915,7 +2915,7 @@ claude --output-format stream-json --verbose --input-format stream-json --model 
   --permission-mode bypassPermissions --setting-sources user,project,local
 ```
 
-Observed for the `/stow` session, then the next session, on Haiku (the next session's message here was a bare `ahoy`, sent before T3's opening text changed; the process facts do not depend on it):
+Observed for one session, then the next session, on Haiku:
 
 ```text
 08:22:40.862Z session 1 turn ended: success
@@ -2926,13 +2926,9 @@ Observed for the `/stow` session, then the next session, on Haiku (the next sess
 08:23:00.357Z at turn end: lock=40697, new session id, same thread id
 ```
 
-- The SessionStart hook fired for each fresh session, and `/stow` as a plain message ran the skill.
-- `Context refreshed.` as a session's first message ran no Bearings in all five sessions, four on Haiku and one on Opus, and each reply was one or two short sentences.
-- `/ahoy` straight after `Context refreshed.` in the same session took the Bearings fallback, naming itself the first real captain message.
-- With an undecided question earlier in the session, `/stow` asked nothing, filed a held task, and the next session's Bearings listed it under Captain's Call.
-
+The SessionStart hook fired for each fresh session.
 `T3CODE_THREAD_ID` was also read from a live T3 worker, where the session-lock anchor resolved to `CLAUDE_PID`, the `claude` process itself, and not to the T3 server above it.
-`tests/fm-session-swap.test.sh` is the portable regression for the swap; repeat this check after a Claude Code upgrade.
+`tests/fm-t3-clear-session.test.sh` is the portable regression for the swap; repeat this check after a Claude Code upgrade.
 
 ## tern
 

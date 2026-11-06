@@ -36,11 +36,6 @@
 # Calm mod), while fm_operational_doorbell_kind also requires the record to sit in
 # the given home's own operational inbox, which the away-mode return check uses.
 #
-# T3 Code's plain opening. T3 Code's Refresh context opens each fresh session with
-# the bare text below as a user message, which it cannot mark, so `classify` alone
-# recognizes that exact text as kind session-refresh. It is no envelope kind, and
-# a captain who types exactly those words is read the same way.
-#
 # CLI:
 #   fm-operational-input.sh encode <kind>  # body on stdin, encoded input stdout
 #   fm-operational-input.sh kind           # current input on stdin, kind stdout
@@ -192,15 +187,9 @@ fm_legacy_operational_input_kind() {  # <message> <result-var>
   return 1
 }
 
-FM_T3_REFRESH_OPENING='Context refreshed.'
-
 fm_operational_input_classify() {  # <message> <result-var>
   local message=${1-} result_var=${2-} classified_kind
   [ -n "$result_var" ] || return 2
-  if [ "$message" = "$FM_T3_REFRESH_OPENING" ]; then
-    printf -v "$result_var" '%s' session-refresh
-    return 0
-  fi
   if fm_operational_input_kind "$message" classified_kind ||
      fm_legacy_operational_input_kind "$message" classified_kind; then
     printf -v "$result_var" '%s' "$classified_kind"

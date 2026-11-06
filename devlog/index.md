@@ -556,3 +556,26 @@ The choices made:
 - **The approval picture reuses measured numbers.** 10.8 s and 41 ms are the two live probes of 3 November, one each.
 - **Crew lineage, the thread record, the credential guard, and telemetry get no picture.** The crew already shows in two pictures, and the other three have nothing to show.
 - **The Bearings picture moved to `docs/media/fork/`**, so it lives once, and this devlog links to it.
+
+## 22. Refresh context gives way to /clear (6 November 2026)
+
+His words:
+
+> I just tried out the slash clear and it works really well. Um so I think we can essentially abandon our first mate refresh button because you know we can always just run stow and run clear ourselves and that seems fine and and I sometimes even prefer to not run STO because I can save tokens that way
+
+Upstream T3 Code now starts a fresh session on the same thread with `/clear`, which is what the Refresh context button already did underneath.
+The T3 Code fork is dropping the button, so FirstMate drops its half of entry 20:
+
+- `Context refreshed.` is an ordinary message again: no special kind in `bin/fm-operational-input.sh` or the Calm mod, and no rule for it in `AGENTS.md` or `/ahoy`.
+- `/stow` behaves the same on T3 as anywhere else, so it can ask questions again.
+- The Refresh sections in `FORK.md`, the README and the T3 Code backend doc are gone.
+
+The choices made:
+
+- **The swap test stays, renamed for `/clear`.**
+  `/clear` ends the old Claude process and starts a new one exactly as the button did, so the lock passing over, the dead session's Stop hook changing nothing and supervision re-arming still need proving.
+  It is now `tests/fm-t3-clear-session.test.sh`, and the backend doc describes `/clear` in place of the button.
+- **The dated real-Claude check stays, trimmed to the process facts.**
+  The parts about `Context refreshed.` and the button's `/stow` backed nothing any more.
+- **One thing to keep in the T3 Code fork.**
+  Its Claude adapter waits for the old process to exit before the new session opens; upstream does not, and without that wait the new FirstMate session can come up read-only.

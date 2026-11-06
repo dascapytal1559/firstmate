@@ -6,7 +6,6 @@ A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that
 Upstream can run workers in T3 Code as an experimental backend; with the T3 Code fork, this fork makes T3 Code FirstMate's home:
 
 - [Restart recovery](FORK.md#recovery-after-a-t3-code-restart): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
-- [Refresh context](FORK.md#refresh-context-on-the-firstmate-thread): T3 Code's button swaps that session for a fresh one on the same thread, stowing first.
 - [Instant handoff](FORK.md#instant-handoff): a worker's finish reaches FirstMate in seconds.
 - [Approvals at once](FORK.md#approvals-reach-firstmate-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
 - [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex.

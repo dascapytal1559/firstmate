@@ -2,7 +2,7 @@
 name: stow
 description: >-
   Sweep the session for uncaptured durable knowledge and unfiled or wrong open work records, and curate startup memory.
-  Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), when /stow arrives as a plain message from T3 Code's Refresh context, before a session reset or context compaction, or periodically to keep operational memory current.
+  Use when the captain invokes /stow (e.g. "/stow", "stow what you've learned"), before a session reset or context compaction, or periodically to keep operational memory current.
 user-invocable: true
 metadata:
   internal: true
@@ -257,20 +257,6 @@ Judge for yourself what is important and which record each thing belongs to, and
 One bound holds: this covers the open work you are actually holding in context, not the records at large.
 It is not a reconciliation of durable records against repository or forge reality, cannot become one on input this volatile, and must never be reported as one.
 Where the right correction is a judgment you cannot make, leave the record alone and raise the question instead of guessing.
-
-## When T3 Code sends /stow
-
-T3 Code's Refresh context sends `/stow` as one plain message and replaces this session when that turn ends ([`docs/t3code-backend.md`](../../../docs/t3code-backend.md#refresh-context)).
-The message looks the same as one the captain typed, so treat every `/stow` as this case while `T3CODE_THREAD_ID` is set in this session's environment.
-The swap waits for the turn to end and nothing in this session survives it, so in this case the whole pass still runs with these changes:
-
-- Ask the captain nothing: no question in chat, no question tool, and no wait for an answer, approval, or reply.
-- Before the turn ends, put everything the pass would otherwise raise with the captain into a durable record the next session reads.
-  A decision or question is a held task (`bin/fm-tasks-axi.sh add`, then `bin/fm-captain-hold.sh hold <id> --reason "<the question and its options>"`), which reaches the next session's digest and Bearings.
-  A judgment about an existing record goes in that record's own task note the same way, or in a held task when no such record exists.
-- In the cascade, send each `agent` request and move on without reading its reply; the reply arrives as a status event for the next session, and the receipt names each one still owed.
-- End the turn with the completion receipt, starting nothing else and leaving no background work behind.
-  An exception in the receipt does not stop the swap, so every exception must also sit in a durable record.
 
 ## One-time migration of unmarked entries
 

@@ -96,11 +96,8 @@ export function firstmateLegacyOperationalInputKind(message: string): string | u
   return undefined;
 }
 
-const T3_REFRESH_OPENING = "Context refreshed.";
-
-/** `fm_operational_input_classify`: T3's plain opening, current kinds, then the legacy shapes. */
+/** `fm_operational_input_classify`: current kinds first, then the legacy shapes. */
 export function classifyFirstmateOperationalText(message: string): string | undefined {
-  if (message === T3_REFRESH_OPENING) return "session-refresh";
   return firstmateOperationalInputKind(message) ?? firstmateLegacyOperationalInputKind(message);
 }
 
