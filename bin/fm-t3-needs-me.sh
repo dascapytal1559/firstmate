@@ -175,7 +175,7 @@ plan() {
             | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $fresh
          | (($r.hold_bucket == "live" or $r.hold_bucket == "aged") and $fresh != null and ($now - $fresh) >= $shelveAfter) as $shelved
          | (if $shelved then "snoozed" elif $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
-         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase,
+         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase, shelved: $shelved,
             snoozedUntil: (if $phase == "snoozed" and ($shelved | not) then ($r.hold_until | iso) else null end),
             holdSet: ($r.hold_set // ""),
             decision: ({taskId: $r.id, title: ($r.title[:200])}
@@ -191,7 +191,7 @@ plan() {
         ($locs | to_entries[] | select(.key | IN($heldIds[]) | not) | .value
          | . as $l
          | {taskId: $l.taskId, title: ($l.title // $l.taskId),
-            phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
+            phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end), shelved: false,
             snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
             newestKind: null, newestChanged: null, local: $l})
       ]
@@ -269,7 +269,7 @@ jq -n --slurpfile plan "$WORK/plan.json" --rawfile hashes "$WORK/hashes.tsv" --a
           thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
           requestId: "fm-needs-me:\($key):\($p.taskId)",
           apply: ($h[$p.taskId] != ($p.local.hash // null)),
-          shelve: ($p.phase == "snoozed" and $p.snoozedUntil == null and ($p.local.phase // null) == "active"),
+          shelve: ($p.shelved and ($p.local.phase // null) == "active"),
           markUnread: ($p.local != null and ($p.local.holdSet // "") == $p.holdSet
             and $p.newestKind == "update" and ($p.decision.revision // 0) > ($p.local.revision // 0))}]}
 ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; exit 1; }
@@ -346,7 +346,7 @@ fi
 if [ -d "$MENTIONED" ]; then
   for f in "$MENTIONED"/*; do
     [ -f "$f" ] || continue
-    jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and (.phase == "active" or (.phase == "snoozed" and .snoozedUntil == null)))' \
+    jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and (.phase == "active" or .shelved))' \
       "$WORK/plan.json" >/dev/null || rm -f -- "$f"
   done
 fi
