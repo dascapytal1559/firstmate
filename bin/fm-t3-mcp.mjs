@@ -218,7 +218,7 @@
 //     path; parent the FirstMate thread id the last pass found, or null;
 //     each item {taskId, title, phase (active|snoozed|parked|closed|archived),
 //     snoozedUntil, decision (the payload), thread (its last known id, or
-//     null), generation, requestId, apply, markUnread}. The FirstMate thread
+//     null), generation, requestId, apply, shelve, markUnread}. The FirstMate thread
 //     is the cached parent while it is still a live, worktree-less thread of
 //     the project rooted at root, else that project's one pinned coordinator,
 //     else thread-for-root's; with none the pass changes nothing and answers
@@ -233,10 +233,12 @@
 //     without one, and an archived item's thread is archived. With apply (or
 //     on a new thread) the payload is set (t3_thread_update set_decision) and
 //     the thread is unarchived, unsettled, unsnoozed, snoozed until
-//     snoozedUntil, or settled to match the phase, marked unread when
-//     markUnread, and read back to prove it. Without apply only a payload
-//     whose revision differs is set again, so a settle, snooze, or archive
-//     the captain made himself stands. Prints {parent, projectId, items[]},
+//     snoozedUntil (with no date when it is null), or settled to match the
+//     phase, marked unread when markUnread, and read back to prove it.
+//     Without apply only a payload whose revision differs is set again, so a
+//     settle, snooze, or archive the captain made himself stands; shelve
+//     (moving a call from the top to the Snoozed shelf after its day) counts
+//     as no apply for a thread already settled, snoozed, or archived. Prints {parent, projectId, items[]},
 //     each item {taskId, ok, thread, generation, created, changed[]} or ok
 //     false with its error, still naming any thread it made. Exit 4
 //     (decisions_unsupported) when t3_thread_launch does not declare
@@ -1958,6 +1960,7 @@ async function decisionItem(session, parent, it, result) {
     t = null;
   }
   let apply = it.apply === true;
+  if (apply && it.shelve === true && t && (isArchived(t) || t.settled === true || t.snoozed === true)) apply = false;
   if (!t) {
     if (it.phase === "closed") {
       result.thread = null;
@@ -2001,7 +2004,7 @@ async function decisionItem(session, parent, it, result) {
   }
   if (it.phase === "active" && t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
   if (it.phase === "snoozed" && !(t.snoozed === true && sameInstant(t.snoozedUntil, it.snoozedUntil))) {
-    result.changed.push(await organize(session, id, "snooze", { snoozedUntil: it.snoozedUntil }));
+    result.changed.push(await organize(session, id, "snooze", it.snoozedUntil ? { snoozedUntil: it.snoozedUntil } : {}));
   }
   if (it.phase === "parked" || it.phase === "closed") {
     if (t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
