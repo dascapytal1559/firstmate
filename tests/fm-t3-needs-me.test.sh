@@ -69,6 +69,14 @@ sync_now() {
   needs_me sync
 }
 
+# at <UTC-timestamp> <command...>: runs the command as if it were that time,
+# for the backlog snapshot, a new hold's stamp, and the sync pass alike.
+at() {
+  local when=$1
+  shift
+  FM_SNAPSHOT_NOW=$when FM_CAPTAIN_HOLD_NOW=$when FM_NEEDS_ME_NOW=$(jq -n --arg t "$when" '$t | fromdateiso8601') "$@"
+}
+
 answer() {  # <task-id> [--release]
   local id=$1
   shift
@@ -426,16 +434,51 @@ test_dated_hold_gets_its_day_when_it_comes_due() {
   FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w1 --reason "Pick the layout" --until 2099-01-04 >/dev/null 2>&1 \
     || fail "dated hold should succeed"
   assert_equals "2099-01-04T00:00:00Z" "$(decision w1 't.snoozedUntil')" "a dated hold is snoozed until its date"
-  local due_morning=2099-01-04T06:00:00Z next_day=2099-01-05T01:00:00Z
-  FM_SNAPSHOT_NOW=$due_morning FM_NEEDS_ME_NOW=$(jq -n --arg t "$due_morning" '$t | fromdateiso8601') needs_me sync >/dev/null \
-    || fail "sync on the due date should succeed"
-  assert_equals "false" "$(decision w1 't.snoozed')" "the morning its date comes due it is back under FirstMate"
-  assert_contains "$(FM_SNAPSHOT_NOW=$due_morning FM_NEEDS_ME_NOW=$(jq -n --arg t "$due_morning" '$t | fromdateiso8601') needs_me status)" \
-    "waiting: 1" "and counts as waiting on him"
-  FM_SNAPSHOT_NOW=$next_day FM_NEEDS_ME_NOW=$(jq -n --arg t "$next_day" '$t | fromdateiso8601') needs_me sync >/dev/null \
-    || fail "sync a day after the due date should succeed"
+  local due=2099-01-04T00:01:00Z late=2099-01-04T23:59:00Z next_day=2099-01-05T00:02:00Z
+  at "$due" needs_me sync >/dev/null || fail "sync on the due date should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "the minute its date comes due it is back under FirstMate"
+  assert_contains "$(at "$due" needs_me status)" "waiting: 1" "and counts as waiting on him"
+  at "$late" needs_me sync >/dev/null || fail "sync late on the due date should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "for the whole day, though it was raised days before"
+  at "$next_day" needs_me sync >/dev/null || fail "sync a day after the due date should succeed"
   assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "a day after its date it moves to the shelf"
   pass "fm-t3-needs-me.sh: a dated hold gets its day at the top when its date comes due"
+}
+
+test_re_asked_deferred_call_gets_its_day() {
+  make_home re-asked
+  FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w1 --reason "Pick the layout" --until 2099-02-01 >/dev/null 2>&1 \
+    || fail "dated hold should succeed"
+  at 2099-01-01T10:01:00Z needs_me sync >/dev/null || fail "sync after the dated hold should succeed"
+  assert_equals "2099-02-01T00:00:00Z" "$(decision w1 't.snoozedUntil')" "the deferred call is snoozed until its date"
+  at 2099-01-05T09:00:00Z captain hold w1 --reason "Pick the layout now" >/dev/null 2>&1 || fail "re-hold should succeed"
+  at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the re-hold should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "re-asked days after it was raised, it is back under FirstMate"
+  at 2099-01-06T08:59:00Z needs_me sync >/dev/null || fail "sync later that day should succeed"
+  assert_equals "false" "$(decision w1 't.snoozed')" "for a day from the re-ask"
+  at 2099-01-06T09:01:00Z needs_me sync >/dev/null || fail "sync a day later should succeed"
+  assert_equals "true" "$(decision w1 't.snoozed === true && t.snoozedUntil == null')" "then it moves to the shelf"
+  pass "fm-t3-needs-me.sh: a deferred call re-asked early gets its day at the top"
+}
+
+test_unblocked_call_gets_its_day() {
+  make_home unblocked
+  (cd "$HOME_DIR" && tasks-axi add w3 "Blocked call" --repo sample --blocked-by w1) >/dev/null 2>&1 \
+    || fail "could not seed a blocked row"
+  FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w3 --reason "Choose after w1 lands" >/dev/null 2>&1 || fail "hold should succeed"
+  at 2099-01-01T10:01:00Z needs_me sync >/dev/null || fail "sync while blocked should succeed"
+  assert_equals "true" "$(decision w3 't.settled')" "while w1 is open the call is parked in Settled"
+  at 2099-01-04T12:00:00Z needs_me sync >/dev/null || fail "a later sync while blocked should succeed"
+  assert_equals "true" "$(decision w3 't.settled')" "and stays there"
+  (cd "$HOME_DIR" && tasks-axi 'done' w1) >/dev/null 2>&1 || fail "could not finish the blocker"
+  at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the blocker cleared should succeed"
+  assert_equals "false" "$(decision w3 't.settled === true || t.snoozed === true')" "four days after it was raised, it is under FirstMate"
+  assert_contains "$(at 2099-01-05T09:00:00Z needs_me status)" "waiting: 1" "and counts as waiting on him"
+  at 2099-01-06T08:59:00Z needs_me sync >/dev/null || fail "sync later that day should succeed"
+  assert_equals "false" "$(decision w3 't.snoozed')" "for a day from when its blocker cleared"
+  at 2099-01-06T09:01:00Z needs_me sync >/dev/null || fail "sync a day later should succeed"
+  assert_equals "true" "$(decision w3 't.snoozed === true && t.snoozedUntil == null')" "then it moves to the shelf"
+  pass "fm-t3-needs-me.sh: a call whose blocker clears gets its day at the top"
 }
 
 test_status_and_mentioned() {
@@ -506,6 +549,8 @@ test_day_old_calls_move_to_the_snoozed_shelf
 test_shelving_leaves_the_captains_own_placement
 test_an_update_brings_a_shelved_call_back
 test_dated_hold_gets_its_day_when_it_comes_due
+test_re_asked_deferred_call_gets_its_day
+test_unblocked_call_gets_its_day
 test_status_and_mentioned
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part

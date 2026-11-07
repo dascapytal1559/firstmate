@@ -33,12 +33,13 @@
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
 #     message names none, 2 when it names more than one or a malformed id.
 #
-# Wanted state, per task: a live or aged hold is an active thread (under
-# FirstMate's card) for a day after it was raised, last updated, or its --until
-# date came due, then snoozed with no date (the Snoozed shelf) until an update
-# brings it back for another day; a context rewrite without --changed is not an
-# update; a dated hold (--until) is snoozed until 00:00 UTC on that date, when
-# the snapshot's bucket turns live and its day at the top starts; a
+# Wanted state, per task: a live or aged hold is actionable, and is an active
+# thread (under FirstMate's card) for a day after it last became actionable,
+# then snoozed with no date (the Snoozed shelf). It becomes actionable when it
+# is raised, updated (context --changed; a rewrite without it is not an
+# update), or turns live or aged from dated or blocked (its --until date came
+# due, it was re-held without that date, or its blocker cleared). A dated hold
+# (--until) is snoozed until 00:00 UTC on that date; a
 # blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
 # that closed or was released is settled, then archived a day after that
 # settle was proven. The payload is the context record from this hold (same
@@ -56,8 +57,12 @@
 # archived himself stays so until Firstmate's records change. A failed call,
 # a lost reply, or a T3 restart keeps the old hash, and the next pass applies
 # it again; thread creation is retried under the same request id, so it lands
-# on the thread T3 already made. An item that failed three times in a row is
-# retried every 15 minutes rather than every pass. A pass whose every item
+# on the thread T3 already made. The same record keeps activeSince, the epoch
+# its day started: null while the hold is not actionable, else the latest of
+# its raise, its last update, and the first pass that saw it actionable after a
+# null (with no record for this hold, its raise and updates alone). An item
+# that failed three times in a row is retried every 15 minutes rather than
+# every pass. A pass whose every item
 # was proven writes state/t3-needs-me/.synced, the hash of the whole wanted
 # set, which is what status compares. state/needs-me-mentioned/<task-id>
 # holds "<hold-set>#<revision>" as last named in chat.
@@ -172,11 +177,15 @@ plan() {
          | ($locs[$r.id]) as $l
          | (if $c != null and ($c.entries | length) > 0 then $c.entries else
               [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | ([($r.hold_set // $r.since | iso), ($r.hold_until | iso), ($entries[] | select(.kind == "update") | .at)]
-            | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $fresh
-         | (($r.hold_bucket == "live" or $r.hold_bucket == "aged") and $fresh != null and ($now - $fresh) >= $shelveAfter) as $shelved
-         | (if $shelved then "snoozed" elif $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
-         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase, shelved: $shelved,
+         | ($r.hold_bucket == "live" or $r.hold_bucket == "aged") as $actionable
+         | ([($r.hold_set // $r.since | iso), ($entries[] | select(.kind == "update") | .at)]
+            | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $raisedOrUpdated
+         | (if $l != null and ($l.holdSet // "") == ($r.hold_set // "") and ($l | has("activeSince"))
+            then ($l.activeSince // $now) else null end) as $lastActive
+         | (if $actionable then ([$raisedOrUpdated, $lastActive] | map(select(. != null)) | max) else null end) as $activeSince
+         | ($activeSince != null and ($now - $activeSince) >= $shelveAfter) as $shelved
+         | (if $shelved then "snoozed" elif $actionable then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
+         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase, shelved: $shelved, activeSince: $activeSince,
             snoozedUntil: (if $phase == "snoozed" and ($shelved | not) then ($r.hold_until | iso) else null end),
             holdSet: ($r.hold_set // ""),
             decision: ({taskId: $r.id, title: ($r.title[:200])}
@@ -192,7 +201,8 @@ plan() {
         ($locs | to_entries[] | select(.key | IN($heldIds[]) | not) | .value
          | . as $l
          | {taskId: $l.taskId, title: ($l.title // $l.taskId),
-            phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end), shelved: false,
+            phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
+            shelved: false, activeSince: null,
             snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
             newestKind: null, newestChanged: null, local: $l})
       ]
@@ -311,12 +321,13 @@ while IFS= read -r id; do
         if $p.phase == "archived" or ($p.phase == "closed" and $r.thread == null) then {drop: true}
         else {record: {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation, hash: $hash,
                phase: $p.phase, revision: ($p.decision.revision // 0), holdSet: $p.holdSet, decision: $p.decision,
+               activeSince: $p.activeSince,
                closedAt: (if $p.phase == "closed" then ($l.closedAt // $now) else null end),
                failures: 0, failedAt: null}}
         end
       else {failed: $r.error.message,
             record: ($l + {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation,
-                           decision: ($l.decision // $p.decision),
+                           decision: ($l.decision // $p.decision), activeSince: $p.activeSince,
                            failures: (($l.failures // 0) + 1), failedAt: $now})}
       end
   ' "$WORK/out.json" > "$WORK/result.json" || { echo "t3-needs-me: the result for $id could not be read"; failed=1; continue; }
@@ -324,8 +335,10 @@ while IFS= read -r id; do
     rm -f -- "$SYNCS/$id.json"
     continue
   fi
-  jq '.record' "$WORK/result.json" > "$SYNCS/.$id.tmp" && mv -f "$SYNCS/.$id.tmp" "$SYNCS/$id.json" \
-    || { echo "t3-needs-me: could not record $id"; failed=1; }
+  if ! { jq '.record' "$WORK/result.json" > "$SYNCS/.$id.tmp" && mv -f "$SYNCS/.$id.tmp" "$SYNCS/$id.json"; }; then
+    echo "t3-needs-me: could not record $id"
+    failed=1
+  fi
   if jq -e '.failed != null' "$WORK/result.json" >/dev/null; then
     echo "t3-needs-me: decision $id: $(jq -r '.failed' "$WORK/result.json"); the next pass retries"
     failed=1

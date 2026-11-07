@@ -620,3 +620,24 @@ Entry 23 sent calls that had waited a long time to Settled, to match Bearings' C
 - **Blocked calls stay in Settled.** They wait on other work, not on him, and come back up when they unblock.
 - **Bearings is unchanged.** Its Captain's Call still lists only live calls and shows long-waiting ones as gates; the two views now differ on purpose.
 - **Threads settled under the old rule come back up** on the next pass, since the wanted state for those calls changed.
+
+## 25. A call gets its day when it becomes actionable (7 November 2026)
+
+![A call raised on day 0 that waits on other work until day 3: before, it went from Settled straight to Later; after, it is open for a day from day 3, then goes to Later](media/decision-day-starts-when-actionable.svg)
+
+Since 7 November a decision thread moves to the Snoozed shelf (Later in the Needs me tab) a day after it was raised or last updated, so the open list shows only the last day's calls.
+The nightly review of that change kept finding gaps about when a call's day starts.
+The worst: a call waiting on other work that became actionable more than a day after it was raised went straight to Later, so it never showed as needing him.
+Of the two options FirstMate put to him, he took its lean:
+
+> Go with ur call for 2-5
+
+- **One rule.** A call is open under FirstMate's card for a day from when it last became actionable, then goes to Later.
+  It becomes actionable when it is raised, updated with `context --changed`, or turns live from deferred or blocked: its `--until` date arrives, it is re-held without that date, or its blocker clears.
+- **One small record.** Each call's sync record in `bin/fm-t3-needs-me.sh` now keeps `activeSince`: empty while the call is deferred or blocked, and stamped by the first pass that sees it actionable again.
+  This replaces the special case for dated holds, which counted from the `--until` date.
+- **His own moves still stand.** Moving a call to Later never overrides a snooze, settle, or archive he made himself.
+- **Records from before this change** have no stamp, so their day counts from the raise and updates alone, and nothing jumps back to the top on upgrade.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a due dated hold, a deferred call re-asked early, and a call whose blocker clears four days after it was raised are each open for a day, then shelved.
+The last two cases fail on the code before this change.
