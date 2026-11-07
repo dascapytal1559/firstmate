@@ -79,8 +79,9 @@
 #
 # Only a main home with config/t3code-token takes part: a secondmate's calls
 # reach the captain through its parent. With no FirstMate thread in T3 (none
-# pinned as coordinator and none live), a pass changes nothing. A T3 without
-# decision threads makes sync a no-op.
+# pinned as coordinator and none live), a pass changes no decision thread, and
+# a T3 without decision threads leaves the decisions alone; the objectives push
+# still runs in both cases.
 #
 # Exit: 0, or 1 when the records could not be read, a decision could not be
 # brought in line, or the objectives could not be pushed (a line on stdout
