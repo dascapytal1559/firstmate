@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="360" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">The objectives file becomes the top of the Bridge</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">Illustration with made-up objectives. Pushed only when the list changes; local file pointers are left behind.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="78" width="430" height="258" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="44" y="102" font-weight="600" fill="#57606a">data/high-level-objectives.md</text>
+    <text x="44" y="130" font-family="Menlo, monospace" fill="#8c959f"># High level objectives</text>
+    <text x="44" y="152" font-family="Menlo, monospace" fill="#8c959f">The broad direction right now...</text>
+    <text x="44" y="174" font-family="Menlo, monospace" fill="#0969da">Last reviewed: 2026-10-01</text>
+    <text x="44" y="204" font-family="Menlo, monospace">- **Tidy harbour:** every berth</text>
+    <text x="44" y="222" font-family="Menlo, monospace">  labelled. <tspan fill="#cf222e" text-decoration="line-through">Plans: /home/.../plan.md</tspan></text>
+    <text x="44" y="250" font-family="Menlo, monospace">- **Calm seas:** fewer</text>
+    <text x="44" y="268" font-family="Menlo, monospace">  interruptions. <tspan fill="#cf222e" text-decoration="line-through">Added from</tspan></text>
+    <text x="44" y="286" font-family="Menlo, monospace"><tspan fill="#cf222e" text-decoration="line-through">  the journal: ~/journal/10-01.md</tspan></text>
+    <text x="44" y="316" fill="#57606a">Heading and preamble stay in the file.</text>
+  </g>
+
+  <g>
+    <line x1="466" y1="200" x2="500" y2="200" stroke="#57606a" stroke-width="2"/>
+    <polygon points="500,193 512,200 500,207" fill="#57606a"/>
+    <text x="462" y="186" font-size="11" fill="#57606a">sync pass</text>
+  </g>
+
+  <g font-size="14" fill="#1f2328">
+    <rect x="522" y="78" width="414" height="258" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+    <text x="542" y="104" font-weight="600">Bridge</text>
+    <rect x="538" y="118" width="382" height="110" rx="6" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="554" y="142" font-weight="600">Objectives</text>
+    <text x="804" y="142" font-size="12" fill="#57606a">reviewed 2026-10-01</text>
+    <text x="554" y="170"><tspan font-weight="600">Tidy harbour</tspan> — every berth labelled.</text>
+    <text x="554" y="196"><tspan font-weight="600">Calm seas</tspan> — fewer interruptions.</text>
+    <rect x="538" y="242" width="382" height="78" rx="6" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="554" y="266" font-weight="600">Decisions</text>
+    <text x="554" y="292" fill="#57606a">Pick the print layout</text>
+    <text x="554" y="312" fill="#57606a">Buy the camera</text>
+  </g>
+</svg>

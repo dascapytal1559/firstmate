@@ -103,6 +103,48 @@ fm_procevent_any_registered() {
   return 1
 }
 
+# --- worker-event doorbell ----------------------------------------------------
+# The watcher rings this once for every batch of worker signals it sees (a
+# status write or a turn-end marker), whether it then surfaces or absorbs the
+# batch. A blocking child that opted in, such as a `when` watch armed with
+# --on-worker-event, compares the token before each poll and cuts its wait
+# short when it changes, so it re-checks at the moment a worker finishes a
+# turn instead of on its next interval. The token says only "something
+# happened"; it carries no worker identity and no authority, and a missed or
+# spurious ring costs at most one early or late poll. A home with no registry
+# directory owns no source, so ringing it is a no-op.
+
+fm_procevent_worker_event_path() {  # <state-root>
+  printf '%s/.worker-event\n' "$(fm_procevent_registry_dir "$1")"
+}
+
+FM_PROCEVENT_WORKER_EVENT_N=0
+fm_procevent_worker_event_ring() {  # <state-root>
+  local reg path
+  reg=$(fm_procevent_registry_dir "$1")
+  [ -d "$reg" ] && [ ! -L "$reg" ] || return 0
+  path=$(fm_procevent_worker_event_path "$1")
+  [ ! -L "$path" ] || return 0
+  FM_PROCEVENT_WORKER_EVENT_N=$((FM_PROCEVENT_WORKER_EVENT_N + 1))
+  printf '%s %s %s %s\n' "$(date +%s)" "$$" "$FM_PROCEVENT_WORKER_EVENT_N" "$RANDOM" \
+    > "$path" 2>/dev/null || true
+  return 0
+}
+
+# Set FM_PROCEVENT_WORKER_EVENT_TOKEN to the current token, or empty when the
+# doorbell was never rung. Call it directly, not in $(...): a caller checks it
+# about once a second, so it forks nothing.
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+FM_PROCEVENT_WORKER_EVENT_TOKEN=
+fm_procevent_worker_event_read() {  # <state-root>
+  local path="$1/procevent/.worker-event"  # fm_procevent_worker_event_path, inlined
+  FM_PROCEVENT_WORKER_EVENT_TOKEN=
+  [ -f "$path" ] && [ ! -L "$path" ] || return 0
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+  IFS= read -r FM_PROCEVENT_WORKER_EVENT_TOKEN < "$path" 2>/dev/null || true
+  return 0
+}
+
 # --- owning-session lease ---------------------------------------------------
 # A runner is detached into its own process group so it survives the turn that
 # started it. That is what makes a persistent source work, and on its own it is

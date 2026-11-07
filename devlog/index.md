@@ -620,3 +620,84 @@ Entry 23 sent calls that had waited a long time to Settled, to match Bearings' C
 - **Blocked calls stay in Settled.** They wait on other work, not on him, and come back up when they unblock.
 - **Bearings is unchanged.** Its Captain's Call still lists only live calls and shows long-waiting ones as gates; the two views now differ on purpose.
 - **Threads settled under the old rule come back up** on the next pass, since the wanted state for those calls changed.
+
+## 25. A call gets its day when it becomes actionable (7 November 2026)
+
+![A call raised on day 0 that waits on other work until day 3: before, it went from Settled straight to Later; after, it is open for a day from day 3, then goes to Later](media/decision-day-starts-when-actionable.svg)
+
+Since 7 November a decision thread moves to the Snoozed shelf (Later in the Needs me tab) a day after it was raised or last updated, so the open list shows only the last day's calls.
+The nightly review of that change kept finding gaps about when a call's day starts.
+The worst: a call waiting on other work that became actionable more than a day after it was raised went straight to Later, so it never showed as needing him.
+Of the two options FirstMate put to him, he took its lean:
+
+> Go with ur call for 2-5
+
+- **One rule.** A call is open under FirstMate's card for a day from when it last became actionable, then goes to Later.
+  It becomes actionable when it is raised, updated with `context --changed`, or turns live from deferred or blocked: its `--until` date arrives, it is re-held without that date, or its blocker clears.
+- **One small record.** Each call's sync record in `bin/fm-t3-needs-me.sh` now keeps `activeSince`: empty while the call is deferred or blocked, and stamped by the first pass that sees it actionable again.
+  This replaces the special case for dated holds, which counted from the `--until` date.
+- **His own moves still stand.** Moving a call to Later never overrides a snooze, settle, or archive he made himself.
+- **Records from before this change** have no stamp, so their day counts from the raise and updates alone, and nothing jumps back to the top on upgrade.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a due dated hold, a deferred call re-asked early, and a call whose blocker clears four days after it was raised are each open for a day, then shelved.
+The last two cases fail on the code before this change.
+
+## 26. The Bridge opens with the objectives (7 November 2026)
+
+![The objectives file on the left, with its heading, preamble, and local file pointers left behind; on the right, the Bridge tab with the objectives above the decisions](media/bridge-objectives-sync.svg)
+
+The ask, while looking at the Needs me tab:
+
+> Also, I'm considering turning Needs Me into Like a bit of a Bit of like a first maid's I don't know like overview panel. So I don't know what to name the the the tab but I want to start putting high level objectives in here as well. Just so I can constantly be reminded what my objectives are.
+
+He then picked the name Bridge.
+The T3 Code fork draws the tab and took a new tool, `t3_objectives_set`; this is FirstMate's half, which keeps the list there true:
+
+- **The objectives file stays the source.** The same sync that keeps the decision threads true, `bin/fm-t3-needs-me.sh`, now also builds the Bridge's list from `data/high-level-objectives.md` on every pass and pushes it only when it changed since the last push T3 accepted.
+- **Only the bullets travel.** Each objective keeps its bold name and its text; the heading and preamble stay in the file, and the `Last reviewed` day rides beside the list, where the Bridge shows it.
+- **Local file pointers are left behind.** A trailing sentence that only points at a file on this machine, such as where the decisions so far are kept, would mean nothing on the Bridge, so it is dropped.
+- **Nothing is ever dropped to fit.** Past T3's 8,192-character limit every objective stays and each long text is cut, ending in an ellipsis, and the sync says so.
+- **No file clears the Bridge once.** An absent file, or one with no bullets, clears the list a single time rather than on every pass.
+- **A failed push never holds the decisions back.** It is reported and tried again on the next pass, backing off after three failures in a row the way a decision does, and a T3 without the tool is skipped quietly.
+
+The choices made:
+
+- **The name and text are joined with a dash**, as the fork's README shows, rather than the colon the file uses.
+- **A pointer goes with its whole sentence.** "Added from the 5 November journal, which holds the full details: (path)" goes entirely, since without the path the sentence points at nothing; a sentence with no path, such as "(same file)", stays as written.
+
+The evidence is the decision sync suite against the fake T3 server, with new cases for the payload's shape on made-up objectives, the 8,192-character limit, a push only when the list changes, a failed and an unproven push retried, the clear, the back-off, and an older T3.
+The first push to the live T3 was left to FirstMate after landing.
+
+## 27. "Restart when no worker is running" is a hook in the watcher (7 November 2026)
+
+![Before, the idle hook waited for two quiet 30 second polls; after, the watcher rings it on the turn-end itself and it fires about a second and a half later](media/fleet-idle-doorbell.svg)
+
+The ask was to restart T3 Code "the next time no worker is running", as a standing kind of instruction:
+
+> going forward, I might give you such commands like restart next whenever available or okay to restart when next available. Such commands should essentially make you watch each worker status and when active workers reaches zero you run the restart.
+>
+> (7 November 2026)
+
+He noted that such instructions had not been followed well before.
+FirstMate first armed a watch that polled every 30 seconds and restarted after two quiet polls in a row, and explained why checking on each worker's reply would miss the moment: the watcher quietly absorbs routine turn-ends, so FirstMate never sees them.
+His answer:
+
+> Oh why don't you just build it into the watcher then? Like a watcher seems like the perfect place. ... It also sees if there's an outstanding hook ... and if there is you know run the hook and then gives it to first mate.
+
+What was built:
+
+- **The watcher rings a doorbell on every worker event.** Each time it sees a worker's status write or turn-end, it rings once as soon as it notices, and again after its usual linger, before it decides whether to wake FirstMate or absorb the event. Routine turn-ends it absorbs ring it too.
+- **A watch can listen for the doorbell.** `bin/fm-procevent-when.sh arm --on-worker-event` makes a condition->action watch re-check at once on a ring, with its interval kept as the backstop. Everything the watch already guaranteed stays: the action is trust-bound, fires at most once, and FirstMate gets the outcome as an ordinary wake.
+- **A generic "is anyone mid-turn" check.** `bin/fm-fleet-idle.sh` exits 0 only when no worker of this home is inside a turn or still running its own work. A worker whose state cannot be read counts as busy, so an unreadable worker never lets a restart through. FirstMate's own session is not a worker.
+
+The choices made:
+
+- **The watcher only rings; the watch decides.** The watcher never runs the condition or the action itself, so a slow check can never hold up supervision, and the existing trust and fire-once rules apply unchanged. Building the check into the watcher directly would have meant a second copy of those rules.
+- **The check reads each worker's live session and its running processes, not its status log.** That keeps it cheap enough to run on every event, and it means a worker sitting in a long command counts as busy even if it last wrote `paused:`.
+- **A worker's own background work counts too.** While this change was being built, the interim 30 second watch restarted T3 Code while its worker sat in a `paused:` wait on its own background test run, and the restart cut that run. So a worker whose session is idle still counts while any process it started is working inside its worktree, such as a test run or a dev server. Its agent, the agent's process group, and the agent's parent shell are left out, so a paused wait on something outside, like captain feedback, still reads idle.
+- **A worker whose agent does not mark turn ends**, such as a non-Claude worker on T3 Code, is caught by the interval instead.
+- **The restart itself stays private** to this home; only the general "do X when the fleet goes idle" pattern is shared.
+
+The evidence is the regression suites, plus a timing run with the watcher running, absorbing, and scanning once a second: a routine turn-end fired a watch with a 10 minute interval 1.1 to 1.8 seconds later, in five runs at the watcher's default 30 second linger.
+In a real home the watcher notices a turn-end on its next scan, which comes within 15 seconds by default.
+Tests also show a busy worker holding the hook back, an idle worker's background job holding it back while its agent does not, the hook firing once and never again, and the interval still firing it with no event at all.

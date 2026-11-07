@@ -323,7 +323,7 @@ family_for_basename() {
     fm-watch-triage.test.sh|fm-watch-triage-pause.test.sh|\
     fm-watch-triage-wedge-defer.test.sh|fm-watch-signal-grace.test.sh|fm-task-inbox.test.sh|\
     fm-watcher-lock.test.sh|fm-inactive-reconcile.test.sh|fm-watch-wedge-cap.test.sh|\
-    fm-watch-wedge-cap-unconfigured-parity.test.sh)
+    fm-watch-wedge-cap-unconfigured-parity.test.sh|fm-watch-worker-event.test.sh)
       printf '%s\n' watcher-wake-lock
       ;;
     fm-afk-inject-herdr-e2e.test.sh|fm-afk-launch.test.sh|fm-backend-autodetect-smoke.test.sh|\
@@ -798,6 +798,7 @@ tests/fm-dispatch-resolve.test.sh 10051
 tests/fm-documentation-audiences.test.sh 1301
 tests/fm-dod-lib.test.sh 2035
 tests/fm-extension-binding.test.sh 11105
+tests/fm-fleet-idle.test.sh 7000
 tests/fm-fleet-ledger.test.sh 19980
 tests/fm-fleet-snapshot-view.test.sh 23334
 tests/fm-fleet-sync.test.sh 40541
@@ -970,6 +971,7 @@ tests/fm-watch-triage.test.sh 592950
 tests/fm-watch-wedge-cap.test.sh 374225
 tests/fm-watch-wedge-cap-unconfigured-parity.test.sh 27763
 tests/fm-watch-wedge-cap-live.test.sh 74
+tests/fm-watch-worker-event.test.sh 16000
 tests/fm-watcher-lock.test.sh 72022
 tests/fm-worker-account-live-e2e.test.sh 3179
 tests/fm-worker-account.test.sh 37445
@@ -1807,6 +1809,8 @@ families_for_changed_path() {
     bin/fm-bearings-snapshot.sh|bin/fm-fleet-snapshot.sh|bin/fm-fleet-view.sh|bin/fm-contributions.sh|bin/fm-contributions.jq|\
     bin/fm-home-summary-refresh.sh|bin/fm-objectives.sh)
       printf '%s\n' snapshot-bearings
+      # The T3 decision sync builds the Bridge objectives from this reader.
+      [ "$path" != bin/fm-objectives.sh ] || printf '%s\n' backend-dispatch
       ;;
     bin/fm-install-herdr.sh|bin/fm-install-treehouse.sh|bin/fm-herdr-ci-cleanup.sh)
       printf '%s\n' pure-contract-unit

@@ -92,7 +92,8 @@ Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
 They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
 A Bearings board stays as it was; the chat digest beside it carries them.
-Details: [`fm-objectives.sh`](bin/fm-objectives.sh).
+With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab, above the decisions, and follow the file as it changes.
+Details: [`fm-objectives.sh`](bin/fm-objectives.sh) and [Objectives](docs/t3code-backend.md#objectives).
 
 ## Ideas in the backlog
 
@@ -111,6 +112,17 @@ The T3 Code fork tells a FirstMate running inside it that the server restarted, 
 FirstMate pins its own thread as its project's coordinator, so that note arrives after every restart, even one that cut no worker's run.
 If the restart cut FirstMate's own turn, its first tool call is refused once with a reminder to run session start.
 Details: [server restart](docs/t3code-backend.md#server-restart).
+
+## Do it when no worker is running
+
+![Before, the idle hook waited for two quiet 30 second polls; after, the watcher rings it on the turn-end itself and it fires about a second and a half later](devlog/media/fleet-idle-doorbell.svg)
+
+An instruction such as "restart when no worker is running" becomes a watch that fires the moment the last worker's turn ends, instead of on a timer.
+The watcher rings a doorbell on every worker status write or turn-end it sees, including the routine ones it absorbs, and a watch armed with `--on-worker-event` re-checks at once.
+`bin/fm-fleet-idle.sh` is the check: no worker of this home is inside a turn or still has its own work running in its worktree, such as a background test run, with an unreadable worker counted as busy.
+The action still fires at most once, and FirstMate gets the outcome as an ordinary wake.
+The watch's interval stays as the backstop for a worker whose agent does not mark turn ends.
+Details: [the fleet-idle pattern](docs/configuration.md#process-to-event-sources-stateprocevent).
 
 ## The live FirstMate's thread on record
 

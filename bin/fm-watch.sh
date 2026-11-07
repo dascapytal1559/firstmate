@@ -4239,8 +4239,14 @@ EOF
   # signature for an already-pending file (last write wins below).
   pending=$(scan_signals)
   if [ -n "$pending" ]; then
+    # Ring the worker-event doorbell the moment a batch is seen, and again
+    # after the grace for signals that joined it, both before the surface or
+    # absorb decision below, so a watch armed with --on-worker-event re-checks
+    # on routine turn-ends this watcher absorbs as well as on surfaced ones.
+    fm_procevent_worker_event_ring "$STATE"
     wait_signal_grace "$pending"
     pending=$(printf '%s\n%s' "$pending" "$(scan_signals)")
+    fm_procevent_worker_event_ring "$STATE"
     # The final coalesced signal set is the watcher-carried status-change
     # trigger for this home's published summary. Start it before either
     # surfacing or absorbing the signal, but never wait on it: see
