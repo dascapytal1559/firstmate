@@ -25,10 +25,11 @@
 #     own work running: any process whose working directory is inside its
 #     recorded worktree, such as a background test run, a dev server, or a
 #     run it started, other than the agent itself, the agent's process
-#     group, and the agent's parents (such as a tmux pane's shell). So a
-#     paused wait with nothing running (captain feedback, a PR maintainer)
-#     reads idle, and a paused wait on the worker's own background job does
-#     not. The process listing comes from /proc where it exists, else lsof;
+#     group, the agent's parents (such as a tmux pane's shell), and a shell
+#     sitting at its terminal's foreground with its parents (the pane's own
+#     prompt once the agent has exited). So a paused wait with nothing
+#     running (captain feedback, a PR maintainer) reads idle, and a paused
+#     wait on the worker's own background job does not. The process listing comes from /proc where it exists, else lsof;
 #     when neither can list working directories this exits 2 rather than
 #     guess.
 #   - secondmate: an idle secondmate pane is its healthy waiting state, so
@@ -129,12 +130,13 @@ cwd_table() {
 
 # running_work <worktrees-file>: for each "<id><TAB><worktree>" line, print
 # "<id><TAB><pid> <command>" for the first process working inside that
-# worktree that is not the agent, in the agent's process group, or one of the
-# agent's parents. Returns 2 when processes cannot be listed.
+# worktree that is not the agent, in the agent's process group, one of the
+# agent's parents, a shell in its terminal's foreground process group, or one
+# of that shell's parents. Returns 2 when processes cannot be listed.
 running_work() {
-  local wts=$1 tmp candidates agents agent_groups id pid ppid pgid comm
+  local wts=$1 tmp candidates roots agent_groups id pid ppid pgid tpgid comm
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-idle.XXXXXX") || return 2
-  if ! LC_ALL=C ps -axo pid=,ppid=,pgid=,comm= > "$tmp/ps" 2>/dev/null \
+  if ! LC_ALL=C ps -axo pid=,ppid=,pgid=,tpgid=,comm= > "$tmp/ps" 2>/dev/null \
     || ! cwd_table > "$tmp/cwd" || [ ! -s "$tmp/cwd" ]; then
     rm -rf "$tmp"
     return 2
@@ -143,34 +145,37 @@ running_work() {
   candidates=$(awk -F '\t' -v OFS='\t' '
     FILENAME == ARGV[1] { wt[$1] = $2; next }
     FILENAME == ARGV[2] {
-      split($0, f, " "); p = f[1]; pp[p] = f[2]; pg[p] = f[3]
-      c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); cm[p] = c; next
+      split($0, f, " "); p = f[1]; pp[p] = f[2]; pg[p] = f[3]; tp[p] = f[4]
+      c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +-?[0-9]+ +/, "", c); cm[p] = c; next
     }
     {
       for (id in wt) {
         w = wt[id]
         if (($2 == w || index($2, w "/") == 1) && ($1 in pp))
-          print id, $1, pp[$1], pg[$1], cm[$1]
+          print id, $1, pp[$1], pg[$1], tp[$1], cm[$1]
       }
     }
   ' "$wts" "$tmp/ps" "$tmp/cwd")
   # This check's own process tree (the watch runner that started it, and its
   # listing commands) is never a worker's running work, wherever it started.
-  agents=" $$"
+  roots=" $$"
   agent_groups=" $(awk -v p="$$" '$1 == p { print $3 }' "$tmp/ps")"
-  while IFS=$'\t' read -r id pid ppid pgid comm; do
+  while IFS=$'\t' read -r id pid ppid pgid tpgid comm; do
     [ -n "$pid" ] || continue
-    if [ "$(fm_agent_process_classify_name "$comm")" = agent ]; then
-      agents="$agents $pid"
-      agent_groups="$agent_groups $pgid"
-    fi
+    case "$(fm_agent_process_classify_name "$comm")" in
+      agent)
+        roots="$roots $pid"
+        agent_groups="$agent_groups $pgid"
+        ;;
+      shell) [ "$tpgid" -le 0 ] || [ "$pgid" != "$tpgid" ] || roots="$roots $pid" ;;
+    esac
   done <<EOF
 $candidates
 EOF
-  printf '%s\n' "$candidates" | awk -F '\t' -v agents="$agents" -v groups="$agent_groups" '
+  printf '%s\n' "$candidates" | awk -F '\t' -v roots="$roots" -v groups="$agent_groups" '
     FILENAME == ARGV[1] { split($0, f, " "); parent[f[1]] = f[2]; next }
     FNR == 1 {
-      n = split(agents, a, " ")
+      n = split(roots, a, " ")
       for (i = 1; i <= n; i++) {
         p = a[i]
         for (hop = 0; p != "" && p > 1 && hop < 64; hop++) { skip[p] = 1; p = parent[p] }
@@ -179,7 +184,7 @@ EOF
       for (i = 1; i <= n; i++) group[g[i]] = 1
     }
     $2 == "" || ($2 in skip) || ($4 in group) || ($1 in seen) { next }
-    { seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $5 }
+    { seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $6 }
   ' "$tmp/ps" -
   rm -rf "$tmp"
   return 0
