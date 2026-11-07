@@ -22,6 +22,7 @@ Outside T3 Code:
 
 - [Priorities and objectives](FORK.md#priorities-and-high-level-objectives-in-every-check-in): Bearings and `/ahoy` open with this home's priorities and high level objectives.
 - [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
+- [When no worker is running](FORK.md#do-it-when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

@@ -69,6 +69,7 @@ bin/fm-procevent-when.sh arm <name> --condition <argv>... --action <argv>...
 ```
 
 [`docs/configuration.md`](../../../docs/configuration.md#process-to-event-sources-stateprocevent) owns the watch's operating contract, while the adapter's header and `--help` own the flags, cadence, trust binding, and outcome document.
+A "when no worker is running" or "when next available" request is this kind of watch: arm it with `--on-worker-event` and `bin/fm-fleet-idle.sh` as the condition, following that contract's fleet-idle pattern, rather than re-checking worker state in conversational turns.
 Eligibility is a firstmate judgment made BEFORE arming, because the scripts cannot classify an argv: the action must be safe, reversible, and exact (for example `no-mistakes update --beta`, whose own guard refuses while a validation run is active).
 Never bind an action that is destructive, irreversible, or security-sensitive, an action needing captain approval or any gate decision, or an action whose right form depends on what the condition finds - those keep the existing check-fires-then-firstmate-decides flow, for which a plain custom check or another adapter stays correct.
 When in doubt, arm only the condition half as an ordinary check and keep the action as a wake-time decision.

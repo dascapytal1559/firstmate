@@ -2986,6 +2986,22 @@ The (condition, action) spec is stored privately under `state/when/` and hash-bo
 A repo update that fast-forwards an in-repo action's bytes in place would otherwise desync every already-armed watch's trust binding with no tampering involved; `bin/fm-procevent-when.sh rebind-all` re-hashes and republishes the binding for every registered watch whose action lives under `FM_ROOT`, including one already polling, so it keeps firing across such an update instead of being refused on its next fire.
 
 Every failure path - a mutated spec or action executable, a condition error past its budget, an expired deadline, a failed action, or an earlier fire whose outcome was never captured - produces a terminal captured outcome that wakes firstmate rather than a silent retry, and a durable single-fire marker claimed before the action makes restarts and re-polls unable to fire it twice.
+
+A watch armed with `--on-worker-event` also re-polls the moment the watcher sees a worker signal - a status write or a turn-end marker, including the routine ones it absorbs - instead of only on its interval, which stays as the backstop.
+The watcher rings a doorbell under `state/procevent/` for every such batch before it decides to surface or absorb it, and the watch's blocking child checks that doorbell about once a second; the ring says only that something happened, so the condition still decides.
+The pattern for "do X when the fleet goes idle", such as restarting a tool once no worker is running, pairs that option with `bin/fm-fleet-idle.sh` as the condition:
+
+```sh
+bin/fm-procevent-when.sh arm <name> --on-worker-event --interval 60 --stable 1 \
+  --condition "$PWD/bin/fm-fleet-idle.sh" -q --action <exact action argv>...
+```
+
+Run it from the firstmate checkout so the condition path is absolute; the runner does not resolve a relative condition path.
+
+`bin/fm-fleet-idle.sh` exits 0 only when no direct report of this home is mid-turn or still running its own work in its worktree; its header owns which states and processes count.
+The first idle reading after a worker's turn ends fires the action once, and firstmate gets the outcome as an ordinary process-event wake.
+`--stable 1` is what makes that prompt: a higher count waits for the next worker event or interval for each further reading.
+A worker that ends its turn without a status write or turn-end marker, such as a T3 Code worker whose agent does not mark turn ends, is caught by the interval instead.
 The adapter automates only the exact deterministic subset: anything needing judgment, and anything destructive, irreversible, or security-sensitive, keeps the ordinary check-fires-then-firstmate-decides flow, and the adapter's header and `--help` own its commands, flags, and outcome document.
 
 **Capture and publish results**

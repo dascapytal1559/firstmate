@@ -646,4 +646,124 @@ assert_grep 'status: fired' "$RESULT" \
 assert_grep 'v2 ran against' "$RESULT" "the fired action ran the rebound (v2) bytes, not a rejection from a torn read"
 pass "the fire-time reload never observes rebind_one's spec/trust publish mid-rename"
 
+# --- --on-worker-event: a worker-event ring re-polls at once ------------------
+# The ring goes through the same library call the watcher makes for every
+# worker-signal batch; tests/fm-watch-worker-event.test.sh drives it from a
+# real watcher.
+ring() {  # <home>
+  FM_HOME="$1" bash -c '
+    . "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"
+    fm_procevent_worker_event_ring "$2/state"
+  ' _ "$ROOT" "$1"
+}
+
+wait_for_count() {  # <file> <at-least> [tries]
+  local n=${3:-150}
+  for _ in $(seq 1 "$n"); do
+    [ "$(count_lines "$1")" -ge "$2" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+H="$TMP_ROOT/h-event"; new_home "$H"
+TRIG="$TMP_ROOT/event-trigger"; EVCOUNT="$TMP_ROOT/event-count"; EVLOG="$TMP_ROOT/event-act"
+when "$H" arm event --on-worker-event --interval 600 --stable 1 \
+  --condition "$COND" "$TRIG" "$EVCOUNT" \
+  --action "$ACT" "$EVLOG" >/dev/null
+pe "$H" reconcile >/dev/null
+wait_for_count "$EVCOUNT" 1 || fail "the event watch never ran its first poll"
+: > "$TRIG"
+sleep 2.5
+assert_contains "$(count_lines "$EVCOUNT")" 1 "without a ring the watch waits out its interval"
+assert_absent "$EVLOG" "without a ring the true condition is not seen yet"
+ring "$H"
+wait_for_result "$H" when-event 40 || fail "a worker-event ring did not re-poll the watch promptly"
+RESULT=$(first_result "$H" when-event)
+assert_grep 'status: fired' "$RESULT" "the ring-triggered poll fires the action"
+assert_grep 'condition_polls: 2' "$RESULT" "exactly one extra poll ran, on the ring"
+ring "$H"; ring "$H"
+pe "$H" reconcile >/dev/null
+sleep 1.5
+assert_contains "$(count_lines "$EVLOG")" 1 "later rings never fire the action again"
+pass "a worker-event ring re-polls at once and the action fires at most once"
+
+H="$TMP_ROOT/h-event-backstop"; new_home "$H"
+TRIG="$TMP_ROOT/backstop-trigger"; BSCOUNT="$TMP_ROOT/backstop-count"; BSLOG="$TMP_ROOT/backstop-act"
+when "$H" arm backstop --on-worker-event --interval 2 --stable 1 \
+  --condition "$COND" "$TRIG" "$BSCOUNT" \
+  --action "$ACT" "$BSLOG" >/dev/null
+pe "$H" reconcile >/dev/null
+wait_for_count "$BSCOUNT" 1 || fail "the backstop watch never ran its first poll"
+: > "$TRIG"
+wait_for_result "$H" when-backstop 60 || fail "with no ring the interval backstop never re-polled"
+assert_grep 'status: fired' "$(first_result "$H" when-backstop)" "the backstop poll fires the action"
+assert_contains "$(count_lines "$BSLOG")" 1 "the backstop fire ran the action once"
+pass "with no worker event the interval still re-polls an event watch"
+
+# A plain watch ignores rings: it keeps its own cadence.
+H="$TMP_ROOT/h-plain-ring"; new_home "$H"
+TRIG="$TMP_ROOT/plain-trigger"; PLCOUNT="$TMP_ROOT/plain-count"
+when "$H" arm plainring --interval 600 --stable 1 \
+  --condition "$COND" "$TRIG" "$PLCOUNT" \
+  --action "$ACT" "$TMP_ROOT/plain-act" >/dev/null
+pe "$H" reconcile >/dev/null
+wait_for_count "$PLCOUNT" 1 || fail "the plain watch never ran its first poll"
+: > "$TRIG"
+ring "$H"
+sleep 2
+assert_contains "$(count_lines "$PLCOUNT")" 1 "a watch without --on-worker-event ignores rings"
+when "$H" retire plainring >/dev/null
+pass "a watch without the opt-in keeps its interval"
+
+# --- the fleet-idle condition: a busy worker blocks, going idle fires ---------
+# bin/fm-fleet-idle.sh reads the home's task records; tmux and ps are faked so
+# its endpoint probe sees one live worker whose busy record this test drives.
+IDLEBIN="$TMP_ROOT/idle-fakebin"
+mkdir -p "$IDLEBIN"
+cat > "$IDLEBIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1-}" in
+  list-windows) printf '%s\n' fm-w1; exit 0 ;;
+  display-message) case "$*" in *pane_tty*) printf '%s\n' /dev/ttysfake ;; esac; exit 0 ;;
+  capture-pane) exit 0 ;;
+esac
+exit 1
+SH
+cat > "$IDLEBIN/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"-t ttysfake"*) printf '%s\n' '4242 4242 4242 claude'; exit 0 ;;
+  *"args="*) printf '%s\n' claude; exit 0 ;;
+esac
+exit 1
+SH
+IDLECOND="$TMP_ROOT/idle-cond.sh"
+cat > "$IDLECOND" <<'SH'
+#!/usr/bin/env bash
+echo x >> "$2"
+PATH="$3:$PATH" exec bash "$1" -q
+SH
+chmod +x "$IDLEBIN/tmux" "$IDLEBIN/ps" "$IDLECOND"
+H="$TMP_ROOT/h-fleet-idle"; new_home "$H"
+printf 'backend=tmux\nwindow=fmidle:fm-w1\nharness=claude\nkind=ship\n' > "$H/state/w1.meta"
+GEN=$("$ROOT/bin/fm-busy-event.sh" arm "$H/state" w1) || fail "cannot arm the worker's busy record"
+IDCOUNT="$TMP_ROOT/idle-count"; IDLOG="$TMP_ROOT/idle-act"
+when "$H" arm fleet-idle --on-worker-event --interval 600 --stable 1 \
+  --condition "$IDLECOND" "$ROOT/bin/fm-fleet-idle.sh" "$IDCOUNT" "$IDLEBIN" \
+  --action "$ACT" "$IDLOG" >/dev/null
+pe "$H" reconcile >/dev/null
+wait_for_count "$IDCOUNT" 1 || fail "the fleet-idle watch never ran its first poll"
+ring "$H"
+wait_for_count "$IDCOUNT" 2 40 || fail "the ring did not re-poll the fleet-idle watch"
+sleep 0.5
+assert_absent "$IDLOG" "a busy worker keeps the fleet-idle action from firing"
+"$ROOT/bin/fm-busy-event.sh" apply "$H/state" w1 idle --gen "$GEN" \
+  --source claude-hook --event Stop --turn-ended >/dev/null || fail "cannot end the worker's turn"
+ring "$H"
+wait_for_result "$H" when-fleet-idle 40 || fail "the fleet going idle did not fire the action on the ring"
+assert_grep 'status: fired' "$(first_result "$H" when-fleet-idle)" "the fleet-idle action fired"
+assert_contains "$(count_lines "$IDLOG")" 1 "the fleet-idle action ran once"
+pass "a busy worker blocks the fleet-idle watch and its turn-end fires it"
+
 printf 'all fm-procevent-when tests passed\n'

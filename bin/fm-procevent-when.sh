@@ -30,6 +30,11 @@
 #              --action-timeout <secs>     bound on the action run (default 1800)
 #              --error-budget <n>          consecutive condition errors tolerated
 #                                          before waking firstmate (default 3)
+#              --on-worker-event           also re-poll at once whenever the watcher
+#                                          sees a worker signal (a status write or a
+#                                          turn-end, surfaced or absorbed); the
+#                                          interval stays as the backstop and is
+#                                          rounded up to whole seconds
 #            The condition argv must exit 0 for true, 1 for a clean false;
 #            any other exit (or a per-poll timeout) is an error, never a true.
 #            POLICY, not enforceable here: both halves must be exact and
@@ -107,7 +112,7 @@ WHEN_DIR="$STATE/when"
 OUTPUT_TAIL_BYTES=${FM_WHEN_OUTPUT_TAIL_BYTES:-8192}
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,72p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 spec_file()  { printf '%s/%s.spec\n' "$WHEN_DIR" "$1"; }
 trust_file() { printf '%s/%s.trust\n' "$WHEN_DIR" "$1"; }
@@ -153,7 +158,7 @@ action_executable() {  # <argv-zero>: print the executable's absolute path
 
 cmd_arm() {
   local name=${1-} sid interval=60 stable=2 deadline=604800
-  local condition_timeout=60 action_timeout=1800 error_budget=3
+  local condition_timeout=60 action_timeout=1800 error_budget=3 wake_on=
   local -a cond=() act=()
   [ -n "$name" ] || usage
   shift
@@ -167,6 +172,7 @@ cmd_arm() {
       --condition-timeout) positive_int "${2-}" || die "--condition-timeout needs a positive integer of seconds"; condition_timeout=$2; shift 2 ;;
       --action-timeout)    positive_int "${2-}" || die "--action-timeout needs a positive integer of seconds"; action_timeout=$2; shift 2 ;;
       --error-budget)      positive_int "${2-}" || die "--error-budget needs a positive integer"; error_budget=$2; shift 2 ;;
+      --on-worker-event)   wake_on=worker-event; shift ;;
       --condition)
         shift
         while [ "$#" -gt 0 ] && [ "$1" != --action ]; do cond+=("$1"); shift; done
@@ -216,6 +222,7 @@ cmd_arm() {
     printf 'condition_timeout=%s\n' "$condition_timeout"
     printf 'action_timeout=%s\n' "$action_timeout"
     printf 'error_budget=%s\n' "$error_budget"
+    [ -z "$wake_on" ] || printf 'wake_on=%s\n' "$wake_on"
     printf 'action_sha256=%s\n' "$action_hash"
     printf 'condition_argc=%s\n' "${#cond[@]}"
     printf 'action_argc=%s\n' "${#act[@]}"
@@ -275,7 +282,7 @@ spec_load() {
 
   SPEC_ARMED='' SPEC_INTERVAL='' SPEC_STABLE='' SPEC_DEADLINE=''
   SPEC_CONDITION_TIMEOUT='' SPEC_ACTION_TIMEOUT='' SPEC_ERROR_BUDGET=''
-  SPEC_ACTION_SHA256=''
+  SPEC_ACTION_SHA256='' SPEC_WAKE_ON=''
   local cond_argc='' act_argc='' in_argv=0 read_cond=0 read_act=0
   {
     IFS= read -r version || { SPEC_ERROR="spec is empty"; return 1; }
@@ -293,6 +300,7 @@ spec_load() {
           condition_timeout) SPEC_CONDITION_TIMEOUT=$value ;;
           action_timeout)    SPEC_ACTION_TIMEOUT=$value ;;
           error_budget)      SPEC_ERROR_BUDGET=$value ;;
+          wake_on)           SPEC_WAKE_ON=$value ;;
           action_sha256)     SPEC_ACTION_SHA256=$value ;;
           condition_argc)    cond_argc=$value ;;
           action_argc)       act_argc=$value ;;
@@ -318,6 +326,7 @@ spec_load() {
   positive_int "$SPEC_CONDITION_TIMEOUT" || { SPEC_ERROR="spec condition timeout is malformed"; return 1; }
   positive_int "$SPEC_ACTION_TIMEOUT" || { SPEC_ERROR="spec action timeout is malformed"; return 1; }
   positive_int "$SPEC_ERROR_BUDGET" || { SPEC_ERROR="spec error budget is malformed"; return 1; }
+  case "$SPEC_WAKE_ON" in ''|worker-event) ;; *) SPEC_ERROR="spec wake_on is malformed"; return 1 ;; esac
   [[ "$SPEC_ACTION_SHA256" =~ ^[0-9a-f]{64}$ ]] \
     || { SPEC_ERROR="spec action hash is malformed"; return 1; }
   positive_int "${cond_argc:-}" || { SPEC_ERROR="spec condition argc is malformed"; return 1; }
@@ -337,6 +346,33 @@ bounded_run() {
   fm_run_timed "$secs" "$@" 2>&1 | tail -c "$OUTPUT_TAIL_BYTES" > "$out"
   rc=${PIPESTATUS[0]}
   return "$rc"
+}
+
+# wait_interval: the pause between two polls. A plain watch sleeps the
+# interval. A --on-worker-event watch checks the watcher's worker-event
+# doorbell (fm_procevent_worker_event_ring) once a second and returns as soon
+# as its token differs from the one seen just before the last poll, so a ring
+# that landed while the condition was still running is not missed; the
+# interval, rounded up to whole seconds, stays the backstop.
+POKE_SEEN=
+poke_mark() {
+  [ "$SPEC_WAKE_ON" = worker-event ] || return 0
+  fm_procevent_worker_event_read "$STATE"
+  POKE_SEEN=$FM_PROCEVENT_WORKER_EVENT_TOKEN
+}
+wait_interval() {
+  [ "$SPEC_WAKE_ON" = worker-event ] || { sleep "$SPEC_INTERVAL"; return 0; }
+  local whole=${SPEC_INTERVAL%%.*} frac start=$SECONDS
+  case "$SPEC_INTERVAL" in
+    *.*) frac=${SPEC_INTERVAL#*.}; [[ "$frac" =~ ^0+$ ]] || whole=$((10#$whole + 1)) ;;
+  esac
+  whole=$((10#$whole))
+  while :; do
+    fm_procevent_worker_event_read "$STATE"
+    [ "$FM_PROCEVENT_WORKER_EVENT_TOKEN" = "$POKE_SEEN" ] || return 0
+    [ $(( SECONDS - start )) -lt "$whole" ] || return 0
+    sleep 1
+  done
 }
 
 # emit_doc <source-id> <status> <detail> <polls> <action-exit-or-empty> <output-file-or-empty>
@@ -391,6 +427,7 @@ cmd_run() {
         "the condition never held for $SPEC_STABLE consecutive polls within ${SPEC_DEADLINE}s of arming" "$polls" '' ''
       exit 0
     fi
+    poke_mark
     bounded_run "$SPEC_CONDITION_TIMEOUT" "$out" "${COND_ARGV[@]}"
     rc=$?
     polls=$((polls + 1))
@@ -420,7 +457,7 @@ cmd_run() {
         fi
         ;;
     esac
-    sleep "$SPEC_INTERVAL"
+    wait_interval
   done
 
   now=$(date +%s)
@@ -520,6 +557,7 @@ publish_spec() {
     printf 'condition_timeout=%s\n' "$SPEC_CONDITION_TIMEOUT"
     printf 'action_timeout=%s\n' "$SPEC_ACTION_TIMEOUT"
     printf 'error_budget=%s\n' "$SPEC_ERROR_BUDGET"
+    [ -z "$SPEC_WAKE_ON" ] || printf 'wake_on=%s\n' "$SPEC_WAKE_ON"
     printf 'action_sha256=%s\n' "$action_hash"
     printf 'condition_argc=%s\n' "${#COND_ARGV[@]}"
     printf 'action_argc=%s\n' "${#ACT_ARGV[@]}"
