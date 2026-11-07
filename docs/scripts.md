@@ -20,7 +20,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
 | `fm-bearings-board.sh`   | Build and arm the stable interactive `/bearings lavish` fleet board                  |
-| `fm-objectives.sh`       | Print this home's priorities and high level objectives for Bearings and `/ahoy`      |
+| `fm-objectives.sh`       | Print this home's priorities and high level objectives for Bearings, `/ahoy`, and T3's Bridge |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |
 | `fm-secondmate-restart.sh` | Persist open conversational work, then restart eligible second mates or report the fallback outcome |
@@ -102,7 +102,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | Detect a T3 server restart and steer the T3 workers it ended                          |
 | `fm-t3-captain-label.sh` | Keep a live T3 worker's card status on "Waiting for captain" while a captain hold is open on it, and on "Testing" during its no-mistakes run |
-| `fm-t3-needs-me.sh`      | Keep the captain's T3 decision threads in line with his open captain calls, report which are new or changed for chat, and read a decision reply's task id |
+| `fm-t3-needs-me.sh`      | Keep the captain's T3 decision threads in line with his open captain calls and the Bridge's objectives in line with his objectives file, report which decisions are new or changed for chat, and read a decision reply's task id |
 | `fm-t3-main-pretool-check.sh` | PreToolUse guard for a T3 home's main: the restart reminder and the credential seatbelt |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |

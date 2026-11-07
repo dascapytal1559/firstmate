@@ -92,7 +92,8 @@ Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
 They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
 A Bearings board stays as it was; the chat digest beside it carries them.
-Details: [`fm-objectives.sh`](bin/fm-objectives.sh).
+With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab, above the decisions, and follow the file as it changes.
+Details: [`fm-objectives.sh`](bin/fm-objectives.sh) and [Objectives](docs/t3code-backend.md#objectives).
 
 ## Ideas in the backlog
 

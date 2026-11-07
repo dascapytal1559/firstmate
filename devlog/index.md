@@ -641,3 +641,29 @@ Of the two options FirstMate put to him, he took its lean:
 
 The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a due dated hold, a deferred call re-asked early, and a call whose blocker clears four days after it was raised are each open for a day, then shelved.
 The last two cases fail on the code before this change.
+
+## 26. The Bridge opens with the objectives (7 November 2026)
+
+![The objectives file on the left, with its heading, preamble, and local file pointers left behind; on the right, the Bridge tab with the objectives above the decisions](media/bridge-objectives-sync.svg)
+
+The ask, while looking at the Needs me tab:
+
+> Also, I'm considering turning Needs Me into Like a bit of a Bit of like a first maid's I don't know like overview panel. So I don't know what to name the the the tab but I want to start putting high level objectives in here as well. Just so I can constantly be reminded what my objectives are.
+
+He then picked the name Bridge.
+The T3 Code fork draws the tab and took a new tool, `t3_objectives_set`; this is FirstMate's half, which keeps the list there true:
+
+- **The objectives file stays the source.** The same sync that keeps the decision threads true, `bin/fm-t3-needs-me.sh`, now also builds the Bridge's list from `data/high-level-objectives.md` on every pass and pushes it only when it changed since the last push T3 accepted.
+- **Only the bullets travel.** Each objective keeps its bold name and its text; the heading and preamble stay in the file, and the `Last reviewed` day rides beside the list, where the Bridge shows it.
+- **Local file pointers are left behind.** A trailing sentence that only points at a file on this machine, such as where the decisions so far are kept, would mean nothing on the Bridge, so it is dropped.
+- **Nothing is ever dropped to fit.** Past T3's 8,192-character limit every objective stays and each long text is cut, ending in an ellipsis, and the sync says so.
+- **No file clears the Bridge once.** An absent file, or one with no bullets, clears the list a single time rather than on every pass.
+- **A failed push never holds the decisions back.** It is reported and tried again on the next pass, backing off after three failures in a row the way a decision does, and a T3 without the tool is skipped quietly.
+
+The choices made:
+
+- **The name and text are joined with a dash**, as the fork's README shows, rather than the colon the file uses.
+- **A pointer goes with its whole sentence.** "Added from the 5 November journal, which holds the full details: (path)" goes entirely, since without the path the sentence points at nothing; a sentence with no path, such as "(same file)", stays as written.
+
+The evidence is the decision sync suite against the fake T3 server, with new cases for the payload's shape on made-up objectives, the 8,192-character limit, a push only when the list changes, a failed and an unproven push retried, the clear, the back-off, and an older T3.
+The first push to the live T3 was left to FirstMate after landing.

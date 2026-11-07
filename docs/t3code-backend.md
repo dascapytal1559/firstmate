@@ -260,6 +260,18 @@ What FirstMate sends and relies on:
 
 When `bin/fm-t3-needs-me.sh status` says the threads match the records, Captain's Call in chat gives their count and names only new or changed decisions (`AGENTS.md` section 9).
 
+### Objectives
+
+T3's Bridge tab (formerly Needs me) shows the captain's high level objectives above the decision threads.
+Their source is the home's `data/high-level-objectives.md`: a heading, a short preamble, a `Last reviewed: YYYY-MM-DD` line, then one `- **Name:** text` bullet per objective.
+Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh --reviewed` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
+The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which travels as `lastReviewed`.
+A trailing sentence that only points at a local file, such as `Decisions so far: /path/to/decisions.md`, is left out to keep the Bridge compact.
+A list past T3's 8192-character limit keeps every objective and cuts each long text instead, and the pass says so.
+An absent file, or one with no bullets, clears the objectives once.
+A failed push is reported and retried on the next pass without holding back the decisions, and a T3 without `t3_objectives_set` is skipped quietly.
+`bin/fm-t3-mcp.mjs` (`objectives-payload` and `objectives`) owns the exact payload rules, and the T3 Code fork's `fork/README.md` owns the tool's contract; like `t3_environment_preferences_update`, it needs the full-access sign-in Firstmate already uses.
+
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.

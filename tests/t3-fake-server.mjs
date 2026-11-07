@@ -81,6 +81,10 @@
 //     payload, answering with decisionRevision, and t3_thread_read reports
 //     decisionOf, decision, and unread (a fake-only field tests read); world
 //     decisionStartsRun makes such a launch start a turn, as a broken peer.
+//   - a T3 with Bridge objectives (world objectivesTool, the T3 Code fork)
+//     offers t3_objectives_set, which replaces world objectives with
+//     {markdown, lastReviewed?} or null within the fork's bounds and answers
+//     {objectives} (world objectivesAnswer answers another value instead).
 //   - t3_thread_launch answers a repeated clientRequestId with the thread it
 //     already made; t3_thread_organize settle, unsettle, snooze (with
 //     snoozedUntil, or with no date), unsnooze, mark_unread, mark_read, and
@@ -140,7 +144,7 @@ const ALL_TOOLS = [
 ];
 const CURRENT_TOOLS = ALL_TOOLS.filter((n) => n !== "t3_thread_configuration" && !n.startsWith("t3_pending_request_"))
   .concat(["t3_pending_request"]);
-const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS);
+const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS).concat(w.objectivesTool ? ["t3_objectives_set"] : []);
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
@@ -369,6 +373,15 @@ async function callTool(w, name, a) {
   const projects = (w.projects = w.projects ?? []);
   const t = a.threadId !== undefined ? threads[a.threadId] : undefined;
   switch (name) {
+    case "t3_objectives_set": {
+      // The fork's bounds: markdown null, or trimmed non-empty text of at
+      // most 8192 characters; lastReviewed an optional YYYY-MM-DD day.
+      const md = a.markdown;
+      if (md !== null && (typeof md !== "string" || !md || md !== md.trim() || md.length > 8192)) return [err("invalid_params", "markdown out of bounds"), false];
+      if (a.lastReviewed !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(a.lastReviewed)) return [err("invalid_params", "lastReviewed is not a day"), false];
+      w.objectives = md === null ? null : { markdown: md, ...(a.lastReviewed === undefined ? {} : { lastReviewed: a.lastReviewed }) };
+      return [ok({ objectives: w.objectivesAnswer ?? w.objectives }), true];
+    }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
     case "orchestrator_capabilities":
