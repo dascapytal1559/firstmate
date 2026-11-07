@@ -25,11 +25,14 @@
 #     own work running: any process whose working directory is inside its
 #     recorded worktree, such as a background test run, a dev server, or a
 #     run it started, other than the agent itself, the agent's process
-#     group, the agent's parents (such as a tmux pane's shell), and a shell
-#     sitting at its terminal's foreground with its parents (the pane's own
-#     prompt once the agent has exited). So a paused wait with nothing
-#     running (captain feedback, a PR maintainer) reads idle, and a paused
-#     wait on the worker's own background job does not. The process listing comes from /proc where it exists, else lsof;
+#     group, and the agent's parents (such as a tmux pane's shell). Once the
+#     endpoint reads dead, the pane's own shells (its root shell and the
+#     shells in its foreground, as tmux, herdr, or rex report them) are not
+#     counted either, so the prompt left behind by an exited agent does not
+#     keep its worker active. So a paused wait with nothing running (captain
+#     feedback, a PR maintainer) reads idle, and a paused wait on the
+#     worker's own background job does not. The process listing comes from
+#     /proc where it exists, else lsof;
 #     when neither can list working directories this exits 2 rather than
 #     guess.
 #   - secondmate: an idle secondmate pane is its healthy waiting state, so
@@ -47,7 +50,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 QUIET=0
 case "${1-}" in
   -q) QUIET=1; shift ;;
-  -h|--help|help) sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help|help) sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 [ "$#" -eq 0 ] || { printf 'error: unexpected argument: %s\n' "$1" >&2; exit 2; }
 
@@ -112,6 +115,32 @@ task_verdict() {
   esac
 }
 
+# pane_pids <meta>: print the pids of a dead endpoint's pane, one per line:
+# its root shell and its foreground processes, as its backend reports them.
+# Prints nothing where the backend has no pane or the read fails.
+pane_pids() {
+  local meta=$1 backend target
+  backend=$(fm_backend_of_meta "$meta")
+  target=$(fm_backend_target_of_meta "$meta")
+  fm_backend_source "$backend" 2>/dev/null || return 0
+  case "$backend" in
+    tmux)
+      tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null
+      fm_backend_tmux_foreground_pids "$target"
+      ;;
+    herdr)
+      fm_backend_herdr_parse_target "$target" || return 0
+      fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null \
+        | jq -r '.result.process_info | .shell_pid, .foreground_processes[]?.pid | numbers' 2>/dev/null
+      ;;
+    rex)
+      fm_backend_rex_process_chain "$target" 2>/dev/null || return 0
+      printf '%s\n' "$FM_BACKEND_REX_CHAIN" | cut -f2
+      ;;
+  esac
+  return 0
+}
+
 # cwd_table: print "<pid><TAB><cwd>" for every process this user can see,
 # from /proc where it exists, else lsof. Returns 1 when neither can list
 # working directories.
@@ -128,15 +157,15 @@ cwd_table() {
   '
 }
 
-# running_work <worktrees-file>: for each "<id><TAB><worktree>" line, print
-# "<id><TAB><pid> <command>" for the first process working inside that
-# worktree that is not the agent, in the agent's process group, one of the
-# agent's parents, a shell in its terminal's foreground process group, or one
-# of that shell's parents. Returns 2 when processes cannot be listed.
+# running_work <worktrees-file> [pane-pids]: for each "<id><TAB><worktree>"
+# line, print "<id><TAB><pid> <command>" for the first process working inside
+# that worktree that is not the agent, in the agent's process group, one of
+# the agent's parents, or a shell among the space-separated pane-pids of dead
+# endpoints. Returns 2 when processes cannot be listed.
 running_work() {
-  local wts=$1 tmp candidates roots agent_groups id pid ppid pgid tpgid comm
+  local wts=$1 panes=" ${2-} " tmp candidates agents agent_groups skip_pids id pid ppid pgid comm
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-idle.XXXXXX") || return 2
-  if ! LC_ALL=C ps -axo pid=,ppid=,pgid=,tpgid=,comm= > "$tmp/ps" 2>/dev/null \
+  if ! LC_ALL=C ps -axo pid=,ppid=,pgid=,comm= > "$tmp/ps" 2>/dev/null \
     || ! cwd_table > "$tmp/cwd" || [ ! -s "$tmp/cwd" ]; then
     rm -rf "$tmp"
     return 2
@@ -145,37 +174,40 @@ running_work() {
   candidates=$(awk -F '\t' -v OFS='\t' '
     FILENAME == ARGV[1] { wt[$1] = $2; next }
     FILENAME == ARGV[2] {
-      split($0, f, " "); p = f[1]; pp[p] = f[2]; pg[p] = f[3]; tp[p] = f[4]
-      c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +-?[0-9]+ +/, "", c); cm[p] = c; next
+      split($0, f, " "); p = f[1]; pp[p] = f[2]; pg[p] = f[3]
+      c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); cm[p] = c; next
     }
     {
       for (id in wt) {
         w = wt[id]
         if (($2 == w || index($2, w "/") == 1) && ($1 in pp))
-          print id, $1, pp[$1], pg[$1], tp[$1], cm[$1]
+          print id, $1, pp[$1], pg[$1], cm[$1]
       }
     }
   ' "$wts" "$tmp/ps" "$tmp/cwd")
   # This check's own process tree (the watch runner that started it, and its
   # listing commands) is never a worker's running work, wherever it started.
-  roots=" $$"
+  agents=" $$"
+  skip_pids=''
   agent_groups=" $(awk -v p="$$" '$1 == p { print $3 }' "$tmp/ps")"
-  while IFS=$'\t' read -r id pid ppid pgid tpgid comm; do
+  while IFS=$'\t' read -r id pid ppid pgid comm; do
     [ -n "$pid" ] || continue
     case "$(fm_agent_process_classify_name "$comm")" in
       agent)
-        roots="$roots $pid"
+        agents="$agents $pid"
         agent_groups="$agent_groups $pgid"
         ;;
-      shell) [ "$tpgid" -le 0 ] || [ "$pgid" != "$tpgid" ] || roots="$roots $pid" ;;
+      shell) case "$panes" in *" $pid "*) skip_pids="$skip_pids $pid" ;; esac ;;
     esac
   done <<EOF
 $candidates
 EOF
-  printf '%s\n' "$candidates" | awk -F '\t' -v roots="$roots" -v groups="$agent_groups" '
+  printf '%s\n' "$candidates" | awk -F '\t' -v agents="$agents" -v groups="$agent_groups" -v panes="$skip_pids" '
     FILENAME == ARGV[1] { split($0, f, " "); parent[f[1]] = f[2]; next }
     FNR == 1 {
-      n = split(roots, a, " ")
+      n = split(panes, s, " ")
+      for (i = 1; i <= n; i++) skip[s[i]] = 1
+      n = split(agents, a, " ")
       for (i = 1; i <= n; i++) {
         p = a[i]
         for (hop = 0; p != "" && p > 1 && hop < 64; hop++) { skip[p] = 1; p = parent[p] }
@@ -184,7 +216,7 @@ EOF
       for (i = 1; i <= n; i++) group[g[i]] = 1
     }
     $2 == "" || ($2 in skip) || ($4 in group) || ($1 in seen) { next }
-    { seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $6 }
+    { seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $5 }
   ' "$tmp/ps" -
   rm -rf "$tmp"
   return 0
@@ -193,6 +225,7 @@ EOF
 active=0
 total=0
 idle_worktrees=''
+dead_panes=''
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
   id=$(basename "$meta" .meta)
@@ -208,12 +241,13 @@ for meta in "$STATE"/*.meta; do
   [ -n "$wt" ] && [ -d "$wt" ] || continue
   wt=$(cd "$wt" 2>/dev/null && pwd -P) || continue
   idle_worktrees="$idle_worktrees$id"$'\t'"$wt"$'\n'
+  [ "$v" != "idle endpoint dead" ] || dead_panes="$dead_panes $(pane_pids "$meta" | tr '\n' ' ')"
 done
 
 if [ -n "$idle_worktrees" ]; then
   wts_file=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-idle-wts.XXXXXX") || { printf 'error: cannot stage the worktree list\n' >&2; exit 2; }
   printf '%s' "$idle_worktrees" > "$wts_file"
-  if ! running=$(running_work "$wts_file"); then
+  if ! running=$(running_work "$wts_file" "$dead_panes"); then
     rm -f "$wts_file"
     printf 'error: cannot list running processes and their working directories (needs /proc or lsof)\n' >&2
     exit 2

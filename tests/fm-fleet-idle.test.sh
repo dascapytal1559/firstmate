@@ -14,8 +14,9 @@ IDLE="$ROOT/bin/fm-fleet-idle.sh"
 EV="$ROOT/bin/fm-busy-event.sh"
 
 # A fake tmux whose session "fmidle" holds the windows named in
-# FAKE_TMUX_WINDOWS (space-separated), each with a foreground process named
-# FAKE_PANE_COMM (claude unless a case says otherwise).
+# FAKE_TMUX_WINDOWS (space-separated), each with one foreground process,
+# FAKE_PANE_PID (4242 unless a case says otherwise) named FAKE_PANE_COMM
+# (claude unless a case says otherwise), which is also the pane's root.
 FAKEBIN="$TMP_ROOT/fakebin"
 mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/tmux" <<'SH'
@@ -25,7 +26,10 @@ case "${1-}" in
     for w in ${FAKE_TMUX_WINDOWS-}; do printf '%s\n' "$w"; done
     exit 0 ;;
   display-message)
-    case "$*" in *pane_tty*) printf '%s\n' /dev/ttysfake; exit 0 ;; esac
+    case "$*" in
+      *pane_tty*) printf '%s\n' /dev/ttysfake; exit 0 ;;
+      *pane_pid*) printf '%s\n' "${FAKE_PANE_PID:-4242}"; exit 0 ;;
+    esac
     exit 0 ;;
   capture-pane) exit 0 ;;
 esac
@@ -34,7 +38,7 @@ SH
 cat > "$FAKEBIN/ps" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
-  *"-t ttysfake"*) printf '4242 4242 4242 %s\n' "${FAKE_PANE_COMM:-claude}"; exit 0 ;;
+  *"-t ttysfake"*) p=${FAKE_PANE_PID:-4242}; printf '%s %s %s %s\n' "$p" "$p" "$p" "${FAKE_PANE_COMM:-claude}"; exit 0 ;;
   *"args="*) printf '%s\n' "${FAKE_PANE_COMM:-claude}"; exit 0 ;;
 esac
 PATH=/usr/bin:/bin exec ps "$@"
@@ -168,42 +172,55 @@ pkill -P "$AGENT_PID" 2>/dev/null; kill "$AGENT_PID" 2>/dev/null; wait "$AGENT_P
 pass "an idle worker counts while its own work runs in its worktree, never for its agent"
 
 # A worker whose agent has exited leaves its pane's shell sitting at a prompt
-# in the worktree, as the foreground of its own terminal. That prompt is not
-# the worker's running work; a background job beside it still is.
-H=$(new_home dead-pane-shell)
-WT2=$(mkdir -p "$TMP_ROOT/wt2" && cd -P "$TMP_ROOT/wt2" && pwd)
-add_task "$H" w2 ship "worktree=$WT2"
-python3 - "$WT2" "$TMP_ROOT/pane-shell.pid" <<'PY' &
-import os, pty, sys, time
-wt, pidfile = sys.argv[1], sys.argv[2]
+# in the worktree. That shell, the pane's root as tmux reports it, is not the
+# worker's running work; a background job beside it, or a shell script run in
+# the foreground of another terminal in the worktree, still is.
+in_pty() {  # <name> <dir> <argv>...: run argv on a new pty in <dir>, print its pid; it ends with argv
+  local name=$1 dir=$2
+  shift 2
+  python3 - "$dir" "$TMP_ROOT/$name.pid" "$@" <<'PY' >/dev/null 2>&1 &
+import os, pty, sys
+wt, pidfile, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
 pid, master = pty.fork()
 if pid == 0:
     os.chdir(wt)
-    os.execvp("bash", ["bash", "--noprofile", "--norc", "-i"])
+    os.execvp(argv[0], argv)
 with open(pidfile + ".tmp", "w") as f:
     f.write(str(pid))
 os.rename(pidfile + ".tmp", pidfile)
 while True:
     try:
-        os.read(master, 4096)
+        if not os.read(master, 4096):
+            break
     except OSError:
-        time.sleep(60)
+        break
 PY
-PTY_PID=$!
-for _ in $(seq 1 50); do [ -s "$TMP_ROOT/pane-shell.pid" ] && break; sleep 0.1; done
-SHELL_PID=$(cat "$TMP_ROOT/pane-shell.pid" 2>/dev/null) || fail "the pane shell fixture never started"
+  for _ in $(seq 1 50); do [ -s "$TMP_ROOT/$name.pid" ] && break; sleep 0.1; done
+  cat "$TMP_ROOT/$name.pid" 2>/dev/null
+}
+H=$(new_home dead-pane-shell)
+WT2=$(mkdir -p "$TMP_ROOT/wt2" && cd -P "$TMP_ROOT/wt2" && pwd)
+add_task "$H" w2 ship "worktree=$WT2"
+SHELL_PID=$(in_pty pane-shell "$WT2" bash --noprofile --norc -i) || fail "the pane shell fixture never started"
 wait_cwd "$SHELL_PID" "$WT2" || fail "the pane shell fixture never reached the worktree"
-OUT=$(PATH="$FAKEBIN:$PATH" FAKE_PANE_COMM=zsh FM_HOME="$H" bash "$IDLE" 2>&1); rc=$?
+dead_pane_rc() { OUT=$(PATH="$FAKEBIN:$PATH" FAKE_PANE_COMM=zsh FAKE_PANE_PID="$SHELL_PID" FM_HOME="$H" bash "$IDLE" 2>&1); }
+dead_pane_rc; rc=$?
 assert_rc "$rc" 0 "a dead endpoint's pane shell at its prompt is not running work"
 assert_contains "$OUT" "idle:" "the idle verdict is reported"
 JOB_PID=$(in_group "$WT2" sleep 60)
 wait_cwd "$JOB_PID" "$WT2" || fail "the background job fixture never started"
-OUT=$(PATH="$FAKEBIN:$PATH" FAKE_PANE_COMM=zsh FM_HOME="$H" bash "$IDLE" 2>&1); rc=$?
+dead_pane_rc; rc=$?
 assert_rc "$rc" 1 "a dead endpoint's own background job still counts"
 assert_contains "$OUT" "active: w2 - its own work is still running (pid $JOB_PID" "the job, not the shell, is named"
 kill "$JOB_PID" 2>/dev/null; wait "$JOB_PID" 2>/dev/null
-kill "$SHELL_PID" "$PTY_PID" 2>/dev/null; kill -9 "$SHELL_PID" 2>/dev/null; wait "$PTY_PID" 2>/dev/null
-pass "a dead endpoint's idle pane shell does not hold the fleet active"
+printf 'read -r -t 60 _ || true\n' > "$TMP_ROOT/wt2-script.sh"
+SCRIPT_PID=$(in_pty fg-script "$WT2" bash "$TMP_ROOT/wt2-script.sh") || fail "the foreground script fixture never started"
+wait_cwd "$SCRIPT_PID" "$WT2" || fail "the foreground script fixture never reached the worktree"
+dead_pane_rc; rc=$?
+assert_rc "$rc" 1 "a shell script in another terminal's foreground in the worktree still counts"
+assert_contains "$OUT" "active: w2 - its own work is still running (pid $SCRIPT_PID" "the script, not the pane shell, is named"
+kill -9 "$SHELL_PID" "$SCRIPT_PID" 2>/dev/null
+pass "a dead endpoint's own pane shell does not hold the fleet active, other foreground shell work does"
 
 OUT=$(FM_HOME="$TMP_ROOT/missing-home" bash "$IDLE" 2>&1); rc=$?
 assert_rc "$rc" 2 "an unavailable state directory is an error, not idle"
