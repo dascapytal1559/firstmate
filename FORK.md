@@ -178,3 +178,12 @@ The tracked [`.no-mistakes.yaml`](.no-mistakes.yaml) declares `no_ci: true`, so 
 Upstream runs GitHub Actions on every pull request; GitHub Actions are off on this fork, so no checks would ever register and the run would stall.
 The no-mistakes review and the local test and lint steps it runs stand in for CI.
 Anyone who clones the fork inherits the setting; turn it off in their copy once they have a live CI.
+
+## Review boards that keep listening
+
+A worker's Lavish review board now keeps listening after it hands the worker a note, so every message the captain sends reaches the worker as soon as it is sent, even while the worker is still working an earlier one.
+The worker posts a short acknowledgement on the board as soon as it reads a note, then its full reply when that round is done, and its re-arm acknowledges only the rounds that reply answers.
+Upstream runs one batch per round: the listener stops after each round and the worker's reply-carrying re-arm starts the next, likely so one listener and one reply always pair with one round and the older Lavish that can only post a reply with its next poll still works.
+The fork departs because that made the board feel unresponsive: anything sent mid-round waited on the board for minutes with no sign it had been seen.
+It needs a Lavish that posts replies on their own (0.1.80 and later); on an older one the board keeps upstream's one-batch behavior.
+Details: [crew-hosted review boards](docs/configuration.md#crew-hosted-lavish-review-boards).

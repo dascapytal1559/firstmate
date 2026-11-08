@@ -791,6 +791,36 @@ if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
       ;;
   esac
 fi
+# Cleanup never discards board feedback the worker has not read: a captain's
+# note on a worker's review board lives only in that worker's open round and
+# steering inbox, both of which cleanup removes. --force does not lift this -
+# it authorizes discarding unlanded work, never the captain's words.
+# bin/fm-procevent.sh task-board owns what counts as unread; with no captured
+# results and no steering inbox there is nothing it could find.
+if [ -x "$SCRIPT_DIR/fm-procevent.sh" ] \
+  && { [ -d "$STATE/procevent-inbox" ] || [ -d "$STATE/$ID.inbox" ]; }; then
+  TEARDOWN_BOARD_STATUS=0
+  TEARDOWN_BOARD_OPEN=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" task-board "$ID" 2>&1) || TEARDOWN_BOARD_STATUS=$?
+  if [ "$TEARDOWN_BOARD_STATUS" -ne 0 ]; then
+    echo "REFUSED: cannot tell whether task $ID's review board holds unread feedback; nothing was changed" >&2
+    [ -z "$TEARDOWN_BOARD_OPEN" ] || printf '%s\n' "$TEARDOWN_BOARD_OPEN" >&2
+    exit 1
+  fi
+  if [ -n "$TEARDOWN_BOARD_OPEN" ]; then
+    echo "REFUSED: task $ID's review board holds feedback its worker has not acknowledged; nothing was changed" >&2
+    while IFS=$(printf '\t') read -r board_kind _ board_a board_b board_c; do
+      case "$board_kind" in
+        round) printf '  open round %s of board %s: %s\n' "$board_b" "$board_a" "$board_c" >&2 ;;
+        note) printf '  unread inbox note %s for %s\n' "$board_a" "$board_b" >&2 ;;
+      esac
+    done <<EOF
+$TEARDOWN_BOARD_OPEN
+EOF
+    echo "Read each with bin/fm-procevent-lavish.sh read <result-file> and relay it, then acknowledge an open round with bin/fm-procevent.sh handled <source-id> <round> and file a read note into the inbox's handled/ directory, then retry cleanup." >&2
+    exit 1
+  fi
+fi
 
 REMOTE_HANDOFF_DIR_PRESENT=0
 REMOTE_HANDOFF_DIR_REAL=
@@ -4146,6 +4176,19 @@ chmod u+w "$STATE/$ID.git-hooks" 2>/dev/null || true
 # and the git-hooks dir rather than the flat file list above.
 # state/<id>.cortex-plugin is the per-task Cortex Code plugin directory
 # (bin/fm-cortex-plugin.sh) carrying the busy-state hooks.
+# A review board this task still holds would keep capturing the captain's notes
+# into an inbox nobody reads, so its listener is retired with the inbox. A
+# round captured after the unread-feedback refusal above keeps its board, and
+# the wake drain names it (bin/fm-procevent.sh task-board --all).
+if [ -x "$SCRIPT_DIR/fm-procevent.sh" ] && [ -d "$STATE/procevent" ]; then
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null \
+    | awk -v want="task:$ID/" 'index($3, want) == 1 { print $1 }' \
+    | while IFS= read -r board_source; do
+        FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+          "$SCRIPT_DIR/fm-procevent.sh" retire "$board_source" >/dev/null 2>&1 \
+          || echo "warning: task $ID's review board $board_source stayed armed because a round arrived during cleanup; the next wake drain lists it" >&2
+      done
+fi
 rm -rf "$STATE/$ID.inbox" "$STATE/$ID.git-hooks" "$STATE/$ID.push-guard" \
   "$STATE/$ID.cortex-plugin" "$STATE/$ID.hermes-hooks" \
   "$STATE/$ID.polytoken-config" \

@@ -25,6 +25,7 @@ Outside T3 Code:
 - [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
 - [When no worker is running](FORK.md#do-it-when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
 - [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
+- [Live review boards](FORK.md#review-boards-that-keep-listening): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

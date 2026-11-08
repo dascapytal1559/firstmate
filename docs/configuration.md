@@ -2937,7 +2937,23 @@ After opening the artifact as required above, the worker arms it with `bin/fm-pr
 **Acknowledge a round by re-arming**
 
 The registration persists as one task-owned source record, while each captured nonterminal round remains open until the worker re-arms and the existing handled marker acknowledges that round.
-Re-arm acknowledges that round and registers the next listener: the board is armed once while no record exists, and a further arm by the same owner is refused unless an unacknowledged nonterminal round is waiting, so an open round is never replaced before its owner acknowledges it.
+Re-arm with `--through <round>` acknowledges the open rounds up to that sequence and leaves any later one open, so a round the captain sent while the worker was busy is never acknowledged unread; without `--through` it acknowledges every open round.
+The board is armed once while no record exists, and a further arm by the same owner is refused unless an unacknowledged nonterminal round within its bound is waiting, so an open round is never replaced before its owner acknowledges it.
+
+**Keep listening between rounds**
+
+With a Lavish that posts replies synchronously (`bin/fm-bootstrap.sh lavish-reply-compatible`), a worker-owned board keeps listening: once a nonterminal round's note is in the owner's steering inbox, the same runner polls again for the next Send instead of waiting for the owner's re-arm.
+The adapter's `live-steer` command is that decision.
+
+- Every Send is its own captured round with its own sequence and its own inbox note, delivered as soon as the captain sends it, even while the worker is still working an earlier round; one live listener still serves the board, and no round is merged into or replaced by another.
+- A re-arm beside the listener its own registration runs posts the reply through `lavish-axi reply` and acknowledges, without republishing the registration, so that listener keeps serving the board and the arm reports `armed`.
+- The worker posts its prompt acknowledgement with `bin/fm-procevent-lavish.sh reply <artifact.html> --for <task-id>`, which needs the board held by that task and acknowledges no round.
+- Lavish marks the notes it delivered as Done in the reviewer's panel on any reply, the interim one included, and clears its Working indicator once the listener polls again, so that interim reply is what tells the captain the worker has the note.
+- A round whose note cannot be written to the owner's inbox stops the listener, and a source is restarted with an open round only after every open round's note has reached the owner's inbox and none is terminal.
+- With an older compatible Lavish the board keeps one round per listener: the runner stops after each round, the worker's re-arm starts the next listener, and `reply` refuses.
+
+The note reaches the worker as an ordinary steer, so how soon a busy worker reads it is a property of its runtime.
+A T3 Code worker running Claude receives a steer sent mid-turn at its next tool call, while a tmux, Herdr, or other terminal worker sees it when its harness takes queued input; [`verification/runtime-backends.md`](verification/runtime-backends.md) records the measurements.
 
 **Post an agent reply**
 
@@ -2957,8 +2973,17 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 - The captured result is stored with immutable task-owner routing evidence and delivered directly to that task's steering inbox, without a firstmate `check` wake for the captain's words.
 - The doorbell rings only when that idempotent write creates a fresh inbox record; filing the note into `handled/` is the worker's own acknowledgement of the delivery, so a later reconcile never moves an already-filed note back into the active inbox or re-rings its owner, and re-delivery of a note still open in the inbox is left to the steering inbox's own re-ring ladder.
-- A task-owned source with an unhandled capture is not relaunched, so delivery failure cannot consume a round and start another poll.
+- A task-owned source with an unhandled capture is not relaunched unless it keeps listening between rounds and that capture's note is already in the owner's inbox, so delivery failure cannot consume a round and start another poll.
 - That record is the only ownership evidence there is, so while any captured round of it is unacknowledged every retirement path refuses - the runner's own terminal retirement and an explicit `retire` alike - and the refusal names the acknowledgement that releases it.
+
+**Unread feedback at cleanup**
+
+The captain's words on a worker's board live only in that worker's open rounds and steering inbox, so nothing that removes the worker may discard them unread.
+`bin/fm-procevent.sh task-board <task-id>` lists the task's unacknowledged rounds and its board notes still unread in its inbox, and `--all` lists every unread note in the home plus the open rounds whose owner task has no record left.
+
+- `bin/fm-teardown.sh` refuses, with `--force` too, while that list is not empty, naming each round, its result file, and each unread note; firstmate reads them with `bin/fm-procevent-lavish.sh read`, relays them, acknowledges an open round with `bin/fm-procevent.sh handled`, and files a read note before retrying.
+- Once cleanup proceeds it retires the board's listener with the task, so later notes cannot land in an inbox nobody reads; a round captured during cleanup keeps its board and stays listed.
+- The wake drain prints a BOARD FEEDBACK section from `--all`, and `bin/fm-captain-hold.sh complete` names the origin's unread board feedback after its completion line, because a board note can be the very answer a decision inventory is about.
 
 **Conclude a terminal round**
 
@@ -2972,8 +2997,8 @@ The Lavish version floors and feature probe are owned by `bin/fm-bootstrap.sh`.
 
 - A second armer is refused with the current owner named, and the source list derives `listening`, `round-open`, or `dead` from the claim and handled captures without a second ownership record.
 - If the hosting worker cannot be recovered, relaunch a worker to re-host first; guarded firstmate adoption is an explicit last resort only after the old claim is proved dead.
-- The cross-home gap between worker rounds remains an accepted residual until lavish-axi's exclusive listener lands.
-- The interim crew instruction emitted by `bin/fm-brief.sh` points workers at this arm-and-acknowledge contract.
+- A board that keeps listening between rounds has no gap between rounds while its runner lives; with an older Lavish, the cross-home gap between worker rounds remains an accepted residual.
+- The crew instruction emitted by `bin/fm-brief.sh` points workers at this arm, acknowledge, and reply contract.
 
 **Register deterministic condition and action watches**
 

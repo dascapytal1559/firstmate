@@ -584,6 +584,50 @@ EOF
   printf 'RECORD DIVERGENCE: reconcile each one - record the captain'"'"'s own words with bin/fm-captain-hold.sh answer <task> --decision-file <path>, or re-open the status decision when that resolution was not the captain'"'"'s word.\n' || return 1
 }
 
+# Print the BOARD FEEDBACK section: captain notes captured from a worker-owned
+# review board that nobody has read yet - a delivery note still unread in a
+# worker's steering inbox, or an open round whose worker has no record left.
+# That feedback normally goes only to the worker, so this is how firstmate
+# learns the captain wrote on a board before it acts on that worker (a
+# decision, a cleanup). bin/fm-procevent.sh task-board --all owns which items
+# count. Bounded and silent like RECORD DIVERGENCE above, and a read failure
+# never changes the drain's exit status.
+print_board_feedback_section() {
+  local open kind task a b c line shown=0 omitted=0
+  local output='' used=0 bytes item_bytes=320 global_bytes=2000
+  [ -x "$SCRIPT_DIR/fm-procevent.sh" ] || return 0
+  open=$(fm_run_timed 20 env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" task-board --all 2>/dev/null) || return 0
+  [ -n "$open" ] || return 0
+  while IFS=$(printf '\t') read -r kind task a b c; do
+    case "$kind" in
+      note) line="$task has not read board note $a ($b)" ;;
+      round) line="$task is gone but round $b of its board $a is still open: $c" ;;
+      *) continue ;;
+    esac
+    fm_cap_line_var "$line" $((item_bytes - 1))
+    line=$FM_LINE_CAP_LINE
+    bytes=$(( ${#line} + 1 ))
+    if [ $((used + bytes)) -gt "$global_bytes" ]; then
+      omitted=$((omitted + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + bytes))
+    shown=$((shown + 1))
+  done <<EOF
+$open
+EOF
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
+  printf 'BOARD FEEDBACK (the captain wrote on a worker'"'"'s review board and nobody has read it yet):\n' || return 1
+  printf '%s' "$output" || return 1
+  if [ "$omitted" -gt 0 ]; then
+    printf 'BOARD FEEDBACK: %d more omitted (byte cap)\n' "$omitted" || return 1
+  fi
+  printf 'BOARD FEEDBACK: read one with bin/fm-procevent-lavish.sh read <result-file> before deciding or cleaning up that task; a live worker acknowledges its own notes, and an orphaned round is acknowledged with bin/fm-procevent.sh handled <source-id> <round> once relayed.\n' || return 1
+}
+
 # Print BRANCH OUTCOMES: what the supervision host's session recorded since
 # main last drained (docs/supervision-host.md "Captain outcomes"). Off Pi this
 # presentation is what the Pi branch's transcript entries are. It runs only for
@@ -770,7 +814,8 @@ print_status_sections() {
     print_unread_status_section "$snapshot" \
       && print_status_outcome_backstop_section "$snapshot" \
       && print_open_decisions_section "$snapshot" \
-      && print_record_divergence_section
+      && print_record_divergence_section \
+      && print_board_feedback_section
   } > "$prepared"; then
     rm -f -- "$prepared"
     return 1

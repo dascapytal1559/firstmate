@@ -1129,11 +1129,13 @@ test_scout_completion_write_exception_is_task_scoped() {
 }
 
 # A scout brief offers the Lavish review loop for every compatible board version,
-# including older builds that use the legacy reply path.
+# including older builds that use the legacy reply path; only a build that posts
+# replies on its own gets the live board's prompt acknowledgement.
 test_scout_lavish_line_follows_presentation_floor() {
   local base label version expect case_dir fakebin brief n=0
   local hosting='use the lavish-axi rule'
   local text_only='deliver your findings as a text report without Lavish'
+  local live='post a short acknowledgement on the board with bin/fm-procevent-lavish.sh reply'
   base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
   while IFS='^' read -r label version expect; do
     [ -n "$label" ] || continue
@@ -1146,8 +1148,14 @@ test_scout_lavish_line_follows_presentation_floor() {
       "$ROOT/bin/fm-brief.sh" scout-lavish alpha --scout >/dev/null \
       || fail "$label: scout scaffold failed"
     brief="$case_dir/home/data/scout-lavish/brief.md"
-    if [ "$expect" = hosting ]; then
+    if [ "$expect" = live ]; then
       assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
+      assert_grep "$live" "$brief" "$label: scout brief did not ask for a prompt acknowledgement on the board"
+      assert_grep "--through <round>" "$brief" "$label: scout brief did not bound the re-arm to the rounds it answers"
+      assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
+    elif [ "$expect" = hosting ]; then
+      assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
+      assert_no_grep "$live" "$brief" "$label: scout brief asked an older Lavish for an interim reply it cannot post"
       assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
     else
       assert_grep "$text_only" "$brief" "$label: scout brief did not ask for a text report"
@@ -1156,8 +1164,8 @@ test_scout_lavish_line_follows_presentation_floor() {
   done <<'ROWS'
 lavish-axi at the board compatibility floor^0.1.77^hosting
 lavish-axi below the reply feature floor^0.1.79^hosting
-lavish-axi at the reply feature floor^0.1.80^hosting
-lavish-axi above the reply feature floor^0.2.0^hosting
+lavish-axi at the reply feature floor^0.1.80^live
+lavish-axi above the reply feature floor^0.2.0^live
 lavish-axi below the board compatibility floor^0.1.76^text
 absent lavish-axi^absent^text
 ROWS
