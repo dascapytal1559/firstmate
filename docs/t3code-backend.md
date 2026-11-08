@@ -234,7 +234,7 @@ A call with no recorded context still appears, with its hold reason as the quest
 
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
 
-- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card for a day after it last became actionable, then moves to the Snoozed shelf with no date; it becomes actionable when it is raised, updated (`context --changed`), or turns live from deferred or blocked (its `--until` date comes due, it is re-held without that date, or its blocker clears), and each of those starts another day;
+- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card, and counts as waiting, until it is answered or closed, however long it waits;
 - a call deferred with `--until` is snoozed until 00:00 UTC on that date;
 - a blocked call sits in Settled until it unblocks;
 - an answered or released call is settled, then archived a day later;

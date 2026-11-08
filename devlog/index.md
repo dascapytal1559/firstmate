@@ -701,3 +701,18 @@ The choices made:
 The evidence is the regression suites, plus a timing run with the watcher running, absorbing, and scanning once a second: a routine turn-end fired a watch with a 10 minute interval 1.1 to 1.8 seconds later, in five runs at the watcher's default 30 second linger.
 In a real home the watcher notices a turn-end on its next scan, which comes within 15 seconds by default.
 Tests also show a busy worker holding the hook back, an idle worker's background job holding it back while its agent does not, the hook firing once and never again, and the interval still firing it with no event at all.
+
+## 28. Open calls stay at the top until answered (8 November 2026)
+
+A comparison of this fork with upstream FirstMate found that entry 25's rule hid calls: a decision thread stayed under FirstMate's card for a day after it last became actionable, then moved to the Snoozed shelf (Later) with no return date.
+There it stopped counting in the waiting total while the call was still open, which goes against upstream's intent that silence and batching never hide a decision.
+His answer:
+
+> Okay, um let's not snooze it.
+
+- **No more day at the top.** `bin/fm-t3-needs-me.sh` keeps a live or long-waiting call as an active thread under FirstMate's card, counted as waiting, until it is answered or closed, however long it waits.
+- **The bookkeeping went with it.** The one-day timer, the `activeSince` stamp in each call's sync record, and the T3 helper's "shelve" flag existed only for that rule, so all three are gone.
+- **Everything else is unchanged.** A call deferred with `--until` still sits snoozed until its date, a blocked call still waits in Settled, his own snooze, settle, or archive still stands, and chat still names only new or changed decisions.
+- **Calls the old rule shelved come back** on the next pass, since the wanted state for those calls changed.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a call raised a week ago, a dated hold a day after its date, a deferred call re-asked early, and a call whose blocker cleared all stay under FirstMate's card, and a thread the old rule left on the shelf comes back.

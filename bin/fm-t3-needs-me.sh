@@ -18,8 +18,8 @@
 #     and one more when the objectives changed.
 #   fm-t3-needs-me.sh status
 #     Read-only, no T3 call: whether the last pass matched the records, how
-#     many decisions wait under FirstMate's card (a snoozed one, dated or on
-#     the Snoozed shelf, is not counted), and which of them are new or changed
+#     many decisions wait under FirstMate's card (one snoozed until its
+#     --until date is not counted), and which of them are new or changed
 #     since `mentioned` last recorded them. Prints
 #       in_sync: yes|no
 #       waiting: <n>
@@ -34,13 +34,9 @@
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
 #     message names none, 2 when it names more than one or a malformed id.
 #
-# Wanted state, per task: a live or aged hold is actionable, and is an active
-# thread (under FirstMate's card) for a day after it last became actionable,
-# then snoozed with no date (the Snoozed shelf). It becomes actionable when it
-# is raised, updated (context --changed; a rewrite without it is not an
-# update), or turns live or aged from dated or blocked (its --until date came
-# due, it was re-held without that date, or its blocker cleared). A dated hold
-# (--until) is snoozed until 00:00 UTC on that date; a
+# Wanted state, per task: a live or aged hold is an active thread (under
+# FirstMate's card) until it is answered or closed, however long it waits; a
+# dated hold (--until) is snoozed until 00:00 UTC on that date; a
 # blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
 # that closed or was released is settled, then archived a day after that
 # settle was proven. The payload is the context record from this hold (same
@@ -58,12 +54,8 @@
 # archived himself stays so until Firstmate's records change. A failed call,
 # a lost reply, or a T3 restart keeps the old hash, and the next pass applies
 # it again; thread creation is retried under the same request id, so it lands
-# on the thread T3 already made. The same record keeps activeSince, the epoch
-# its day started: null while the hold is not actionable, else the latest of
-# its raise, its last update, and the first pass that saw it actionable after a
-# null (with no record for this hold, its raise and updates alone). An item
-# that failed three times in a row is retried every 15 minutes rather than
-# every pass. A pass whose every item
+# on the thread T3 already made. An item that failed three times in a row is
+# retried every 15 minutes rather than every pass. A pass whose every item
 # was proven writes state/t3-needs-me/.synced, the hash of the whole wanted
 # set, which is what status compares. state/needs-me-mentioned/<task-id>
 # holds "<hold-set>#<revision>" as last named in chat.
@@ -101,7 +93,6 @@ MENTIONED="$STATE/needs-me-mentioned"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 ARCHIVE_AFTER=86400
-SHELVE_AFTER=86400
 BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
 
@@ -175,7 +166,7 @@ plan() {
   slurp_dir "$CONTEXTS" > "$WORK/contexts.json" || return 1
   slurp_dir "$SYNCS" > "$WORK/locals.json" || return 1
   jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" \
-    --slurpfile loc "$WORK/locals.json" --arg home "$FM_HOME" --argjson now "$NOW" --argjson archiveAfter "$ARCHIVE_AFTER" --argjson shelveAfter "$SHELVE_AFTER" '
+    --slurpfile loc "$WORK/locals.json" --arg home "$FM_HOME" --argjson now "$NOW" --argjson archiveAfter "$ARCHIVE_AFTER" '
     def iso: if . == null then null elif test("T") then . else . + "T00:00:00Z" end;
     def abs: if .kind == "link" or (.path | startswith("/")) then . else .path = ($home + "/" + .path) end;
     def entry: {at, kind} + (if .changed then {changed} else {} end) + {text}
@@ -190,16 +181,9 @@ plan() {
          | ($locs[$r.id]) as $l
          | (if $c != null and ($c.entries | length) > 0 then $c.entries else
               [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | ($r.hold_bucket == "live" or $r.hold_bucket == "aged") as $actionable
-         | ([($r.hold_set // $r.since | iso), ($entries[] | select(.kind == "update") | .at)]
-            | map(select(. != null) | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch null) | map(select(. != null)) | max) as $raisedOrUpdated
-         | (if $l != null and ($l.holdSet // "") == ($r.hold_set // "") and ($l | has("activeSince"))
-            then ($l.activeSince // $now) else null end) as $lastActive
-         | (if $actionable then ([$raisedOrUpdated, $lastActive] | map(select(. != null)) | max) else null end) as $activeSince
-         | ($activeSince != null and ($now - $activeSince) >= $shelveAfter) as $shelved
-         | (if $shelved then "snoozed" elif $actionable then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
-         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase, shelved: $shelved, activeSince: $activeSince,
-            snoozedUntil: (if $phase == "snoozed" and ($shelved | not) then ($r.hold_until | iso) else null end),
+         | (if $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
+         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase,
+            snoozedUntil: (if $phase == "snoozed" then ($r.hold_until | iso) else null end),
             holdSet: ($r.hold_set // ""),
             decision: ({taskId: $r.id, title: ($r.title[:200])}
               + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
@@ -215,7 +199,6 @@ plan() {
          | . as $l
          | {taskId: $l.taskId, title: ($l.title // $l.taskId),
             phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
-            shelved: false, activeSince: null,
             snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
             newestKind: null, newestChanged: null, local: $l})
       ]
@@ -297,7 +280,6 @@ sync_decisions() {
             thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
             requestId: "fm-needs-me:\($key):\($p.taskId)",
             apply: ($h[$p.taskId] != ($p.local.hash // null)),
-            shelve: ($p.shelved and ($p.local.phase // null) == "active"),
             markUnread: ($p.local != null and ($p.local.holdSet // "") == $p.holdSet
               and $p.newestKind == "update" and ($p.decision.revision // 0) > ($p.local.revision // 0))}]}
   ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
@@ -335,13 +317,12 @@ sync_decisions() {
           if $p.phase == "archived" or ($p.phase == "closed" and $r.thread == null) then {drop: true}
           else {record: {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation, hash: $hash,
                  phase: $p.phase, revision: ($p.decision.revision // 0), holdSet: $p.holdSet, decision: $p.decision,
-               activeSince: $p.activeSince,
                  closedAt: (if $p.phase == "closed" then ($l.closedAt // $now) else null end),
                  failures: 0, failedAt: null}}
           end
         else {failed: $r.error.message,
               record: ($l + {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation,
-                           decision: ($l.decision // $p.decision), activeSince: $p.activeSince,
+                           decision: ($l.decision // $p.decision),
                              failures: (($l.failures // 0) + 1), failedAt: $now})}
         end
     ' "$WORK/out.json" > "$WORK/result.json" || { echo "t3-needs-me: the result for $id could not be read"; failed=1; continue; }
@@ -369,12 +350,11 @@ sync_decisions() {
     rm -f -- "$SYNCS/.synced"
   fi
 
-  # A decision no longer waiting needs no mention record; one on the Snoozed
-  # shelf still waits, so an update that brings it back reads as changed.
+  # A decision no longer waiting needs no mention record.
   if [ -d "$MENTIONED" ]; then
     for f in "$MENTIONED"/*; do
       [ -f "$f" ] || continue
-      jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and (.phase == "active" or .shelved))' \
+      jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and .phase == "active")' \
         "$WORK/plan.json" >/dev/null || rm -f -- "$f"
     done
   fi
