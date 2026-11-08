@@ -51,6 +51,8 @@ Details: [task shape](docs/t3code-backend.md#task-shape-and-metadata).
 
 A new T3 Code project is titled with its folder name instead of `fm-<folder>`, and a worker's thread is titled with its task's title instead of an internal id.
 The worker cards in T3 Code's sidebar then read as the project and the work.
+Upstream's `fm-` prefix is there to tell FirstMate's crew apart from the captain's own threads.
+The crew lineage described above now does that, so the prefix is no longer needed.
 Task titles are cut to 96 characters, so short titles read best.
 Projects already in T3 Code keep their old titles, and FirstMate's own records still track each worker by its id, never by the title.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
@@ -68,6 +70,9 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it at once instead of at the end of its next 15-second wait.
 FirstMate can then allow or deny the approval itself, from its own session, instead of interrupting the worker and steering it again.
+Upstream treats an approval as a human checkpoint: it is answered only in T3 Code itself, and recovery never answers one.
+The fork departs because the captain never deals with workers directly, so FirstMate answers approvals that stay within the worker's task and are not destructive or security-sensitive.
+Anything else still comes to the captain as FirstMate's own question.
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
@@ -103,6 +108,8 @@ Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
 They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
 A Bearings board stays as it was; the chat digest beside it carries them.
+Upstream's Bearings has exactly four sections and `/ahoy` reads only the session history.
+The fork keeps both: the two blocks sit above the four sections rather than becoming a fifth, an empty list prints nothing, and `/ahoy` runs one read-only reader for them and nothing else.
 With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab, above the decisions, and follow the file as it changes.
 Details: [`fm-objectives.sh`](bin/fm-objectives.sh) and [Objectives](docs/t3code-backend.md#objectives).
 
@@ -161,6 +168,8 @@ Details: [capability gate](docs/t3code-backend.md#capability-gate).
 
 The T3 Code fork turns its product telemetry off by default, so a server with no telemetry setting now reads as off and draws no warning.
 FirstMate still warns when the server turns telemetry on, or when it cannot read the setting.
+Upstream warns unless the server proves telemetry is off, because stock T3 Code has it on by default.
+The fork departs because its T3 Code turns telemetry off by default, so a missing setting no longer means on.
 Details: [setup](docs/t3code-backend.md#setup).
 
 ## No CI by default
