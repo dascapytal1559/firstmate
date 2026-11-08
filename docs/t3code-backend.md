@@ -265,8 +265,8 @@ Captain's Call in chat still lists every open decision as a short line, exactly 
 
 T3's Bridge tab (formerly Needs me) shows the captain's high level objectives above the decision threads.
 Their source is the home's `data/high-level-objectives.md`: a heading, a short preamble, a `Last reviewed: YYYY-MM-DD` line, then one `- **Name:** text` bullet per objective.
-Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh --reviewed` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
-The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which travels as `lastReviewed`.
+Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
+The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which stays in the file and is not sent to T3.
 A trailing sentence that only points at a local file, such as `Decisions so far: /path/to/decisions.md`, is left out to keep the Bridge compact.
 A list past T3's 8192-character limit keeps every objective and cuts each long text instead, and the pass says so.
 An absent file, or one with no bullets, clears the objectives once.

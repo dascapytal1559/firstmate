@@ -244,19 +244,17 @@
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
 //     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
-//     bin/fm-objectives.sh --reviewed. Each objective row becomes one bullet:
+//     bin/fm-objectives.sh. Each objective row becomes one bullet:
 //     `**Name:** text` becomes `- **Name** — text`, and a trailing sentence
-//     that ends in an absolute local path (/... or ~/...) is dropped.
-//     lastReviewed is objectivesLastReviewed when that is a real day. Past
+//     that ends in an absolute local path (/... or ~/...) is dropped. Past
 //     8192 characters every objective's text is cut to one shared length,
 //     ending in an ellipsis, so none is dropped. No rows give markdown null.
-//     Prints {markdown, lastReviewed, objectives (the count), shortened (how
-//     many texts were cut)}.
+//     Prints {markdown, objectives (the count), shortened (how many texts
+//     were cut)}.
 //   fm-t3-mcp.mjs objectives --file <json-file>
-//     Replaces the Bridge's objectives with <json-file>'s {markdown,
-//     lastReviewed} through t3_objectives_set (markdown null clears them;
-//     lastReviewed null is left out). T3 must answer with exactly what was
-//     sent, else exit 1 (objectives_unproven). Exit 4
+//     Replaces the Bridge's objectives with <json-file>'s {markdown} through
+//     t3_objectives_set (markdown null clears them). T3 must answer with
+//     exactly that markdown, else exit 1 (objectives_unproven). Exit 4
 //     (objectives_unsupported) when this T3 has no t3_objectives_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
@@ -2065,7 +2063,6 @@ async function decisions(flags) {
 // --- objectives (docs/t3code-backend.md "Objectives") ---------------------
 
 export const OBJECTIVES_MAX = 8192;
-const OBJECTIVES_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const LOCAL_PATH = /^\(?(?:\/|~\/)\S*$/;
 
 // <text> without its trailing source pointers: a last sentence whose final
@@ -2092,17 +2089,9 @@ function cutText(text, max) {
   return `${head.trimEnd()}…`;
 }
 
-// <day> when it is a real YYYY-MM-DD calendar day, else null.
-function realDay(day) {
-  if (typeof day !== "string" || !OBJECTIVES_DAY.test(day)) return null;
-  const at = new Date(`${day}T00:00:00Z`);
-  return !Number.isNaN(at.getTime()) && at.toISOString().slice(0, 10) === day ? day : null;
-}
-
-// The Bridge payload from bin/fm-objectives.sh --reviewed's output: its
-// {text} objective rows and objectivesLastReviewed.
+// The Bridge payload from bin/fm-objectives.sh's output: its {text} objective
+// rows.
 export function objectivesPayload(source) {
-  const lastReviewed = realDay(source?.objectivesLastReviewed);
   const rows = Array.isArray(source?.objectives) ? source.objectives : [];
   const items = rows.filter((r) => typeof r?.text === "string" && r.text.trim()).map((r) => {
     const whole = r.text.trim();
@@ -2135,7 +2124,7 @@ export function objectivesPayload(source) {
   }
   markdown = markdown.trim();
   const shortened = items.filter((it) => it.text.length > cap).length;
-  return { ok: true, markdown: markdown || null, lastReviewed, objectives: items.length, shortened };
+  return { ok: true, markdown: markdown || null, objectives: items.length, shortened };
 }
 
 async function objectivesPayloadVerb(flags) {
@@ -2156,18 +2145,14 @@ async function objectives(flags) {
     usage(`--file is not readable JSON: ${err.message}`);
   }
   const markdown = input?.markdown ?? null;
-  const lastReviewed = input?.lastReviewed ?? null;
   if (markdown !== null && (typeof markdown !== "string" || !markdown.trim() || markdown !== markdown.trim() || markdown.length > OBJECTIVES_MAX)) {
     usage(`--file markdown must be null or trimmed, non-empty text of at most ${OBJECTIVES_MAX} characters`);
   }
-  if (lastReviewed !== null && (typeof lastReviewed !== "string" || !OBJECTIVES_DAY.test(lastReviewed))) usage("--file lastReviewed must be null or YYYY-MM-DD");
   const { session } = await verifiedSession(flags);
   if (!session.toolSchemas.has("t3_objectives_set")) throw new Refusal("objectives_unsupported", "this T3 has no Bridge objectives", 4);
-  const sent = markdown === null ? null : { markdown, ...(lastReviewed === null ? {} : { lastReviewed }) };
-  const out = await session.call("t3_objectives_set", sent ?? { markdown: null });
+  const out = await session.call("t3_objectives_set", { markdown });
   const got = out?.objectives ?? null;
-  const same = sent === null ? got === null
-    : got !== null && got.markdown === sent.markdown && (got.lastReviewed ?? null) === (sent.lastReviewed ?? null);
+  const same = markdown === null ? got === null : got !== null && got.markdown === markdown;
   if (!same) throw new Refusal("objectives_unproven", "T3 accepted the objectives but answered with different ones", 1);
   return { ok: true, objectives: got };
 }

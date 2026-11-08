@@ -537,7 +537,7 @@ objectives_payload() {
   mkdir -p "$home/data"
   rm -f "$home/data/high-level-objectives.md"
   [ ! -f "$1" ] || cp "$1" "$home/data/high-level-objectives.md"
-  FM_HOME="$home" "$ROOT/bin/fm-objectives.sh" --reviewed > "$home/source.json" || return 1
+  FM_HOME="$home" "$ROOT/bin/fm-objectives.sh" > "$home/source.json" || return 1
   node "$ROOT/bin/fm-t3-mcp.mjs" objectives-payload --file "$home/source.json"
 }
 
@@ -552,16 +552,15 @@ test_objectives_payload_shape() {
     '- **Reading** — a book a month. Added from the 4 October journal (same file).' \
     '- A bullet with no name, see https://example.com/list')
   assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "only the bullets, names bold, local path pointers dropped"
-  assert_equals "2026-10-01" "$(printf '%s' "$out" | jq -r '.lastReviewed')" "lastReviewed comes from the review line"
+  assert_equals "false" "$(printf '%s' "$out" | jq 'has("lastReviewed")')" "the review line does not travel"
   assert_equals "5 0" "$(printf '%s' "$out" | jq -r '"\(.objectives) \(.shortened)"')" "five objectives, none shortened"
-  printf '# High level objectives\n\nLast reviewed: 2026-02-30\n\n- **Only:** one. Notes: /tmp/x\n' > "$f"
+  printf '# High level objectives\n\nLast reviewed: 2026-10-01\n\n- **Only:** one. Notes: /tmp/x\n' > "$f"
   out=$(objectives_payload "$f")
-  assert_equals "null" "$(printf '%s' "$out" | jq -r '.lastReviewed')" "a day that does not exist is left out"
   assert_equals "- **Only** — one." "$(printf '%s' "$out" | jq -r '.markdown')" "a single objective keeps its text"
   printf '# High level objectives\n\nNothing yet.\n' > "$f"
   assert_equals "null" "$(objectives_payload "$f" | jq -r '.markdown')" "a file with no bullets clears them"
   assert_equals "null" "$(objectives_payload "$TMP_ROOT/none.md" | jq -r '.markdown')" "an absent file clears them"
-  pass "fm-t3-mcp.mjs objectives-payload: the bullets, bold names, no local paths, and the review day"
+  pass "fm-t3-mcp.mjs objectives-payload: the bullets, bold names, no local paths, and no review day"
 }
 
 test_objectives_payload_fits_the_limit() {
@@ -591,7 +590,7 @@ test_objectives_push_only_when_changed() {
   out=$(sync_now)
   expect_code 0 "$?" "the first pass pushes them: $out"
   assert_equals "1" "$(objectives_calls)" "one push"
-  assert_equals "2026-10-01" "$(jq -r '.objectives.lastReviewed' "$T3_FAKE_WORLD")" "with the review day"
+  assert_equals '["markdown"]' "$(t3_fake_calls t3_objectives_set | jq -sc '.[0] | keys')" "carrying only the list, no review day"
   assert_equals "$(objectives_payload "$HOME_DIR/data/high-level-objectives.md" | jq -r '.markdown')" \
     "$(jq -r '.objectives.markdown' "$T3_FAKE_WORLD")" "and the built list"
   : > "$T3_FAKE_LOG"

@@ -45,7 +45,7 @@
 # retried every 15 minutes rather than every pass.
 #
 # Each sync pass also pushes the captain's high level objectives, as
-# bin/fm-objectives.sh --reviewed reads them, to the top of T3's Bridge tab
+# bin/fm-objectives.sh reads them, to the top of T3's Bridge tab
 # (docs/t3code-backend.md "Objectives"), only when the payload bin/fm-t3-mcp.mjs
 # objectives-payload builds from them differs from the last proven push,
 # whose hash state/t3-needs-me/.objectives keeps; an absent file, or one with
@@ -286,11 +286,11 @@ sync_decisions() {
 sync_objectives() {
   local helper=$SCRIPT_DIR/fm-t3-mcp.mjs rec='{}' hash rc=0 shortened
   command -v node >/dev/null 2>&1 || { echo "t3-needs-me: objectives: node is required"; return 1; }
-  FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-objectives.sh" --reviewed > "$WORK/objectives-source.json" 2>"$WORK/objectives.err" \
+  FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-objectives.sh" > "$WORK/objectives-source.json" 2>"$WORK/objectives.err" \
     || { echo "t3-needs-me: objectives: the objectives file could not be read: $(head -n 1 "$WORK/objectives.err"); the next pass retries"; return 1; }
   node "$helper" objectives-payload --file "$WORK/objectives-source.json" > "$WORK/objectives.json" 2>"$WORK/objectives.err" \
     || { echo "t3-needs-me: objectives: the payload could not be built: $(head -n 1 "$WORK/objectives.err")"; return 1; }
-  jq -c '{markdown, lastReviewed}' "$WORK/objectives.json" > "$WORK/objectives-payload.json" \
+  jq -c '{markdown}' "$WORK/objectives.json" > "$WORK/objectives-payload.json" \
     || { echo "t3-needs-me: objectives: the payload could not be built"; return 1; }
   hash=$(sha < "$WORK/objectives-payload.json")
   [ ! -f "$OBJECTIVES_SYNC" ] || rec=$(jq -c 'select(type == "object")' "$OBJECTIVES_SYNC" 2>/dev/null) || rec='{}'

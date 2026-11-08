@@ -83,7 +83,7 @@
 //     decisionStartsRun makes such a launch start a turn, as a broken peer.
 //   - a T3 with Bridge objectives (world objectivesTool, the T3 Code fork)
 //     offers t3_objectives_set, which replaces world objectives with
-//     {markdown, lastReviewed?} or null within the fork's bounds and answers
+//     {markdown} (markdown null clears) within the fork's bounds and answers
 //     {objectives} (world objectivesAnswer answers another value instead).
 //   - t3_thread_launch answers a repeated clientRequestId with the thread it
 //     already made; t3_thread_organize settle, unsettle, snooze (with
@@ -375,11 +375,11 @@ async function callTool(w, name, a) {
   switch (name) {
     case "t3_objectives_set": {
       // The fork's bounds: markdown null, or trimmed non-empty text of at
-      // most 8192 characters; lastReviewed an optional YYYY-MM-DD day.
+      // most 8192 characters, and nothing else.
       const md = a.markdown;
       if (md !== null && (typeof md !== "string" || !md || md !== md.trim() || md.length > 8192)) return [err("invalid_params", "markdown out of bounds"), false];
-      if (a.lastReviewed !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(a.lastReviewed)) return [err("invalid_params", "lastReviewed is not a day"), false];
-      w.objectives = md === null ? null : { markdown: md, ...(a.lastReviewed === undefined ? {} : { lastReviewed: a.lastReviewed }) };
+      if (Object.keys(a).some((k) => k !== "markdown")) return [err("invalid_params", "unknown argument"), false];
+      w.objectives = md === null ? null : { markdown: md };
       return [ok({ objectives: w.objectivesAnswer ?? w.objectives }), true];
     }
     case "t3_environment_read":
