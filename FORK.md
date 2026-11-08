@@ -31,6 +31,8 @@ Claude, Codex, Grok, and Pi are verified live.
 Muse and Antigravity run on their own T3 Code drivers, and Cursor, Gemini, Kimi, and Devin go through the ACP registry, found by agent; those are covered by the test suites only.
 OpenCode 2 is refused, because its one shared server gives a thread no environment of its own.
 FirstMate now requires the T3 Code fork, which has those settings: a T3 Code without them is refused for every agent, Claude and Codex included, before anything starts, and the folder files are gone.
+Dropping stock T3 Code is deliberate.
+Upstream keeps the folder files so its experimental backend works on any T3 Code release; this fork ships with the T3 Code fork as one bundle, so keeping a second, weaker path for Claude and Codex would only add code and tests nobody here runs.
 A model and an effort are checked against T3 Code's own list for that agent before anything starts, and an effort the model does not offer is refused, never swapped for the nearest one.
 Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement) and [provider instances and models](docs/t3code-backend.md#provider-instances-and-models).
 
@@ -69,6 +71,15 @@ FirstMate can then allow or deny the approval itself, from its own session, inst
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
+
+## Each open decision is its own T3 Code thread
+
+Each open captain decision is its own thread under FirstMate's card in T3 Code's sidebar, reading Needs captain, with the question, its options, its project, when it started waiting, and every update FirstMate has made to it since it was raised.
+This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
+Upstream keeps decisions in chat alone; the fork adds the threads so each call keeps its full context in one place the captain can open and answer from.
+A decision stays at the top until it is answered or closed, however long it waits; one deferred to a date waits out of the way until that date.
+An answered or released call is settled, then archived a day later, and replying in the thread settles it at once.
+Details: [decision threads](docs/t3code-backend.md#decision-threads) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
 ## Waiting for captain and Testing on the worker's card
 
@@ -142,6 +153,8 @@ Details: [`fm-t3-main-pretool-check.sh`](bin/fm-t3-main-pretool-check.sh).
 
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.
 FirstMate accepts both the old and the new forms, so it works with 0.1.3 and later as well as earlier builds.
+That rests on two upstream fixes this fork carries ahead of their merge upstream: [#7851](https://github.com/kunchenguid/firstmate/pull/7851), which accepts 0.1.3's merged configuration and pending-request tools, and [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which accepts model options listed as a values array.
+The next upstream sync reconciles them once they merge or change.
 Details: [capability gate](docs/t3code-backend.md#capability-gate).
 
 ## Telemetry warning that fits the T3 Code fork
@@ -149,3 +162,10 @@ Details: [capability gate](docs/t3code-backend.md#capability-gate).
 The T3 Code fork turns its product telemetry off by default, so a server with no telemetry setting now reads as off and draws no warning.
 FirstMate still warns when the server turns telemetry on, or when it cannot read the setting.
 Details: [setup](docs/t3code-backend.md#setup).
+
+## No CI by default
+
+The tracked [`.no-mistakes.yaml`](.no-mistakes.yaml) declares `no_ci: true`, so a no-mistakes run does not wait for CI checks.
+Upstream runs GitHub Actions on every pull request; GitHub Actions are off on this fork, so no checks would ever register and the run would stall.
+The no-mistakes review and the local test and lint steps it runs stand in for CI.
+Anyone who clones the fork inherits the setting; turn it off in their copy once they have a live CI.

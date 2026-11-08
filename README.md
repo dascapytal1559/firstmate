@@ -8,9 +8,10 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Restart recovery](FORK.md#recovery-after-a-t3-code-restart): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
 - [Instant handoff](FORK.md#instant-handoff): a worker's finish reaches FirstMate in seconds.
 - [Approvals at once](FORK.md#approvals-reach-firstmate-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
-- [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex.
+- [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
 - [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
 - [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
+- [Decision threads](FORK.md#each-open-decision-is-its-own-t3-code-thread): each open decision is its own T3 thread with its full context, beside the chat listing.
 - [Card status](FORK.md#waiting-for-captain-and-testing-on-the-workers-card): a worker's card says Waiting for captain or Testing.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
@@ -23,6 +24,7 @@ Outside T3 Code:
 - [Priorities and objectives](FORK.md#priorities-and-high-level-objectives-in-every-check-in): Bearings and `/ahoy` open with this home's priorities and high level objectives.
 - [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
 - [When no worker is running](FORK.md#do-it-when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
+- [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 
