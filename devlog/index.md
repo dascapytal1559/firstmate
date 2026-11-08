@@ -701,3 +701,105 @@ The choices made:
 The evidence is the regression suites, plus a timing run with the watcher running, absorbing, and scanning once a second: a routine turn-end fired a watch with a 10 minute interval 1.1 to 1.8 seconds later, in five runs at the watcher's default 30 second linger.
 In a real home the watcher notices a turn-end on its next scan, which comes within 15 seconds by default.
 Tests also show a busy worker holding the hook back, an idle worker's background job holding it back while its agent does not, the hook firing once and never again, and the interval still firing it with no event at all.
+
+## 28. Open calls stay at the top until answered (8 November 2026)
+
+A comparison of this fork with upstream FirstMate found that entry 25's rule hid calls: a decision thread stayed under FirstMate's card for a day after it last became actionable, then moved to the Snoozed shelf (Later) with no return date.
+There it stopped counting in the waiting total while the call was still open, which goes against upstream's intent that silence and batching never hide a decision.
+His answer:
+
+> Okay, um let's not snooze it.
+
+- **No more day at the top.** `bin/fm-t3-needs-me.sh` keeps a live or long-waiting call as an active thread under FirstMate's card, counted as waiting, until it is answered or closed, however long it waits.
+- **The bookkeeping went with it.** The one-day timer, the `activeSince` stamp in each call's sync record, and the T3 helper's "shelve" flag existed only for that rule, so all three are gone.
+- **Everything else is unchanged.** A call deferred with `--until` still sits snoozed until its date, a blocked call still waits in Settled, his own snooze, settle, or archive still stands, and chat still names only new or changed decisions.
+- **Calls the old rule shelved come back** on the next pass, since the wanted state for those calls changed.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a call raised a week ago, a dated hold a day after its date, a deferred call re-asked early, and a call whose blocker cleared all stay under FirstMate's card, and a thread the old rule left on the shelf comes back.
+
+## 29. Chat lists every decision again; the threads are an extra track (8 November 2026)
+
+> I don't think [upstream's] version was working very well because I was only ever getting a one-liner, like a summary about the decision, when it gets restated. And my thinking is we can keep that one-liner question. We can essentially keep um the upstream intention, but we create an additional track to track the decisions and its like evolution in full detail. So I'm thinking it's an additional track rather than overriding the default
+>
+> — 8 November 2026
+
+Entry 23 made chat stop repeating: while the decision threads matched the records, Captain's Call gave a count and named only new or changed decisions.
+That overrode upstream's listing instead of adding to it, so this round puts the listing back and keeps the threads beside it.
+
+- **Captain's Call lists every open decision again**, one short line each, exactly as upstream does, whether or not T3 is in sync.
+- **The decision threads are unchanged.** Each call still has its own thread carrying its full context and every update, created, snoozed, settled, and archived as before.
+- **The count machinery is gone.** `bin/fm-t3-needs-me.sh status` and `mentioned`, the record of what chat last named, and the in-sync mark existed only for the count rule, and nothing else read them.
+
+The choices made:
+
+- **The text matches upstream again** in `AGENTS.md` section 9 and in Bearings' Captain's Call, so later upstream changes there merge cleanly.
+- **Recording a call's context before raising it stays**, because the threads show those words; the `captain-hold-lifecycle` skill's own trigger already covers when to do it.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, which still proves every thread placement against the fake T3 server, now by reading the threads directly.
+
+## 30. Review boards pass each message on at once (8 November 2026)
+
+![Before: after a Send the board stops listening until the worker finishes the round, so a second Send waits for minutes. After: the board keeps listening, the worker says "got it" at once, and every Send reaches it as its own note.](media/live-review-board.svg)
+
+> the messaging between the lavish board and first mate is too janky ... I would like it if we can actually understand why it's so delayed, like the responses from lavish to the workers... It's definitely not immediate.
+>
+> — 8 November 2026
+
+Two things were behind it.
+Each board round was one batch: after a Send, the board stopped listening until the worker finished the whole round and handed its reply back, so anything sent meanwhile waited on the board with no sign it had been seen.
+And a note could be lost outright: a layout scout reported its decision, the captain answered on its board a minute later ("So B is good. I like B."), and FirstMate, which never sees a worker's board notes, completed the scout's decision and cleaned the scout up with the note unread.
+
+The fix he asked for:
+
+> Yeah, if that chat actually functioned more like a back and forth and any new messages I send it, it's sent to the worker as a steer. That would be ideal.
+
+What was built:
+
+- **The board keeps listening.** Once a round's note is in the worker's steering inbox, the same listener waits for the next Send, so every message reaches the worker as its own note the moment it is sent.
+- **The worker says "got it" at once.** Its instructions now ask for a one-line reply on the board as soon as it reads a note, before working it, and its full reply when the round is done.
+- **A reply answers only its own rounds.** The re-arm takes `--through <round>`, so a note that arrived while the worker was busy stays open until it is answered.
+- **Nothing is dropped at cleanup.** Cleanup refuses, even when forced, while a worker's board holds a note nobody has read, the wake drain lists such notes for FirstMate, and completing a decision names them.
+
+The choices made:
+
+- **It needs a Lavish that posts replies on its own** (0.1.80 and later); an older one keeps the one-batch rounds, because its reply can only ride the next listener.
+- **The listener stops if a note cannot reach the worker**, so a failed delivery never lets the board take in more messages nobody can read.
+- **How fast a busy worker sees a note depends on its runtime.** Measured on this Mac, a T3 Code worker gets it right after its current tool call; tmux was not installed and Herdr was not driven, so terminal workers are not measured.
+- **Lavish marks notes Done on any reply**, the "got it" included, so that reply is what tells the captain the worker has the note.
+
+The evidence is the new `tests/fm-procevent-lavish-live-steer.test.sh`, which replays the sequence against a stand-in Lavish, plus new cleanup, decision-completion, and drain cases.
+A probe against a private Lavish 0.1.96 server confirmed that a reply posts while the listener is live without ending it, and that a note sent mid-round comes back on that listener at once.
+
+## 31. Rebased work lands when it is the same work (8 November 2026)
+
+![Approved at X; after another task lands and the worker rebases, X' with exactly X's changes lands, while an extra commit Y or an edited X* is refused](media/rebased-landing.svg)
+
+On the evening of 8 November three `local-only` tasks on one project were refused at landing one after another and had to be landed through extra record-keeping tasks.
+
+> Landing tool fix we wanna know upstream intention - why only issue for us
+>
+> — 8 November 2026
+
+Upstream's landing records the commit a task reported done at and lands only that commit ([#7782](https://github.com/kunchenguid/firstmate/issues/7782)).
+That stops a worker that was steered after its approval from slipping unfinished commits into the landing.
+It bites here because several projects run `local-only` with yolo and many workers at once: each landing moves main, the next worker rebases as its instructions say, and its rebased commit is no longer the recorded one, so the approval had to be given again for unchanged work.
+
+> Ok landing tool fix is go
+>
+> — 8 November 2026
+
+What was built:
+
+- **A rebased branch lands when it is the same work.** Its commits must match the approved ones one for one by exact content, in the same order, and it must still fast-forward main.
+- **Anything else is still refused, and the refusal says why.** An extra, edited, reordered, squashed, or merge commit is refused with the commits that differ named.
+- **The worker's second "done" counts too.** A done report naming the rebased commit is accepted by the same check, so the task does not look blocked before landing.
+
+The choices made:
+
+- **Exact content, whitespace included.** Git's usual patch comparison ignores whitespace, which would let an indentation-only edit pass as unchanged, so the check compares patches verbatim, binary files included.
+- **Commit messages may differ.** The approval is about what changes, so rewording a message keeps the work the same.
+- **The approval stays where it was given.** The task keeps the commit it first reported as its approved one, and the landing records the rebased commit it actually landed.
+- **The same rule with or without yolo.** A rebase that carries exactly the approved changes is the approved work, so it needs no new approval either way.
+
+The evidence is two new cases in `tests/fm-merge-local.test.sh`: a rebased, reworded branch lands and is recorded, and extra, amended, whitespace-only, merge, reordered, and squashed variants are each refused with the differing commits named.
+Swapping the verbatim comparison for Git's whitespace-blind one makes the whitespace case fail, which shows the test guards it.

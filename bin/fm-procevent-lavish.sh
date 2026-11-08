@@ -2,7 +2,9 @@
 # Lavish adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id>] [--agent-reply-file <path>]
+#   fm-procevent-lavish.sh arm <artifact.html> [--for <task-id> [--through <sequence>]] [--agent-reply-file <path>]
+#   fm-procevent-lavish.sh reply <artifact.html> --for <task-id> (--agent-reply <text> | --agent-reply-file <path>)
+#   fm-procevent-lavish.sh live-steer
 #   fm-procevent-lavish.sh classify <result-file>
 #   fm-procevent-lavish.sh terminal <result-file>
 #   fm-procevent-lavish.sh silent <result-file>
@@ -14,6 +16,19 @@
 #   fm-procevent-lavish.sh poll <artifact.html> [--agent-reply-file <path>]
 #   fm-procevent-lavish.sh deliver-reply poll <artifact.html> --agent-reply-file <path>
 #
+# arm --through <sequence>
+#            A worker-owned re-arm acknowledges only the open rounds up to and
+#            including <sequence>, so a round captured while the worker was
+#            busy stays open for it. Without --through every open round is
+#            acknowledged, the compatible form.
+# reply      Post a worker's interim reply - the prompt "got it" - to a board
+#            that <task-id> holds, without acknowledging any round. It needs
+#            the synchronous `lavish-axi reply` and refuses on older releases.
+# live-steer Exit 0 when a worker-owned board may keep listening after a round
+#            reaches its owner, which needs the synchronous `lavish-axi reply`
+#            so a later reply never has to ride a new listener. The runner asks
+#            this; docs/configuration.md "Crew-hosted Lavish review boards"
+#            owns the contract.
 # classify   Print the lifecycle state a handler should act on: feedback, ended,
 #            waiting, disconnected, missing, or unknown.
 # read       Print a structured presentation of one already-captured result so a
@@ -205,9 +220,9 @@ lavish_reply_compatible() {
   die "cannot confirm a supported lavish-axi version, so the staged reply was not posted; retry once \`lavish-axi --version\` reports a supported release"
 }
 
-post_lavish_reply() {  # <artifact> <reply-file>
+post_lavish_reply() {  # <artifact> <reply-file-or-text> [--agent-reply-file|--agent-reply]
   local output
-  if ! output=$(lavish-axi reply "$1" --agent-reply-file "$2" 2>&1); then
+  if ! output=$(lavish-axi reply "$1" "${3:---agent-reply-file}" "$2" 2>&1); then
     [ -n "$output" ] || output="lavish-axi reply exited nonzero"
     die "Lavish did not accept the staged reply: $output"
   fi
@@ -231,13 +246,18 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
-  local -a listener=()
+  local artifact='' task='' reply_file='' through='' id real owner listening
+  local -a listener=() bound=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --for)
         [ "$#" -ge 2 ] || usage
         task=$2
+        shift 2
+        ;;
+      --through)
+        [ "$#" -ge 2 ] || usage
+        through=$2
         shift 2
         ;;
       --agent-reply-file)
@@ -255,6 +275,9 @@ cmd_arm() {
   done
   [ -n "$artifact" ] || usage
   [ -z "$reply_file" ] || [ -n "$task" ] || usage
+  [ -z "$through" ] || [ -n "$task" ] || usage
+  case "$through" in *[!0-9]*) die "--through takes a round sequence number: $through" ;; esac
+  [ -z "$through" ] || bound=(--through "$through")
   command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
   poll_retry_delay >/dev/null
   id=$(cmd_source_id "$artifact") || exit 1
@@ -263,8 +286,8 @@ cmd_arm() {
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")
   if [ -n "$task" ]; then
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" -- \
-      "${listener[@]}" || exit 1
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" \
+      ${bound[@]+"${bound[@]}"} -- "${listener[@]}" || exit 1
   else
     # This adapter's own listener command, which runs the plain blocking form
     # with no --timeout-ms so completion is a server event, and absorbs only
@@ -303,6 +326,52 @@ cmd_deliver_reply() {
   lavish_reply_compatible || exit 3
   apply_session_host "$2"
   post_lavish_reply "$2" "$4"
+}
+
+# An interim reply from the board's worker. It acknowledges nothing: the round
+# stays open until the worker's reply-carrying re-arm.
+cmd_reply() {
+  local artifact='' task='' flag='' value='' id owner
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --for)
+        [ "$#" -ge 2 ] || usage
+        task=$2
+        shift 2
+        ;;
+      --agent-reply|--agent-reply-file)
+        [ "$#" -ge 2 ] && [ -z "$flag" ] || usage
+        flag=$1
+        value=$2
+        shift 2
+        ;;
+      --*) usage ;;
+      *)
+        [ -z "$artifact" ] || usage
+        artifact=$1
+        shift
+        ;;
+    esac
+  done
+  [ -n "$artifact" ] && [ -n "$task" ] && [ -n "$flag" ] && [ -n "$value" ] || usage
+  command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
+  id=$(cmd_source_id "$artifact") || exit 1
+  owner=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" list 2>/dev/null \
+    | awk -v id="$id" '$1 == id { print $3; exit }')
+  case "$owner" in
+    "task:$task/"*) ;;
+    *) die "board $id is not held by task $task (owner: ${owner:-none}); arm it with --for $task first" ;;
+  esac
+  lavish_reply_compatible \
+    || die "the installed lavish-axi cannot post a reply on its own; send it with your next re-arm instead"
+  apply_session_host "$artifact"
+  post_lavish_reply "$artifact" "$value" "$flag"
+  printf 'replied: %s\n' "$id"
+}
+
+cmd_live_steer() {
+  [ "$#" -eq 0 ] || usage
+  "$FM_ROOT/bin/fm-bootstrap.sh" lavish-reply-compatible >/dev/null 2>&1
 }
 
 cmd_retire() {
@@ -966,6 +1035,8 @@ case "${1-}" in
   retire)    shift; cmd_retire "$@" ;;
   poll)      shift; cmd_poll "$@" ;;
   deliver-reply) shift; cmd_deliver_reply "$@" ;;
+  reply)     shift; cmd_reply "$@" ;;
+  live-steer) shift; cmd_live_steer "$@" ;;
   source-id) shift; cmd_source_id "$@" ;;
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;

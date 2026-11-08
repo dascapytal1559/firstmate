@@ -5,7 +5,8 @@
 #
 # Usage:
 #   fm-procevent.sh register <adapter> <source-id> -- <argv>...
-#   fm-procevent.sh register-task <adapter> <source-id> <task-id> -- <argv>...
+#   fm-procevent.sh register-task <adapter> <source-id> <task-id> [--through <sequence>] -- <argv>...
+#   fm-procevent.sh task-board <task-id>|--all
 #   fm-procevent.sh register-extension <adapter> <source-id> --config-ref <reference>
 #   fm-procevent.sh start <source-id>
 #   fm-procevent.sh ensure-listening <source-id>
@@ -33,6 +34,17 @@
 #            staged `--agent-reply-file` is handed to the adapter's
 #            `deliver-reply` under the source lock once the task is eligible,
 #            so a refused arm never posts it and a failed post publishes no registration.
+#            --through acknowledges only the open rounds up to that sequence.
+#            When this registration's listener is already live (the adapter's
+#            `live-steer` kept it listening), the re-arm posts the reply and
+#            acknowledges without republishing anything.
+# task-board List what a worker-owned board holds that its owner has not
+#            read, as tab-separated lines: `round <task> <source-id> <sequence>
+#            <result-file>` for an unacknowledged capture and `note <task>
+#            <inbox-record> <result-file>` for a delivery note still unread in
+#            the task's steering inbox. --all lists every unread note in this
+#            home plus the open rounds whose owner task has no record left.
+#            Prints nothing when nothing is open.
 # register-extension
 #            Resolve an explicitly enabled home-local process-event-adapter/1
 #            binding, verify its package and handshake, and record the source
@@ -63,7 +75,9 @@
 #            captured result ends the source and normally retires the registration
 #            when it says so, so a source that has ended stops being restarted.
 #            A task-owned source instead keeps its terminal round open and
-#            registered until its owner concludes it with `handled`.
+#            registered until its owner concludes it with `handled`, and after
+#            a nonterminal round reaches its owner's inbox it polls again in
+#            this runner when the adapter's `live-steer` command exits 0.
 # reconcile  Idempotent liveness entry the watcher calls on its ordinary cycle:
 #            republish every durably captured result with no handled
 #            acknowledgement yet - regardless of any earlier publication - and
@@ -410,6 +424,17 @@ adapter_self_announcing() {  # <adapter>
   "$script" self-announcing >/dev/null 2>&1
 }
 
+# Ask the adapter whether a worker-owned board keeps listening after a round
+# reaches its owner (the live steer in docs/configuration.md "Crew-hosted Lavish
+# review boards"). Exit 0 is the only yes; anything else keeps one round per
+# listener.
+adapter_live_steer() {  # <adapter>
+  local script
+  script=$(adapter_script "$1")
+  [ -f "$script" ] && [ ! -L "$script" ] || return 1
+  "$script" live-steer >/dev/null 2>&1
+}
+
 source_file()  { printf '%s/%s.source\n' "$REG" "$1"; }
 source_field() {  # <source-id> <field>
   sed -n "s/^$2=//p" "$(source_file "$1")" | head -1
@@ -420,12 +445,37 @@ source_owner_task() { source_field "$1" owner_task; }
 source_pending() {  # <source-id>
   fm_procevent_pending "$STATE" | awk -v id="$1" 'index($0, "/" id ".") { print }'
 }
+# Whether a captured round falls within a re-arm's --through bound; no bound
+# takes every round.
+round_within_bound() {  # <result-file> [<through>]
+  local seq
+  [ -n "${2-}" ] || return 0
+  seq=$(fm_procevent_result_sequence "$1") || return 1
+  case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$((10#$seq))" -le "$((10#$2))" ]
+}
 # The registration record is a worker-owned board's ONLY ownership evidence, so
 # it cannot be retired while a captured round of it is still unacknowledged.
 # Every retirement path asks here, with the source lock already held.
 source_retirement_blocked_locked() {  # <source-id>
   [ "$(source_kind "$1" 2>/dev/null || true)" = task-owned ] || return 1
   [ -n "$(source_pending "$1" | head -1)" ]
+}
+# 0 when an open round keeps a worker-owned board from listening: a terminal
+# round, which only its owner concludes, or any open round when the adapter
+# does not keep the board listening between rounds.
+task_round_blocks_listening_locked() {  # <source-id>
+  local pending adapter
+  [ "$(source_kind "$1" 2>/dev/null || true)" = task-owned ] || return 1
+  [ -n "$(source_pending "$1" | head -1)" ] || return 1
+  adapter=$(read_adapter "$1" 2>/dev/null) || return 0
+  adapter_live_steer "$adapter" || return 0
+  while IFS= read -r pending; do
+    [ -n "$pending" ] || continue
+    adapter=$(fm_procevent_result_adapter "$pending" 2>/dev/null) || return 0
+    ! adapter_result_is_terminal "$adapter" "$pending" || return 0
+  done < <(source_pending "$1")
+  return 1
 }
 runner_file()  { printf '%s/%s.runner\n' "$REG" "$1"; }
 staging_file() { printf '%s/.%s.%s.output\n' "$REG" "$1" "$2"; }
@@ -554,11 +604,18 @@ cmd_register() {
 }
 
 cmd_register_task() {
-  local adapter=${1-} id=${2-} task=${3-} sep=${4-} result pending pending_adapter
+  local adapter=${1-} id=${2-} task=${3-} sep='' through='' result pending pending_adapter
   local reply_source='' reply_dest='' stale arg i adopting=0 pending_owner prior_record=''
-  local pending_rounds=0 delivered
+  local pending_rounds=0 delivered live_listener=0
   local -a argv=() kept=()
-  shift 4 2>/dev/null || usage
+  shift 3 2>/dev/null || usage
+  if [ "${1-}" = --through ]; then
+    through=${2-}
+    case "$through" in ''|*[!0-9]*) die "--through takes a round sequence number: $through" ;; esac
+    shift 2
+  fi
+  sep=${1-}
+  shift 2>/dev/null || usage
   [ "$adapter" = lavish ] || die "register-task is reserved for the Lavish adapter"
   fm_procevent_adapter_valid "$adapter" || die "adapter name must be lowercase alphanumeric or dash: $adapter"
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe and at most 64 characters: $id"
@@ -590,7 +647,9 @@ cmd_register_task() {
   fi
   while IFS= read -r pending; do
     [ -n "$pending" ] || continue
-    pending_rounds=$((pending_rounds + 1))
+    if round_within_bound "$pending" "$through"; then
+      pending_rounds=$((pending_rounds + 1))
+    fi
     if [ "$adopting" -eq 1 ]; then
       pending_owner=$(fm_procevent_result_owner_task "$pending" 2>/dev/null || true)
       if [ "$pending_owner" != "$task" ]; then
@@ -606,7 +665,18 @@ cmd_register_task() {
   done < <(source_pending "$id")
   if [ "$adopting" -eq 0 ] && [ "$pending_rounds" -eq 0 ]; then
     fm_procevent_source_lock_release "$id"
+    if [ -n "$through" ]; then
+      die "cannot re-arm source $id: task $task already holds this board and no captured round up to sequence $through is waiting to be acknowledged"
+    fi
     die "cannot re-arm source $id: task $task already holds this board and no captured round is waiting to be acknowledged"
+  fi
+  # A listener this registration already runs keeps serving the board, so the
+  # re-arm only posts the reply and acknowledges: republishing would make that
+  # listener a stale generation and the arm would report still-listening.
+  # Without live steer a live claim is a runner finishing its one round.
+  if [ "$adopting" -eq 0 ] && adapter_live_steer "$adapter" && fm_procevent_claim_state_locked "$id" \
+    && [ "$FM_PROCEVENT_CLAIM_REG_IDENTITY" = "$(fm_pr_file_identity "$(source_file "$id")" 2>/dev/null || true)" ]; then
+    live_listener=1
   fi
   # Each generation stages its reply under its own path, so nothing a failed
   # re-arm does can reach the reply the prior registration still references.
@@ -635,7 +705,7 @@ cmd_register_task() {
       i=$((i + 1))
     fi
   done
-  if [ "$adopting" -eq 0 ]; then
+  if [ "$adopting" -eq 0 ] && [ "$live_listener" -eq 0 ]; then
     prior_record=$(umask 077; mktemp "$REG/.$id.prior.XXXXXX") || {
       [ -z "$reply_dest" ] || rm -f -- "$reply_dest"
       fm_procevent_source_lock_release "$id"
@@ -672,16 +742,23 @@ cmd_register_task() {
       die "cannot arm source $id: its staged reply was not delivered"
     fi
   fi
-  if ! fm_procevent_task_registration_publish_locked "$STATE" "$adapter" "$id" "$task" "${argv[@]}"; then
+  if [ "$live_listener" -eq 1 ] && [ -n "$reply_dest" ]; then
+    rm -f -- "$reply_dest"
+    fm_procevent_source_lock_release "$id"
+    die "cannot post the reply to the live listener of $id: the installed lavish-axi cannot post a reply on its own"
+  fi
+  if [ "$live_listener" -eq 0 ] \
+    && ! fm_procevent_task_registration_publish_locked "$STATE" "$adapter" "$id" "$task" "${argv[@]}"; then
     [ -z "$prior_record" ] || rm -f -- "$prior_record"
     [ -z "$reply_dest" ] || rm -f -- "$reply_dest"
     fm_procevent_source_lock_release "$id"
     die "cannot publish task-owned registration"
   fi
-  # Re-arm is the worker's acknowledgement of every open nonterminal round.
-  # It deliberately does not inspect, acquire, release, or replace the claim.
+  # Re-arm is the worker's acknowledgement of every open nonterminal round up
+  # to --through. It deliberately does not acquire, release, or replace the claim.
   while IFS= read -r pending; do
     [ -n "$pending" ] || continue
+    round_within_bound "$pending" "$through" || continue
     result=$pending
     fm_procevent_mark_handled "$STATE" "$id" "$(fm_procevent_result_sequence "$result")" >/dev/null 2>&1 || {
       [ -z "$prior_record" ] || mv -f -- "$prior_record" "$(source_file "$id")"
@@ -698,7 +775,11 @@ cmd_register_task() {
   done
   fm_procevent_source_lock_release "$id"
   owner_lease_refresh
-  printf 'registered: %s (%s, task=%s)\n' "$id" "$adapter" "$task"
+  if [ "$live_listener" -eq 1 ]; then
+    printf 'acknowledged: %s (%s, task=%s, listener already live)\n' "$id" "$adapter" "$task"
+  else
+    printf 'registered: %s (%s, task=%s)\n' "$id" "$adapter" "$task"
+  fi
 }
 
 new_extension_registration_token() {
@@ -823,7 +904,7 @@ publish_result() {  # <result-file>
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
-        message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it."
+        message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it; acknowledge any earlier round of this board that is still open the same way once you have applied it."
       else
         export FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD=1
         if adapter_result_is_silent "$adapter" "$result"; then
@@ -837,7 +918,9 @@ publish_result() {  # <result-file>
           esac
         fi
         unset FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD
-        message="Lavish review feedback is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, apply the round, and re-arm the board with the reply."
+        # One fixed text per round: the inbox write deduplicates on it, so it
+        # must not vary with anything probed at delivery time.
+        message="Lavish review feedback round $seq is captured for task $owner_task at $result. Read it with bin/fm-procevent-lavish.sh read $result, post a short acknowledgement on the board right away with bin/fm-procevent-lavish.sh reply <artifact.html> --for $owner_task --agent-reply '<one line>' (skip it if that refuses for an older Lavish), apply the round, then re-arm the board with your reply and --through $seq. Anything the captain sends after this round arrives as its own note."
       fi
       # Snapshot the records that already exist (active and handled) before
       # the idempotent write, so a dedup match - including one already
@@ -1003,6 +1086,17 @@ cmd_start() {
   local extension_owner=0 extension_load_state extension_sequence='' extension_request_id=''
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   require_runner_group
+  # A worker-owned board that keeps listening between rounds may start with a
+  # round open only once that round's note has reached its owner, so a failed
+  # delivery never lets another poll consume more feedback.
+  if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
+    while IFS= read -r task_pending; do
+      [ -n "$task_pending" ] || continue
+      publish_result "$task_pending" \
+        || fm_procevent_is_handled "$STATE" "$id" "$(fm_procevent_result_sequence "$task_pending")" \
+        || { printf 'round-open: %s (a captured round has not reached its owner)\n' "$id"; exit 0; }
+    done < <(source_pending "$id")
+  fi
   fm_procevent_source_lock_acquire "$id" || die "cannot lock source: $id"
   if [ ! -f "$(source_file "$id")" ] || [ -L "$(source_file "$id")" ]; then
     fm_procevent_source_lock_release "$id"
@@ -1018,8 +1112,7 @@ cmd_start() {
   fi
   if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
     task_owner=$(source_owner_task "$id" 2>/dev/null || true)
-    task_pending=$(source_pending "$id" | head -1)
-    if [ -n "$task_pending" ]; then
+    if task_round_blocks_listening_locked "$id"; then
       fm_procevent_source_lock_release "$id"
       printf 'round-open: %s\n' "$id"
       exit 0
@@ -1109,13 +1202,16 @@ cmd_start() {
   # 0 when this runner should poll again. The adapter's relisten command is the
   # only adapter-specific signal; a replacement registration is adopted only
   # when this claim still owns it and the registered command is unchanged.
-  adopt_relisten() {
+  # A task-owned caller has already asked the adapter's live-steer command.
+  adopt_relisten() {  # [task-owned]
     local script registration current now_adapter i
     local -a previous=()
     [ "$extension_owner" -eq 0 ] || return 1
     script=$(adapter_script "$adapter")
     [ -f "$script" ] && [ ! -L "$script" ] || return 1
-    "$script" relisten >/dev/null 2>&1 || return 1
+    if [ "${1-}" != task-owned ]; then
+      "$script" relisten >/dev/null 2>&1 || return 1
+    fi
     registration=$(source_file "$id")
     [ -f "$registration" ] && [ ! -L "$registration" ] || return 1
     fm_procevent_source_lock_acquire "$id" || return 1
@@ -1202,7 +1298,7 @@ cmd_start() {
   fi
   # Built-in adapters do not run the extension capture helper, so keep this
   # sentinel defined while sharing the no-result branch below under `set -u`.
-  local truncated=0 capture_state='' durable='' reservation_terminal='' reservation_silent=''
+  local truncated=0 capture_state='' durable='' reservation_terminal='' reservation_silent='' captured_terminal=0
   # One poll per iteration. A relisten adapter stays in this process; every
   # other adapter falls out after a single result.
   while :; do
@@ -1422,7 +1518,9 @@ EOF
   else
     printf 'not-autohandled: %s (left for the handler; still unacknowledged)\n' "$id" >&2
   fi
+  captured_terminal=0
   if adapter_result_is_terminal "$adapter" "$durable"; then
+    captured_terminal=1
     retire_owned_terminal_source "$id"
     case "$?" in
       0) printf 'retired: %s (adapter classified the captured result terminal)\n' "$id" ;;
@@ -1436,6 +1534,12 @@ EOF
     exec 6<&-
   fi
   if [ "$handled_capture" -eq 1 ] && adopt_relisten; then
+    continue
+  fi
+  # Live steer: once a nonterminal round is in its owner's inbox, the board
+  # listens for the next Send instead of waiting for the owner's re-arm.
+  if [ -n "$task_owner" ] && [ "$published_capture" -eq 1 ] && [ "$captured_terminal" -eq 0 ] \
+    && adapter_live_steer "$adapter" && adopt_relisten task-owned; then
     continue
   fi
   break
@@ -1711,7 +1815,7 @@ stranded_leaderless_detail() {  # <source-id>
 }
 
 cmd_reconcile() {
-  local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state task_pending
+  local rec id published started=0 stopped=0 uncertain=0 failed=0 claim owner pid token identity claim_state stop_state
   local launch_identity launch_stamp launch_mark unconfirmed entry
   local -a launched=()
   # Rejected before anything is launched, and by name. A window this command
@@ -1773,12 +1877,9 @@ cmd_reconcile() {
       if [ -f "$(source_file "$id")" ] && [ ! -L "$(source_file "$id")" ]; then
         fm_procevent_claim_state_locked "$id"
         claim_state=$?
-        if [ "$(source_kind "$id" 2>/dev/null || true)" = task-owned ]; then
-          task_pending=$(source_pending "$id" | head -1)
-          if [ -n "$task_pending" ]; then
-            fm_procevent_source_lock_release "$id"
-            continue
-          fi
+        if task_round_blocks_listening_locked "$id"; then
+          fm_procevent_source_lock_release "$id"
+          continue
         fi
         if [ "$claim_state" -eq 1 ] && fm_procevent_claim_undisplaceable_locked "$id"; then
           # A stale claim whose process group still has members, which can mean
@@ -2429,6 +2530,42 @@ cmd_sweep_home() {
   printf 'swept: attempted=%s\n' "$attempted"
 }
 
+# What a worker-owned board holds that nobody has read yet (see the header).
+# A captured round names its owner in its own capture, so this needs no
+# registration and still finds a round whose board or owner is already gone.
+cmd_task_board() {
+  local want=${1-} all=0 result owner rec task note inbox
+  [ "$#" -eq 1 ] || usage
+  if [ "$want" = --all ]; then
+    all=1
+  else
+    fm_pr_task_id_valid "$want" || die "task id is invalid: $want"
+  fi
+  [ -d "$STATE" ] || return 0
+  inbox=$(fm_procevent_inbox_dir "$STATE")
+  while IFS= read -r result; do
+    [ -n "$result" ] || continue
+    owner=$(fm_procevent_result_owner_task "$result" 2>/dev/null || true)
+    [ -n "$owner" ] || continue
+    if [ "$all" -eq 1 ]; then
+      [ ! -e "$STATE/$owner.meta" ] || continue
+    else
+      [ "$owner" = "$want" ] || continue
+    fi
+    printf 'round\t%s\t%s\t%s\t%s\n' "$owner" "$(fm_procevent_result_source_id "$result")" \
+      "$(fm_procevent_result_sequence "$result")" "$result"
+  done < <(fm_procevent_pending "$STATE")
+  for rec in "$STATE"/*.inbox/*.msg; do
+    [ -f "$rec" ] && [ ! -L "$rec" ] || continue
+    task=${rec%.inbox/*}
+    task=${task##*/}
+    [ "$all" -eq 1 ] || [ "$task" = "$want" ] || continue
+    note=$(perl -ne 'BEGIN { $d = quotemeta shift } if (m{($d/[A-Za-z0-9._-]+\.result)}) { print "$1\n"; exit }' \
+      "$inbox" "$rec" 2>/dev/null) || die "cannot read steering inbox record: $rec"
+    [ -z "$note" ] || printf 'note\t%s\t%s\t%s\n' "$task" "$rec" "$note"
+  done
+}
+
 cmd_list() {
   local rec id adapter owner pending claim_state kind task
   owner_lease_refresh
@@ -2592,6 +2729,7 @@ case "${1-}" in
   extension-bind) shift; cmd_extension_bind "$@" ;;
   extension-process-event) shift; cmd_extension_process_event "$@" ;;
   list)               shift; cmd_list "$@" ;;
+  task-board)         shift; cmd_task_board "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac

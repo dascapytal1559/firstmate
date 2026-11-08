@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="880" height="400" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#1f2328">Before: one batch per round</text>
+  <line x1="150" y1="80" x2="850" y2="80" stroke="#d0d7de" stroke-width="2"/>
+  <line x1="150" y1="130" x2="850" y2="130" stroke="#d0d7de" stroke-width="2"/>
+  <text x="24" y="85" fill="#57606a">Captain's board</text>
+  <text x="24" y="135" fill="#57606a">Worker</text>
+  <circle cx="190" cy="80" r="8" fill="#0969da"/>
+  <text x="170" y="62" fill="#0969da">Send A</text>
+  <line x1="190" y1="88" x2="190" y2="122" stroke="#0969da" stroke-width="2"/>
+  <rect x="200" y="118" width="470" height="24" rx="4" fill="#ddf4ff" stroke="#54aeff"/>
+  <text x="212" y="135" fill="#0a3069">works A - nobody is listening, the board shows nothing</text>
+  <circle cx="330" cy="80" r="8" fill="#cf222e"/>
+  <text x="300" y="62" fill="#cf222e">Send B</text>
+  <rect x="338" y="72" width="332" height="16" rx="3" fill="#ffebe9"/>
+  <text x="400" y="85" font-size="12" fill="#a40e26">B waits on the board for minutes</text>
+  <line x1="670" y1="122" x2="670" y2="88" stroke="#1a7f37" stroke-width="2"/>
+  <text x="663" y="108" font-size="12" fill="#1a7f37" text-anchor="end">reply A, re-arm</text>
+  <line x1="700" y1="88" x2="700" y2="122" stroke="#cf222e" stroke-width="2"/>
+  <text x="708" y="108" font-size="12" fill="#a40e26">B arrives</text>
+
+  <text x="24" y="224" font-size="18" font-weight="600" fill="#1f2328">After: the board keeps listening</text>
+  <line x1="150" y1="270" x2="850" y2="270" stroke="#d0d7de" stroke-width="2"/>
+  <line x1="150" y1="320" x2="850" y2="320" stroke="#d0d7de" stroke-width="2"/>
+  <text x="24" y="275" fill="#57606a">Captain's board</text>
+  <text x="24" y="325" fill="#57606a">Worker</text>
+  <circle cx="190" cy="270" r="8" fill="#0969da"/>
+  <text x="170" y="252" fill="#0969da">Send A</text>
+  <line x1="190" y1="278" x2="190" y2="312" stroke="#0969da" stroke-width="2"/>
+  <line x1="215" y1="312" x2="215" y2="278" stroke="#1a7f37" stroke-width="2"/>
+  <text x="222" y="298" font-size="12" fill="#1a7f37">"got it"</text>
+  <rect x="200" y="308" width="470" height="24" rx="4" fill="#ddf4ff" stroke="#54aeff"/>
+  <text x="290" y="325" fill="#0a3069">works A, the board still listening</text>
+  <circle cx="330" cy="270" r="8" fill="#0969da"/>
+  <text x="300" y="252" fill="#0969da">Send B</text>
+  <line x1="330" y1="278" x2="330" y2="312" stroke="#0969da" stroke-width="2"/>
+  <text x="338" y="298" font-size="12" fill="#0969da">B is its own note at once</text>
+  <line x1="670" y1="312" x2="670" y2="278" stroke="#1a7f37" stroke-width="2"/>
+  <text x="663" y="298" font-size="12" fill="#1a7f37" text-anchor="end">reply A, re-arm through A</text>
+  <text x="24" y="376" font-size="13" fill="#57606a">Cleanup refuses while a note is unread, and the drain shows it to FirstMate, so nothing the captain sends is dropped.</text>
+</svg>

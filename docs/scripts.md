@@ -89,7 +89,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-config-push.sh`      | Push declared inherited local material to live local or remote secondmates and send the placement-specific config reread when changed |
 | `fm-project-mode.sh`     | Resolve a project's registered delivery posture, forge binding, PR-text binding, or ship-branch prefix from `data/projects.md` for fleet sync, home seeding, and the forge and PR-text agreements a ship spawn or scout promotion applies |
 | `fm-forge-detect.sh`     | Propose a clone's forge binding from its origin remote for project-add intake, never recording it |
-| [`fm-merge-local.sh`](../bin/fm-merge-local.sh) | Fast-forward a `local-only` project's local default branch to the approved recorded commit |
+| [`fm-merge-local.sh`](../bin/fm-merge-local.sh) | Fast-forward a `local-only` project's local default branch to the approved recorded commit, or to a rebase of it carrying exactly the same changes |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
 | `fm-marker-lib.sh`       | Compatibility entry point for the from-firstmate carrier owned by `fm-operational-input.sh` |
 | `fm-task-inbox-lib.sh`   | Single owner of durable steering-inbox records, acknowledgement, doorbells, and the delivery-attempt ladder |
@@ -102,7 +102,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | Detect a T3 server restart and steer the T3 workers it ended                          |
 | `fm-t3-captain-label.sh` | Keep a live T3 worker's card status on "Waiting for captain" while a captain hold is open on it, and on "Testing" during its no-mistakes run |
-| `fm-t3-needs-me.sh`      | Keep the captain's T3 decision threads in line with his open captain calls and the Bridge's objectives in line with his objectives file, report which decisions are new or changed for chat, and read a decision reply's task id |
+| `fm-t3-needs-me.sh`      | Keep the captain's T3 decision threads in line with his open captain calls and the Bridge's objectives in line with his objectives file, and read a decision reply's task id |
 | `fm-t3-main-pretool-check.sh` | PreToolUse guard for a T3 home's main: the restart reminder and the credential seatbelt |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
@@ -139,7 +139,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-credential-source-lib.sh` | Single owner of the declared credential-source schema and its adapters, read by `fm-dispatch-resolve.sh` and checked by `fm-bootstrap.sh` |
 | `fm-quota-choose.sh`     | Choose the first candidate with known positive quota from an ordered harness:model list |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |
-| `fm-wake-drain.sh`       | Present and acknowledge the current actor's claimed wake rows alongside status, outcome-backstop, decision, divergence, supervision-host outcome, recovery, and supervision checks |
+| `fm-wake-drain.sh`       | Present and acknowledge the current actor's claimed wake rows alongside status, outcome-backstop, decision, divergence, board-feedback, supervision-host outcome, recovery, and supervision checks |
 | `fm-wake-grant.sh`       | Serialize Pi supervision-branch wake-row claim activation, publication, release, and deactivation |
 | `fm-wake-lib.sh`         | Shared durable wake queue, recovery generations, portable locks, and watcher identity/health helpers |
 | `fm-path-lib.sh`         | Fork-free `dirname`/`basename` equivalents with no source-time side effects             |

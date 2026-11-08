@@ -2072,6 +2072,30 @@ EOF
   printf 'complete: %s captain-call inventory reviewed%s%s%s\n' "$origin" "${keys:+ ($keys)}" \
     "${attested_by_prefix:+ [attested through the configured prefix: $attested_by_prefix]}" \
     "${unrecorded_origin:+ [no recorded origin on: $unrecorded_origin; not checked against $origin]}"
+  print_origin_board_feedback "$origin"
+}
+
+# A captain note on the origin's review board can be the very answer this
+# inventory is about, and it reaches only the worker, so completion names any
+# the worker has not read (bin/fm-procevent.sh task-board owns what counts).
+# Informational: it never changes the completion it follows.
+print_origin_board_feedback() {  # <origin>
+  local open kind _task a b c
+  [ -x "$SCRIPT_DIR/fm-procevent.sh" ] || return 0
+  [ -d "$STATE/procevent-inbox" ] || [ -d "$STATE/$1.inbox" ] || return 0
+  open=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-procevent.sh" task-board "$1" 2>/dev/null) || {
+    printf 'board: could not read whether %s has unread review-board feedback\n' "$1"
+    return 0
+  }
+  while IFS=$'\t' read -r kind _task a b c; do
+    case "$kind" in
+      round) printf 'board: %s has not acknowledged round %s of its review board %s; read it with bin/fm-procevent-lavish.sh read %s\n' "$1" "$b" "$a" "$c" ;;
+      note) printf 'board: %s has not read board note %s; read it with bin/fm-procevent-lavish.sh read %s\n' "$1" "$a" "$b" ;;
+    esac
+  done <<EOF
+$open
+EOF
 }
 
 command_verify() {

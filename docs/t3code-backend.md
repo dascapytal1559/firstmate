@@ -234,7 +234,7 @@ A call with no recorded context still appears, with its hold reason as the quest
 
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
 
-- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card for a day after it last became actionable, then moves to the Snoozed shelf with no date; it becomes actionable when it is raised, updated (`context --changed`), or turns live from deferred or blocked (its `--until` date comes due, it is re-held without that date, or its blocker clears), and each of those starts another day;
+- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card until it is answered or closed, however long it waits;
 - a call deferred with `--until` is snoozed until 00:00 UTC on that date;
 - a blocked call sits in Settled until it unblocks;
 - an answered or released call is settled, then archived a day later;
@@ -258,14 +258,15 @@ What FirstMate sends and relies on:
 - Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil` or with no date (it stays snoozed until FirstMate wakes it), `unsnooze`, `mark_unread`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
 - Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
 
-When `bin/fm-t3-needs-me.sh status` says the threads match the records, Captain's Call in chat gives their count and names only new or changed decisions (`AGENTS.md` section 9).
+The threads are an additional track beside chat, never a replacement for it.
+Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision's thread keeps its full context and every update since it was raised.
 
 ### Objectives
 
 T3's Bridge tab (formerly Needs me) shows the captain's high level objectives above the decision threads.
 Their source is the home's `data/high-level-objectives.md`: a heading, a short preamble, a `Last reviewed: YYYY-MM-DD` line, then one `- **Name:** text` bullet per objective.
-Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh --reviewed` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
-The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which travels as `lastReviewed`.
+Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
+The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which stays in the file and is not sent to T3.
 A trailing sentence that only points at a local file, such as `Decisions so far: /path/to/decisions.md`, is left out to keep the Bridge compact.
 A list past T3's 8192-character limit keeps every objective and cuts each long text instead, and the pass says so.
 An absent file, or one with no bullets, clears the objectives once.

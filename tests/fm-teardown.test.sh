@@ -877,6 +877,76 @@ test_local_only_truly_unpushed_refuses() {
   pass "local-only worktree with truly unpushed work is refused (safety preserved)"
 }
 
+# The 8 Nov sequence: the captain's note reached the worker's review board after
+# the worker reported its decision, and cleanup removed the worker with the note
+# unread. Cleanup refuses while the board holds feedback its worker has not
+# acknowledged - --force included - and, once firstmate has read and
+# acknowledged it, retires the board's listener with the task.
+test_unread_board_feedback_refuses_cleanup() {
+  local case_dir rc art src lavish_bin
+  case_dir=$(make_case board-unread)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "board work"
+  add_fork_with_pushed_branch "$case_dir"
+  export FM_PROCEVENT_CLAIM_ROOT="$case_dir/claims" LAVISH_AXI_STATE_DIR="$case_dir/lavish-state"
+  mkdir -p "$LAVISH_AXI_STATE_DIR"
+  lavish_bin="$case_dir/lavish-bin"
+  mkdir -p "$lavish_bin"
+  cat > "$lavish_bin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+[ "${1-}" = poll ] || exit 2
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","So B is good. I like B.","","message",""\n'
+SH
+  chmod +x "$lavish_bin/lavish-axi"
+  art="$case_dir/board.html"
+  printf '<h1>layout</h1>\n' > "$art"
+  perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -e '
+    my ($path, $artifact) = @ARGV;
+    my $real = realpath($artifact);
+    my $key = substr(sha256_hex($real), 0, 16);
+    open my $out, ">", $path or die $!;
+    print $out encode_json({ sessions => { $key => { key => $key, file => $real, status => "open",
+      url => "http://127.0.0.1:14387/session/0123456789abcdef" } } });
+  ' "$LAVISH_AXI_STATE_DIR/state.json" "$art"
+  src=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$art")
+  fm_test_track_procevent_home "$case_dir" "$FM_PROCEVENT_CLAIM_ROOT"
+  PATH="$lavish_bin:$PATH" FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-procevent-lavish.sh" arm "$art" --for task-x1 >/dev/null \
+    || fail "board-unread: arming the task's board failed"
+  for _ in $(seq 1 200); do [ -f "$case_dir/state/task-x1.inbox/001.msg" ] && break; sleep 0.02; done
+  [ -f "$case_dir/state/task-x1.inbox/001.msg" ] || fail "board-unread: the captain's note never reached the task inbox"
+
+  for flag in '' --force; do
+    set +e
+    # shellcheck disable=SC2086 # the empty flag must expand to nothing.
+    PATH="$lavish_bin:$PATH" run_teardown "$case_dir" $flag > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "board-unread: cleanup ${flag:-without --force} should refuse"
+    assert_grep "review board holds feedback its worker has not acknowledged" "$case_dir/stderr" \
+      "board-unread: the refusal did not say the board holds unread feedback"
+    assert_grep "open round 1 of board $src" "$case_dir/stderr" "board-unread: the refusal did not name the round"
+    assert_grep "$src.1.result" "$case_dir/stderr" "board-unread: the refusal did not name the result file"
+    assert_grep "unread inbox note" "$case_dir/stderr" "board-unread: the refusal did not name the unread note"
+    assert_present "$case_dir/state/task-x1.meta" "board-unread: a refused cleanup removed the task record"
+    assert_present "$case_dir/state/task-x1.inbox/001.msg" "board-unread: a refused cleanup removed the note"
+  done
+
+  FM_HOME="$case_dir" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-procevent.sh" handled "$src" 1 >/dev/null || fail "board-unread: acknowledging the round failed"
+  mv "$case_dir/state/task-x1.inbox/001.msg" "$case_dir/state/task-x1.inbox/handled/"
+  set +e
+  PATH="$lavish_bin:$PATH" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "board-unread: cleanup should proceed once the feedback is read"
+  assert_absent "$case_dir/state/procevent/$src.source" \
+    "board-unread: cleanup left the retired task's board listening for notes nobody would read"
+  unset FM_PROCEVENT_CLAIM_ROOT LAVISH_AXI_STATE_DIR
+  pass "cleanup refuses while the task's review board holds unread feedback, even with --force, and retires the board after"
+}
+
 test_local_only_merged_to_local_main_allows() {
   local case_dir rc
   case_dir=$(make_case merged-main)
@@ -6192,6 +6262,7 @@ test_forced_child_missing_adapter_sibling_refuses_before_cleanup
 test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
+test_unread_board_feedback_refuses_cleanup
 test_teardown_closes_the_backlog_item_itself
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_closes_a_gitlab_task_with_its_merge_request_url_as_a_note

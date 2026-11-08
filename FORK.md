@@ -31,6 +31,8 @@ Claude, Codex, Grok, and Pi are verified live.
 Muse and Antigravity run on their own T3 Code drivers, and Cursor, Gemini, Kimi, and Devin go through the ACP registry, found by agent; those are covered by the test suites only.
 OpenCode 2 is refused, because its one shared server gives a thread no environment of its own.
 FirstMate now requires the T3 Code fork, which has those settings: a T3 Code without them is refused for every agent, Claude and Codex included, before anything starts, and the folder files are gone.
+Dropping stock T3 Code is deliberate.
+Upstream keeps the folder files so its experimental backend works on any T3 Code release; this fork ships with the T3 Code fork as one bundle, so keeping a second, weaker path for Claude and Codex would only add code and tests nobody here runs.
 A model and an effort are checked against T3 Code's own list for that agent before anything starts, and an effort the model does not offer is refused, never swapped for the nearest one.
 Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement) and [provider instances and models](docs/t3code-backend.md#provider-instances-and-models).
 
@@ -49,6 +51,8 @@ Details: [task shape](docs/t3code-backend.md#task-shape-and-metadata).
 
 A new T3 Code project is titled with its folder name instead of `fm-<folder>`, and a worker's thread is titled with its task's title instead of an internal id.
 The worker cards in T3 Code's sidebar then read as the project and the work.
+Upstream's `fm-` prefix is there to tell FirstMate's crew apart from the captain's own threads.
+The crew lineage described above now does that, so the prefix is no longer needed.
 Task titles are cut to 96 characters, so short titles read best.
 Projects already in T3 Code keep their old titles, and FirstMate's own records still track each worker by its id, never by the title.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
@@ -66,9 +70,21 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 When a T3 Code worker stops on a question or a permission approval anyway, FirstMate hears about it at once instead of at the end of its next 15-second wait.
 FirstMate can then allow or deny the approval itself, from its own session, instead of interrupting the worker and steering it again.
+Upstream treats an approval as a human checkpoint: it is answered only in T3 Code itself, and recovery never answers one.
+The fork departs because the captain never deals with workers directly, so FirstMate answers approvals that stay within the worker's task and are not destructive or security-sensitive.
+Anything else still comes to the captain as FirstMate's own question.
 The T3 Code fork's wait ends the moment a request appears, so FirstMate no longer re-reads idle workers every second, and the 15-second check stays as the backstop.
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
+
+## Each open decision is its own T3 Code thread
+
+Each open captain decision is its own thread under FirstMate's card in T3 Code's sidebar, reading Needs captain, with the question, its options, its project, when it started waiting, and every update FirstMate has made to it since it was raised.
+This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
+Upstream keeps decisions in chat alone; the fork adds the threads so each call keeps its full context in one place the captain can open and answer from.
+A decision stays at the top until it is answered or closed, however long it waits; one deferred to a date waits out of the way until that date.
+An answered or released call is settled, then archived a day later, and replying in the thread settles it at once.
+Details: [decision threads](docs/t3code-backend.md#decision-threads) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
 ## Waiting for captain and Testing on the worker's card
 
@@ -92,6 +108,8 @@ Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 Bearings and `/ahoy` now open with this home's priorities and then its high level objectives, one short line each, so what to get done and the broad aim of the work are in view whenever FirstMate checks in.
 They come from the home's private `data/priorities.md` and `data/high-level-objectives.md`, each a plain bullet list, and a home without one simply shows no block.
 A Bearings board stays as it was; the chat digest beside it carries them.
+Upstream's Bearings has exactly four sections and `/ahoy` reads only the session history.
+The fork keeps both: the two blocks sit above the four sections rather than becoming a fifth, an empty list prints nothing, and `/ahoy` runs one read-only reader for them and nothing else.
 With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab, above the decisions, and follow the file as it changes.
 Details: [`fm-objectives.sh`](bin/fm-objectives.sh) and [Objectives](docs/t3code-backend.md#objectives).
 
@@ -142,10 +160,41 @@ Details: [`fm-t3-main-pretool-check.sh`](bin/fm-t3-main-pretool-check.sh).
 
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.
 FirstMate accepts both the old and the new forms, so it works with 0.1.3 and later as well as earlier builds.
+That rests on two upstream fixes this fork carries ahead of their merge upstream: [#7851](https://github.com/kunchenguid/firstmate/pull/7851), which accepts 0.1.3's merged configuration and pending-request tools, and [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which accepts model options listed as a values array.
+The next upstream sync reconciles them once they merge or change.
 Details: [capability gate](docs/t3code-backend.md#capability-gate).
 
 ## Telemetry warning that fits the T3 Code fork
 
 The T3 Code fork turns its product telemetry off by default, so a server with no telemetry setting now reads as off and draws no warning.
 FirstMate still warns when the server turns telemetry on, or when it cannot read the setting.
+Upstream warns unless the server proves telemetry is off, because stock T3 Code has it on by default.
+The fork departs because its T3 Code turns telemetry off by default, so a missing setting no longer means on.
 Details: [setup](docs/t3code-backend.md#setup).
+
+## No CI by default
+
+The tracked [`.no-mistakes.yaml`](.no-mistakes.yaml) declares `no_ci: true`, so a no-mistakes run does not wait for CI checks.
+Upstream runs GitHub Actions on every pull request; GitHub Actions are off on this fork, so no checks would ever register and the run would stall.
+The no-mistakes review and the local test and lint steps it runs stand in for CI.
+Anyone who clones the fork inherits the setting; turn it off in their copy once they have a live CI.
+
+## Review boards that keep listening
+
+A worker's Lavish review board now keeps listening after it hands the worker a note, so every message the captain sends reaches the worker as soon as it is sent, even while the worker is still working an earlier one.
+The worker posts a short acknowledgement on the board as soon as it reads a note, then its full reply when that round is done, and its re-arm acknowledges only the rounds that reply answers.
+Upstream runs one batch per round: the listener stops after each round and the worker's reply-carrying re-arm starts the next, likely so one listener and one reply always pair with one round and the older Lavish that can only post a reply with its next poll still works.
+The fork departs because that made the board feel unresponsive: anything sent mid-round waited on the board for minutes with no sign it had been seen.
+It needs a Lavish that posts replies on their own (0.1.80 and later); on an older one the board keeps upstream's one-batch behavior.
+Details: [crew-hosted review boards](docs/configuration.md#crew-hosted-lavish-review-boards).
+
+## Rebased local-only work still lands
+
+A `local-only` task whose worker rebased its approved branch onto a newer main now lands, as long as the rebase carries exactly the approved changes.
+Upstream records the commit a task reported done at and lands only that commit, so an approval never covers commits added after it, such as unfinished work a worker added after being steered ([#7782](https://github.com/kunchenguid/firstmate/issues/7782)).
+The fork departs because it runs many `local-only` workers on one project at once, often with `yolo`: each landing moves main, the other workers rebase as their instructions say, and the rebased commit is no longer the recorded one, so every later landing in the batch was refused and needed a fresh approval for unchanged work.
+The fork keeps upstream's intent by landing a rebased branch only when its commits match the approved ones one for one by exact content, in the same order, with no merge commit; commit messages may differ.
+An added, amended, reordered, or squashed commit is still refused, and the refusal names the commits that differ.
+The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
+Approved by the captain on 2026-11-08.
+Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).

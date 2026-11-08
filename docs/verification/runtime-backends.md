@@ -1147,6 +1147,20 @@ ok - opencode (1.18.33): the doorbell reached a real worker, which acted and ack
 OpenCode needed `FM_SEND_INBOX_LIVE_TIMEOUT=560` because its configured model was still mid-turn at the default 240 seconds.
 Pi 0.87.1 was installed but not verified: its configured model returned an account error (`The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account`) before it read the inbox.
 
+### Mid-turn delivery
+
+Whether a doorbell reaches a worker whose turn is still running matters most for a worker-owned review board, which now delivers each captain message as its own note while the worker works ([crew-hosted Lavish review boards](../configuration.md#crew-hosted-lavish-review-boards)).
+On 2026-11-08, on macOS arm64 with a Claude Code worker (claude-opus-5-5) on the T3 Code backend, the worker sent a probe line to its own thread through the same `fm_backend_send_text_submit t3code` primitive the doorbell ring uses, from inside its running turn.
+
+```text
+probe 1: sent 1794134736, verdict empty, rc 0; seen as a user message at the next tool boundary, at 1794134742, turn still running
+probe 2: sent 1794135827 at the start of a tool call that slept 6 s (ended 1794135834); seen right after that call returned, turn still running
+```
+
+On T3 Code a steer sent mid-turn therefore reaches a Claude worker after its current tool call, not after its turn; a single long tool call delays it by that call's duration.
+Codex and other T3 Code drivers were not measured.
+tmux was not installed on that machine, and Herdr was not driven because the measuring task had no isolated Herdr lab, so terminal backends remain unmeasured: their doorbell is typed into the composer and is read whenever the harness takes queued input.
+
 ## Waiting-worker command ceilings
 
 The `# Waiting` section of the ship and scout briefs (`bin/fm-brief.sh`) has a worker hold every external wait inside one blocking shell command, bounded by what its harness lets one command run.

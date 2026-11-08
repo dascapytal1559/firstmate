@@ -1388,6 +1388,50 @@ test_visual_review_uses_shared_completion_owner() {
   pass "ended visual review follows the same captain-hold completion owner"
 }
 
+# The 8 Nov sequence: the captain answered on the scout's review board one
+# minute after the scout reported its decision, and that note reaches only the
+# scout. Completing the decision inventory names the unread board feedback.
+test_complete_names_unread_board_feedback() {
+  local home id art out drain
+  home=$(make_home board-feedback)
+  id=sample-layout-scout
+  tasks_in "$home" add "$id" "Lay out the sample page" --kind scout --repo sample --start >/dev/null
+  write_origin_meta "$home" "$id"
+  printf 'done: layout options ready\n' > "$home/state/$id.status"
+  cat > "$home/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+[ "${1-}" != --version ] || { printf '0.1.79\n'; exit 0; }
+[ "${1-}" = poll ] || exit 2
+printf 'session:\n  status: feedback\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","So B is good. I like B.","","message",""\n'
+SH
+  chmod +x "$home/fakebin/lavish-axi"
+  art="$home/board.html"
+  printf '<h1>layouts</h1>\n' > "$art"
+  mkdir -p "$home/lavish-state"
+  perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -e '
+    my ($path, $artifact) = @ARGV;
+    my $real = realpath($artifact);
+    my $key = substr(sha256_hex($real), 0, 16);
+    open my $out, ">", $path or die $!;
+    print $out encode_json({ sessions => { $key => { key => $key, file => $real, status => "open",
+      url => "http://127.0.0.1:14387/session/0123456789abcdef" } } });
+  ' "$home/lavish-state/state.json" "$art"
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
+  LAVISH_AXI_STATE_DIR="$home/lavish-state" run_lavish "$home" arm "$art" --for "$id" >/dev/null \
+    || fail "could not arm the scout's review board"
+  for _ in $(seq 1 200); do [ -f "$home/state/$id.inbox/001.msg" ] && break; sleep 0.02; done
+  [ -f "$home/state/$id.inbox/001.msg" ] || fail "the captain's board note never reached the scout"
+  out=$(run_captain "$home" complete "$id" --none) || fail "completion failed beside unread board feedback"
+  assert_contains "$out" "complete: $id" "completion did not record the inventory"
+  assert_contains "$out" "board: $id has not acknowledged round 1 of its review board" \
+    "completion did not name the unacknowledged board round"
+  assert_contains "$out" "board: $id has not read board note" "completion did not name the unread board note"
+  drain=$(run_drain "$home") || fail "the drain failed beside unread board feedback"
+  assert_contains "$drain" "BOARD FEEDBACK" "the unread board note never reached the drain"
+  assert_contains "$drain" "$id has not read board note" "the drain section did not name the unread note"
+  pass "completing a decision inventory and the drain both name the origin's unread review-board feedback"
+}
+
 test_none_inventory_and_resolved_prose_do_not_create_holds() {
   local home id json
   home=$(make_home no-false-holds)
@@ -5132,6 +5176,7 @@ test_interrupted_answer_preserves_hold_age
 test_deferral_leaves_captains_call_until_due
 test_out_of_band_close_is_recordable
 test_visual_review_uses_shared_completion_owner
+test_complete_names_unread_board_feedback
 test_none_inventory_and_resolved_prose_do_not_create_holds
 test_completion_keeps_an_armed_pr_identity_last
 test_completion_replaces_a_pair_recorded_after_pr
