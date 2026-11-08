@@ -196,4 +196,5 @@ The fork departs because it runs many `local-only` workers on one project at onc
 The fork keeps upstream's intent by landing a rebased branch only when its commits match the approved ones one for one by exact content, in the same order, with no merge commit; commit messages may differ.
 An added, amended, reordered, or squashed commit is still refused, and the refusal names the commits that differ.
 The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
+Approved by the captain on 2026-11-08.
 Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
