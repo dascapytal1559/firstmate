@@ -43,9 +43,9 @@ land() {
 }
 
 assert_refused() {
-  local out rc=0
-  out=$(land 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "landing unexpectedly succeeded: $out"
+  local rc=0
+  REFUSAL=$(land 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "landing unexpectedly succeeded: $REFUSAL"
   [ "$(git -C "$PROJ" rev-parse HEAD)" = "$BASE" ] || fail 'refusal moved main'
   [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'refusal left a dirty checkout'
   [ ! -e "$PROJ/approved.txt" ] || fail 'refusal left approved files behind'
@@ -64,6 +64,94 @@ test_branch_advance_does_not_change_approval() {
   [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'landing did not update the checkout'
   [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'landing left a dirty checkout'
   pass 'branch advance refuses, and restoring the reported X lands exactly X'
+}
+
+# Another task lands on main after X was approved, and the worker rebases X
+# onto it, as its instructions say. A second approved commit, when asked for,
+# lets reorder and squash cases exist.
+approve_then_rebase() {  # <case> [two]
+  make_case "$1"
+  if [ "${2:-}" = two ]; then
+    printf 'approved X2\n' > "$WT/approved2.txt"
+    git -C "$WT" add approved2.txt
+    git -C "$WT" commit -q -m X2
+    X=$(git -C "$WT" rev-parse HEAD)
+  fi
+  record_done || fail "$1: done head was not accepted"
+  printf 'other task\n' > "$PROJ/other.txt"
+  git -C "$PROJ" add other.txt
+  git -C "$PROJ" commit -q -m other
+  BASE=$(git -C "$PROJ" rev-parse HEAD)
+  git -C "$WT" rebase -q main || fail "$1: rebase failed"
+  [ "$(git -C "$WT" rev-parse HEAD)" != "$X" ] || fail "$1: rebase kept the approved commit"
+}
+
+test_rebased_identical_head_lands() {
+  local out rebased
+  approve_then_rebase rebased
+  git -C "$WT" commit -q --amend -m 'X, reworded'
+  rebased=$(git -C "$WT" rev-parse HEAD)
+  record_done || fail 'the rebased done was refused'
+  [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail 'the rebased done moved the approved head'
+  out=$(land 2>&1) || fail "the rebased identical head did not land: $out"
+  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$rebased" ] || fail 'landing did not use the rebased head'
+  [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'landing did not update the checkout'
+  [ -e "$PROJ/other.txt" ] || fail 'landing lost the other task'
+  [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'landing left a dirty checkout'
+  assert_contains "$out" "landed rebased head $rebased" 'the output did not name the rebased head'
+  assert_contains "$out" "approved head $X" 'the output did not name the approved head'
+  [ "$(fm_dod_meta_value "$META" local_landed_head)" = "$rebased" ] || fail 'the landed head was not recorded'
+  [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail 'landing changed the approved head'
+  pass 'a rebased head with the same changes lands and is recorded, keeping the approved head'
+}
+
+test_rebased_changed_head_refuses() {
+  local variant expect
+  for variant in extra amended whitespace merge reordered squashed; do
+    case "$variant" in
+      reordered|squashed) approve_then_rebase "rebased-$variant" two ;;
+      merge) make_case "rebased-$variant"
+        record_done || fail 'merge: done head was not accepted'
+        printf 'other task\n' > "$PROJ/other.txt"
+        git -C "$PROJ" add other.txt
+        git -C "$PROJ" commit -q -m other
+        BASE=$(git -C "$PROJ" rev-parse HEAD)
+        git -C "$WT" merge -q --no-edit main ;;
+      *) approve_then_rebase "rebased-$variant" ;;
+    esac
+    case "$variant" in
+      extra)
+        printf 'unfinished\n' > "$WT/unfinished.txt"
+        git -C "$WT" add unfinished.txt
+        git -C "$WT" commit -q -m Y
+        expect='extra commit' ;;
+      amended)
+        printf 'approved X, changed\n' > "$WT/approved.txt"
+        git -C "$WT" commit -q -a --amend --no-edit
+        expect='differs from approved' ;;
+      whitespace)
+        printf 'approved  X\n' > "$WT/approved.txt"
+        git -C "$WT" commit -q -a --amend --no-edit
+        expect='differs from approved' ;;
+      merge) expect='merge commit' ;;
+      reordered)
+        git -C "$WT" reset -q --hard main
+        git -C "$WT" cherry-pick "$X" >/dev/null
+        git -C "$WT" cherry-pick "$X~1" >/dev/null
+        expect='differs from approved' ;;
+      squashed)
+        git -C "$WT" reset -q --soft HEAD~2
+        git -C "$WT" commit -q -m squashed
+        expect='missing approved commit' ;;
+    esac
+    record_done >/dev/null 2>&1 && fail "$variant: the changed done was accepted"
+    [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail "$variant: the approved head moved"
+    assert_refused
+    assert_contains "$REFUSAL" 'does not carry exactly its changes' "$variant: the refusal did not explain itself"
+    assert_contains "$REFUSAL" "$expect" "$variant: the refusal did not name the differing commits"
+    assert_no_regex '^local_landed_head=' "$META" "$variant: a refusal recorded a landed head"
+  done
+  pass 'rebased heads with an extra, amended, whitespace-amended, merge, reordered, or squashed commit refuse'
 }
 
 test_missing_and_malformed_head_refuse() {
@@ -311,4 +399,5 @@ SH
 fm_test_run test_two_tasks_cannot_undo_a_same_tree_landing test_branch_advance_does_not_change_approval \
   test_missing_and_malformed_head_refuse test_change_after_hold_check_refuses \
   test_diverged_default_refuses test_change_during_approval_check_refuses \
-  test_snapshot_cannot_pin_a_replacement_task test_done_recording_preserves_caller_locks
+  test_snapshot_cannot_pin_a_replacement_task test_done_recording_preserves_caller_locks \
+  test_rebased_identical_head_lands test_rebased_changed_head_refuses

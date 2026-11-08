@@ -187,3 +187,13 @@ Upstream runs one batch per round: the listener stops after each round and the w
 The fork departs because that made the board feel unresponsive: anything sent mid-round waited on the board for minutes with no sign it had been seen.
 It needs a Lavish that posts replies on their own (0.1.80 and later); on an older one the board keeps upstream's one-batch behavior.
 Details: [crew-hosted review boards](docs/configuration.md#crew-hosted-lavish-review-boards).
+
+## Rebased local-only work still lands
+
+A `local-only` task whose worker rebased its approved branch onto a newer main now lands, as long as the rebase carries exactly the approved changes.
+Upstream records the commit a task reported done at and lands only that commit, so an approval never covers commits added after it, such as unfinished work a worker added after being steered ([#7782](https://github.com/kunchenguid/firstmate/issues/7782)).
+The fork departs because it runs many `local-only` workers on one project at once, often with `yolo`: each landing moves main, the other workers rebase as their instructions say, and the rebased commit is no longer the recorded one, so every later landing in the batch was refused and needed a fresh approval for unchanged work.
+The fork keeps upstream's intent by landing a rebased branch only when its commits match the approved ones one for one by exact content, in the same order, with no merge commit; commit messages may differ.
+An added, amended, reordered, or squashed commit is still refused, and the refusal names the commits that differ.
+The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
+Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).

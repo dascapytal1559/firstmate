@@ -12,7 +12,13 @@
 # contract.
 # For local-only tasks, the first accepted done head is latched as exactly one
 # local_done_head= full commit id in the live task metadata. Observing done again
-# never changes that identity. Revised work needs a new task/approval record.
+# never changes that identity. The approval covers that head's content: a later
+# head is the same approved work only when fm_dod_local_rebase_matches proves it
+# adds exactly the latched head's commits by content, such as after a rebase onto
+# a default branch that other landings advanced, so a done naming it is accepted
+# and bin/fm-merge-local.sh may land it with or without yolo. Any other revised
+# work, including an added, amended, reordered, squashed, or merge commit, needs
+# a new task/approval record.
 # The optional third argument is the task's full ship-branch name (a project's
 # registered prefix may replace the legacy `fm/` one); it defaults to `fm/<task-id>`
 # and is the immutable task branch rendered in every delivery contract.
@@ -834,12 +840,86 @@ fm_dod_local_done_head() {  # <meta>
   case ${#value} in 40|64) printf '%s\n' "$value" ;; *) return 1 ;; esac
 }
 
+# The project's default branch name: origin/HEAD's target, else main or master.
+fm_dod_local_default_branch() {  # <project>
+  local ref branch
+  ref=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$ref" ]; then
+    printf '%s\n' "${ref#origin/}"
+    return 0
+  fi
+  for branch in main master; do
+    if git -C "$1" show-ref --verify --quiet "refs/heads/$branch"; then
+      printf '%s\n' "$branch"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# One "<content-id> <short commit> <subject>" line per commit of <base>..<head>,
+# oldest first. The content id is `git patch-id --verbatim` of the commit's
+# binary-safe diff: --stable alone treats whitespace-only edits as equal, and a
+# diff without --binary hides binary content. An empty commit, which patch-id
+# skips, gets a fixed id. A merge has no single patch, so a range with one fails.
+fm_dod_local_commit_patches() {  # <project> <base> <head>
+  local commits commit id subject
+  [ "$(git -C "$1" rev-list --count --min-parents=2 "$2..$3")" = 0 ] || return 1
+  commits=$(git -C "$1" rev-list --reverse "$2..$3") || return 1
+  for commit in $commits; do
+    id=$(set -o pipefail
+      git -C "$1" diff-tree -p --binary --full-index --no-color --no-ext-diff --no-textconv "$commit" \
+        | git patch-id --verbatim) || return 1
+    id=${id%% *}
+    subject=$(git -C "$1" log -1 --format=%s "$commit") || return 1
+    printf '%s %s %s\n' "${id:-empty-commit}" "${commit:0:12}" "$subject"
+  done
+}
+
+# 0 when <candidate> carries exactly the changes of the approved local done head
+# <approved>: the commits each adds over its merge base with <default> have the
+# same content ids (fm_dod_local_commit_patches), the same count, in the same
+# order. Commit messages, authors, and dates may differ. Otherwise prints which
+# commits differ. It does not test that <candidate> fast-forwards <default>.
+fm_dod_local_rebase_matches() {  # <project> <approved> <candidate> <default>
+  local project=$1 approved=$2 candidate=$3 default=$4 a_base c_base a_list c_list
+  if ! a_base=$(git -C "$project" merge-base "$approved" "$default" 2>/dev/null) \
+    || ! c_base=$(git -C "$project" merge-base "$candidate" "$default" 2>/dev/null); then
+    printf '%s\n' 'the approved head or the branch shares no history with the default branch'
+    return 1
+  fi
+  if ! a_list=$(fm_dod_local_commit_patches "$project" "$a_base" "$approved") \
+    || ! c_list=$(fm_dod_local_commit_patches "$project" "$c_base" "$candidate"); then
+    printf '%s\n' 'commits could not be compared: one side has a merge commit or could not be read'
+    return 1
+  fi
+  if [ -z "$a_list" ]; then
+    printf '%s\n' 'the approved head adds no commits over the default branch'
+    return 1
+  fi
+  [ "$(printf '%s\n' "$a_list" | cut -d' ' -f1)" != "$(printf '%s\n' "$c_list" | cut -d' ' -f1)" ] || return 0
+  FM_A_LIST=$a_list FM_C_LIST=$c_list awk 'BEGIN {
+    a = ENVIRON["FM_A_LIST"]; c = ENVIRON["FM_C_LIST"]
+    na = split(a, A, "\n"); nc = split(c, C, "\n"); n = na > nc ? na : nc; out = ""
+    for (i = 1; i <= n; i++) {
+      split(A[i], x, " "); split(C[i], y, " ")
+      if (i <= na && i <= nc && x[1] == y[1]) continue
+      if (i > na) d = "extra commit " substr(C[i], index(C[i], " ") + 1)
+      else if (i > nc) d = "missing approved commit " substr(A[i], index(A[i], " ") + 1)
+      else d = "commit " substr(C[i], index(C[i], " ") + 1) " differs from approved " substr(A[i], index(A[i], " ") + 1)
+      out = out (out == "" ? "" : "; ") d
+    }
+    printf "approved %d commit(s), branch %d: %s\n", na, nc, out
+  }'
+  return 1
+}
+
 # Latch the head before reporting readiness, not at landing time. Snapshot
 # callers may supply captured meta; compare it with the live record under the
 # existing control/meta locks before publishing to the live owner only. A caller
 # already holding the live meta lock passes meta-locked and retains its locks.
 fm_dod_pin_local_done_head() (  # <state> <id> <meta> <sha> <captured-meta> [meta-locked]
-  local state=$1 id=$2 meta=$3 sha=$4 captured=$5 script_dir live control='' lock='' tmp='' pinned
+  local state=$1 id=$2 meta=$3 sha=$4 captured=$5 script_dir live control='' lock='' tmp='' pinned project default
   script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   # These lazy imports are canonical lint roots. Keep their subshell-local
   # initializers out of ShellCheck's analysis of the sourcing caller's globals.
@@ -861,7 +941,10 @@ fm_dod_pin_local_done_head() (  # <state> <id> <meta> <sha> <captured-meta> [met
   [ "$(cat "$live")" = "$captured" ] || return 1
   if grep -q '^local_done_head=' "$live"; then
     pinned=$(fm_dod_local_done_head "$live") || return 1
-    [ "$pinned" = "$sha" ]
+    [ "$pinned" != "$sha" ] || return 0
+    project=$(fm_dod_meta_value "$live" project)
+    default=$(fm_dod_local_default_branch "$project") || return 1
+    fm_dod_local_rebase_matches "$project" "$pinned" "$sha" "refs/heads/$default" >/dev/null
     return
   fi
   tmp=$(mktemp "$state/.local-done-$id.XXXXXX") || return 1
@@ -1039,7 +1122,7 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
     if [ "$mode" = local-only ] && [ -n "$meta" ]; then
       if [ -z "$state" ] || [ -z "$id" ] \
         || ! fm_dod_pin_local_done_head "$state" "$id" "$meta" "$sha" "$captured" "${9:-}"; then
-        printf '%s\n' "local-only done head could not be recorded or differs from the recorded head; revised work requires a new task/approval record"
+        printf '%s\n' "local-only done head could not be recorded, or differs from the recorded head without carrying exactly its changes; revised work requires a new task/approval record"
         return 1
       fi
     fi

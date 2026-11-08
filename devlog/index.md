@@ -769,3 +769,37 @@ The choices made:
 
 The evidence is the new `tests/fm-procevent-lavish-live-steer.test.sh`, which replays the sequence against a stand-in Lavish, plus new cleanup, decision-completion, and drain cases.
 A probe against a private Lavish 0.1.96 server confirmed that a reply posts while the listener is live without ending it, and that a note sent mid-round comes back on that listener at once.
+
+## 31. Rebased work lands when it is the same work (8 November 2026)
+
+![Approved at X; after another task lands and the worker rebases, X' with exactly X's changes lands, while an extra commit Y or an edited X* is refused](media/rebased-landing.svg)
+
+On the evening of 8 November three `local-only` tasks on one project were refused at landing one after another and had to be landed through extra record-keeping tasks.
+
+> Landing tool fix we wanna know upstream intention - why only issue for us
+>
+> — 8 November 2026
+
+Upstream's landing records the commit a task reported done at and lands only that commit ([#7782](https://github.com/kunchenguid/firstmate/issues/7782)).
+That stops a worker that was steered after its approval from slipping unfinished commits into the landing.
+It bites here because several projects run `local-only` with yolo and many workers at once: each landing moves main, the next worker rebases as its instructions say, and its rebased commit is no longer the recorded one, so the approval had to be given again for unchanged work.
+
+> Ok landing tool fix is go
+>
+> — 8 November 2026
+
+What was built:
+
+- **A rebased branch lands when it is the same work.** Its commits must match the approved ones one for one by exact content, in the same order, and it must still fast-forward main.
+- **Anything else is still refused, and the refusal says why.** An extra, edited, reordered, squashed, or merge commit is refused with the commits that differ named.
+- **The worker's second "done" counts too.** A done report naming the rebased commit is accepted by the same check, so the task does not look blocked before landing.
+
+The choices made:
+
+- **Exact content, whitespace included.** Git's usual patch comparison ignores whitespace, which would let an indentation-only edit pass as unchanged, so the check compares patches verbatim, binary files included.
+- **Commit messages may differ.** The approval is about what changes, so rewording a message keeps the work the same.
+- **The approval stays where it was given.** The task keeps the commit it first reported as its approved one, and the landing records the rebased commit it actually landed.
+- **The same rule with or without yolo.** A rebase that carries exactly the approved changes is the approved work, so it needs no new approval either way.
+
+The evidence is two new cases in `tests/fm-merge-local.test.sh`: a rebased, reworded branch lands and is recorded, and extra, amended, whitespace-only, merge, reordered, and squashed variants are each refused with the differing commits named.
+Swapping the verbatim comparison for Git's whitespace-blind one makes the whitespace case fail, which shows the test guards it.

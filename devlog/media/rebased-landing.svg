@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="880" height="360" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#1f2328">Approved at X, then another task lands and the worker rebases</text>
+
+  <text x="24" y="85" fill="#57606a">Approved</text>
+  <line x1="200" y1="80" x2="300" y2="80" stroke="#d0d7de" stroke-width="3"/>
+  <circle cx="200" cy="80" r="11" fill="#8c959f"/>
+  <text x="200" y="85" fill="#ffffff" font-size="12" text-anchor="middle">B</text>
+  <circle cx="300" cy="80" r="11" fill="#0969da"/>
+  <text x="300" y="85" fill="#ffffff" font-size="12" text-anchor="middle">X</text>
+  <text x="330" y="85" fill="#0a3069">the commit the task reported done at; its changes are what was approved</text>
+
+  <text x="24" y="155" fill="#57606a">Rebased, same</text>
+  <line x1="200" y1="150" x2="400" y2="150" stroke="#d0d7de" stroke-width="3"/>
+  <circle cx="200" cy="150" r="11" fill="#8c959f"/>
+  <text x="200" y="155" fill="#ffffff" font-size="12" text-anchor="middle">B</text>
+  <circle cx="300" cy="150" r="11" fill="#8c959f"/>
+  <text x="300" y="155" fill="#ffffff" font-size="12" text-anchor="middle">O</text>
+  <circle cx="400" cy="150" r="11" fill="#0969da"/>
+  <text x="400" y="155" fill="#ffffff" font-size="12" text-anchor="middle">X'</text>
+  <rect x="440" y="136" width="360" height="26" rx="4" fill="#dafbe1" stroke="#4ac26b"/>
+  <text x="452" y="154" fill="#116329">lands: X' carries exactly X's changes</text>
+
+  <text x="24" y="225" fill="#57606a">Rebased, extra</text>
+  <line x1="200" y1="220" x2="500" y2="220" stroke="#d0d7de" stroke-width="3"/>
+  <circle cx="200" cy="220" r="11" fill="#8c959f"/>
+  <text x="200" y="225" fill="#ffffff" font-size="12" text-anchor="middle">B</text>
+  <circle cx="300" cy="220" r="11" fill="#8c959f"/>
+  <text x="300" y="225" fill="#ffffff" font-size="12" text-anchor="middle">O</text>
+  <circle cx="400" cy="220" r="11" fill="#0969da"/>
+  <text x="400" y="225" fill="#ffffff" font-size="12" text-anchor="middle">X'</text>
+  <circle cx="500" cy="220" r="11" fill="#cf222e"/>
+  <text x="500" y="225" fill="#ffffff" font-size="12" text-anchor="middle">Y</text>
+  <rect x="540" y="206" width="260" height="26" rx="4" fill="#ffebe9" stroke="#ff8182"/>
+  <text x="552" y="224" fill="#a40e26">refused: extra commit Y</text>
+
+  <text x="24" y="295" fill="#57606a">Rebased, edited</text>
+  <line x1="200" y1="290" x2="400" y2="290" stroke="#d0d7de" stroke-width="3"/>
+  <circle cx="200" cy="290" r="11" fill="#8c959f"/>
+  <text x="200" y="295" fill="#ffffff" font-size="12" text-anchor="middle">B</text>
+  <circle cx="300" cy="290" r="11" fill="#8c959f"/>
+  <text x="300" y="295" fill="#ffffff" font-size="12" text-anchor="middle">O</text>
+  <circle cx="400" cy="290" r="11" fill="#cf222e"/>
+  <text x="400" y="295" fill="#ffffff" font-size="12" text-anchor="middle">X*</text>
+  <rect x="440" y="276" width="360" height="26" rx="4" fill="#ffebe9" stroke="#ff8182"/>
+  <text x="452" y="294" fill="#a40e26">refused: X* differs from approved X</text>
+
+  <text x="24" y="340" font-size="12" fill="#57606a">O is the other task's landing. Reordered, squashed, and merge commits are refused too.</text>
+</svg>
