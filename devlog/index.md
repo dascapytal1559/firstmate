@@ -716,3 +716,23 @@ His answer:
 - **Calls the old rule shelved come back** on the next pass, since the wanted state for those calls changed.
 
 The evidence is `tests/fm-t3-needs-me.test.sh`, against the fake T3 server: a call raised a week ago, a dated hold a day after its date, a deferred call re-asked early, and a call whose blocker cleared all stay under FirstMate's card, and a thread the old rule left on the shelf comes back.
+
+## 29. Chat lists every decision again; the threads are an extra track (8 November 2026)
+
+> I don't think [upstream's] version was working very well because I was only ever getting a one-liner, like a summary about the decision, when it gets restated. And my thinking is we can keep that one-liner question. We can essentially keep um the upstream intention, but we create an additional track to track the decisions and its like evolution in full detail. So I'm thinking it's an additional track rather than overriding the default
+>
+> — 8 November 2026
+
+Entry 23 made chat stop repeating: while the decision threads matched the records, Captain's Call gave a count and named only new or changed decisions.
+That overrode upstream's listing instead of adding to it, so this round puts the listing back and keeps the threads beside it.
+
+- **Captain's Call lists every open decision again**, one short line each, exactly as upstream does, whether or not T3 is in sync.
+- **The decision threads are unchanged.** Each call still has its own thread carrying its full context and every update, created, snoozed, settled, and archived as before.
+- **The count machinery is gone.** `bin/fm-t3-needs-me.sh status` and `mentioned`, the record of what chat last named, and the in-sync mark existed only for the count rule, and nothing else read them.
+
+The choices made:
+
+- **The text matches upstream again** in `AGENTS.md` section 9 and in Bearings' Captain's Call, so later upstream changes there merge cleanly.
+- **Recording a call's context before raising it stays**, because the threads show those words; the `captain-hold-lifecycle` skill's own trigger already covers when to do it.
+
+The evidence is `tests/fm-t3-needs-me.test.sh`, which still proves every thread placement against the fake T3 server, now by reading the threads directly.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-t3-needs-me.test.sh - the captain's T3 decision threads follow his
 # open captain calls: bin/fm-captain-hold.sh context, bin/fm-t3-needs-me.sh
-# sync, status, mentioned, and reply-task, driven through the real
+# sync and reply-task, driven through the real
 # bin/fm-captain-hold.sh and tasks-axi backlogs against the fake T3 server.
 set -u
 
@@ -311,7 +311,6 @@ test_failed_call_and_restart_converge() {
   t3_fake_set 'w.failTools = { t3_thread_organize: { code: "orchestration_error", message: "no" } }'
   captain hold w1 --reason "Pick the layout" --until 2099-01-02 >/dev/null 2>&1 || fail "hold should still succeed"
   assert_equals "false" "$(decision w1 't.snoozed')" "the failed snooze did not land"
-  assert_equals "in_sync: no" "$(needs_me status | head -n 1)" "status knows the pass did not match"
   t3_fake_set 'delete w.failTools'
   sync_now >/dev/null || fail "the next sync should succeed"
   assert_equals "true" "$(decision w1 't.snoozed')" "the next pass applies it"
@@ -320,7 +319,6 @@ test_failed_call_and_restart_converge() {
   : > "$T3_FAKE_LOG"
   sync_now >/dev/null || fail "sync after a restart should succeed"
   assert_equals "" "$(t3_fake_mutations)" "a restart alone changes nothing"
-  assert_equals "in_sync: yes" "$(needs_me status | head -n 1)" "and the records match"
   set_decision_thread w1 't.decision = null;'
   sync_now >/dev/null || fail "sync should succeed"
   assert_equals "1" "$(decision w1 't.decision.revision')" "a lost payload is set again"
@@ -371,7 +369,6 @@ test_aged_holds_stay_active() {
   FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "aged" "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 home_env "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input | jq -r '.backlog.records[] | select(.id == "w1") | .hold_bucket')" "the hold reads as aged"
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "an aged call is an active top-level thread"
-  assert_contains "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 needs_me status)" "waiting: 1" "and counts as waiting on him"
   FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 sync_now >/dev/null || fail "the next sync should succeed"
   assert_equals "false" "$(decision w1 't.settled')" "later passes keep it there"
   pass "fm-t3-needs-me.sh: an aged call stays an active thread"
@@ -386,7 +383,6 @@ test_open_calls_stay_under_firstmate() {
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "a call raised over a day ago is still under FirstMate"
   FM_NEEDS_ME_NOW=$(( $(date +%s) + 7 * 86400 )) needs_me sync >/dev/null || fail "a week later sync should succeed"
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "and a week later"
-  assert_contains "$(FM_NEEDS_ME_NOW=$(( $(date +%s) + 7 * 86400 )) needs_me status)" "waiting: 1" "and it still counts as waiting on him"
   pass "fm-t3-needs-me.sh: an open call stays under FirstMate until it is answered, however long it waits"
 }
 
@@ -402,7 +398,6 @@ test_a_call_shelved_by_the_old_day_rule_comes_back() {
   sync_now >/dev/null || fail "sync should succeed"
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "the next pass brings it back under FirstMate"
   assert_equals "false" "$(jq 'has("activeSince")' "$HOME_DIR/state/t3-needs-me/w1.json")" "and its record drops the old field"
-  assert_contains "$(needs_me status)" "waiting: 1" "and it counts as waiting on him"
   pass "fm-t3-needs-me.sh: a call the old one-day rule shelved comes back on the next pass"
 }
 
@@ -421,27 +416,22 @@ test_later_passes_leave_the_captains_own_placement() {
   assert_equals "true" "$(decision w3 't.settled === true && t.snoozed !== true')" "his reply's settle stands until the answer is recorded"
   FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 120 )) needs_me sync >/dev/null || fail "the next sync should succeed"
   assert_equals "2099-01-05T00:00:00Z" "$(decision w1 't.snoozedUntil')" "and later passes leave them alone"
-  assert_contains "$(FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 120 )) needs_me status)" "in_sync: yes" "while the records match"
   pass "fm-t3-needs-me.sh: later passes leave the captain's own snooze, archive, or settle"
 }
 
-test_an_old_call_keeps_its_mention_and_reads_changed() {
+test_an_old_call_takes_an_update() {
   make_home old-update
   local raised=$(( $(date +%s) - 2 * 86400 ))
   FM_CAPTAIN_HOLD_NOW=$(jq -nr --argjson t "$raised" '$t | todateiso8601') \
     captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "a call raised two days ago is under FirstMate"
-  needs_me mentioned w1 || fail "mentioned should succeed"
-  assert_present "$HOME_DIR/state/needs-me-mentioned/w1" "the captain was told of it"
   captain context w1 --text-file "$(say 'Grid or list?')" >/dev/null 2>&1 || fail "raise should succeed"
-  assert_present "$HOME_DIR/state/needs-me-mentioned/w1" "a context rewrite keeps its mention record"
   captain context w1 --changed "A third layout came up" --text-file "$(say 'Grid, list, or cards?')" >/dev/null 2>&1 \
     || fail "update should succeed"
-  assert_contains "$(needs_me status)" "$(printf 'changed\tw1\tPick the print layout\tA third layout came up')" \
-    "an update names it as changed, with what changed"
+  assert_equals "A third layout came up" "$(decision w1 't.decision.entries.at(-1).changed')" "the update reaches its thread with what changed"
   FM_NEEDS_ME_NOW=$(( $(date +%s) + 86400 + 60 )) needs_me sync >/dev/null || fail "a day later sync should succeed"
   assert_equals "false" "$(decision w1 't.settled === true || t.snoozed === true')" "a day after the update it is still under FirstMate"
-  pass "fm-t3-needs-me.sh: an old call keeps its mention record and an update reads as changed"
+  pass "fm-t3-needs-me.sh: an old call takes an update and stays under FirstMate"
 }
 
 test_dated_hold_stays_under_firstmate_once_due() {
@@ -452,12 +442,10 @@ test_dated_hold_stays_under_firstmate_once_due() {
   local due=2099-01-04T00:01:00Z late=2099-01-04T23:59:00Z next_day=2099-01-05T00:02:00Z
   at "$due" needs_me sync >/dev/null || fail "sync on the due date should succeed"
   assert_equals "false" "$(decision w1 't.snoozed')" "the minute its date comes due it is back under FirstMate"
-  assert_contains "$(at "$due" needs_me status)" "waiting: 1" "and counts as waiting on him"
   at "$late" needs_me sync >/dev/null || fail "sync late on the due date should succeed"
   assert_equals "false" "$(decision w1 't.snoozed')" "for the whole day, though it was raised days before"
   at "$next_day" needs_me sync >/dev/null || fail "sync a day after the due date should succeed"
   assert_equals "false" "$(decision w1 't.snoozed')" "and after that day"
-  assert_contains "$(at "$next_day" needs_me status)" "waiting: 1" "still counting as waiting on him"
   pass "fm-t3-needs-me.sh: a dated hold comes back under FirstMate when its date comes due and stays"
 }
 
@@ -487,38 +475,15 @@ test_unblocked_call_stays_under_firstmate() {
   (cd "$HOME_DIR" && tasks-axi 'done' w1) >/dev/null 2>&1 || fail "could not finish the blocker"
   at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the blocker cleared should succeed"
   assert_equals "false" "$(decision w3 't.settled === true || t.snoozed === true')" "four days after it was raised, it is under FirstMate"
-  assert_contains "$(at 2099-01-05T09:00:00Z needs_me status)" "waiting: 1" "and counts as waiting on him"
   at 2099-01-06T09:01:00Z needs_me sync >/dev/null || fail "sync a day later should succeed"
   assert_equals "false" "$(decision w3 't.settled === true || t.snoozed === true')" "and stays there a day later"
   pass "fm-t3-needs-me.sh: a call whose blocker clears comes back under FirstMate"
-}
-
-test_status_and_mentioned() {
-  make_home status
-  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
-  captain hold w2 --reason "Buy the camera" --until 2099-01-02 >/dev/null 2>&1 || fail "hold should succeed"
-  local out
-  out=$(needs_me status)
-  assert_contains "$out" "in_sync: yes" "the pass matched"
-  assert_contains "$out" "waiting: 1" "one decision waits at the top (the dated one is snoozed)"
-  assert_contains "$out" "$(printf 'new\tw1\tPick the print layout')" "w1 is new"
-  needs_me mentioned w1 w2 || fail "mentioned should succeed"
-  out=$(needs_me status)
-  assert_not_contains "$out" "w1" "a mentioned decision is not named again"
-  captain context w1 --changed "A third layout came up" --text-file "$(say 'Grid, list or cards?')" >/dev/null 2>&1 \
-    || fail "update should succeed"
-  out=$(needs_me status)
-  assert_contains "$out" "$(printf 'changed\tw1\tPick the print layout\tA third layout came up')" "a changed decision is named with what changed"
-  answer w1 || fail "answer should succeed"
-  assert_absent "$HOME_DIR/state/needs-me-mentioned/w1" "a decision no longer waiting drops its mention record"
-  pass "fm-t3-needs-me.sh status: counts the waiting decisions and names only new or changed ones"
 }
 
 test_no_firstmate_thread_or_old_t3_does_nothing() {
   make_home no-parent 'w.threads = {}'
   captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "0" "$(decision_count)" "with no FirstMate thread nothing is made"
-  assert_equals "in_sync: no" "$(needs_me status | head -n 1)" "and nothing counts as in sync"
   make_home old-t3 'delete w.decisions'
   captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
   sync_now >/dev/null
@@ -640,7 +605,6 @@ test_objectives_push_only_when_changed() {
   expect_code 1 "$rc" "a failed push is reported: $out"
   assert_contains "$out" "objectives" "the line names the objectives"
   assert_equals "1" "$(decision_count w1)" "and the decision still lands"
-  assert_equals "in_sync: yes" "$(needs_me status | head -n 1)" "and counts as in sync"
   t3_fake_set 'delete w.failTools'
   : > "$T3_FAKE_LOG"
   sync_now >/dev/null || fail "the retry should succeed"
@@ -708,11 +672,10 @@ test_aged_holds_stay_active
 test_open_calls_stay_under_firstmate
 test_a_call_shelved_by_the_old_day_rule_comes_back
 test_later_passes_leave_the_captains_own_placement
-test_an_old_call_keeps_its_mention_and_reads_changed
+test_an_old_call_takes_an_update
 test_dated_hold_stays_under_firstmate_once_due
 test_re_asked_deferred_call_stays_under_firstmate
 test_unblocked_call_stays_under_firstmate
-test_status_and_mentioned
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part
 

@@ -234,7 +234,7 @@ A call with no recorded context still appears, with its hold reason as the quest
 
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
 
-- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card, and counts as waiting, until it is answered or closed, however long it waits;
+- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card until it is answered or closed, however long it waits;
 - a call deferred with `--until` is snoozed until 00:00 UTC on that date;
 - a blocked call sits in Settled until it unblocks;
 - an answered or released call is settled, then archived a day later;
@@ -258,7 +258,8 @@ What FirstMate sends and relies on:
 - Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil` or with no date (it stays snoozed until FirstMate wakes it), `unsnooze`, `mark_unread`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
 - Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
 
-When `bin/fm-t3-needs-me.sh status` says the threads match the records, Captain's Call in chat gives their count and names only new or changed decisions (`AGENTS.md` section 9).
+The threads are an additional track beside chat, never a replacement for it.
+Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision's thread keeps its full context and every update since it was raised.
 
 ### Objectives
 

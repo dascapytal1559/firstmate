@@ -16,19 +16,6 @@
 #     bin/fm-captain-hold.sh runs this after every hold, answer, reconcile, and
 #     context, and bin/fm-watch.sh about once a minute. One pass, one T3 call,
 #     and one more when the objectives changed.
-#   fm-t3-needs-me.sh status
-#     Read-only, no T3 call: whether the last pass matched the records, how
-#     many decisions wait under FirstMate's card (one snoozed until its
-#     --until date is not counted), and which of them are new or changed
-#     since `mentioned` last recorded them. Prints
-#       in_sync: yes|no
-#       waiting: <n>
-#     then one TAB-separated line per waiting decision not yet mentioned at
-#     its current revision: new <task-id> <title>, or changed <task-id>
-#     <title> <the newest update's one-line what-changed>.
-#   fm-t3-needs-me.sh mentioned <task-id>...
-#     Records that Firstmate named these decisions to the captain at their
-#     current revision, so status stops listing them until they change.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
 #     Prints the task id a captain reply from a decision thread names on its
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
@@ -55,10 +42,7 @@
 # a lost reply, or a T3 restart keeps the old hash, and the next pass applies
 # it again; thread creation is retried under the same request id, so it lands
 # on the thread T3 already made. An item that failed three times in a row is
-# retried every 15 minutes rather than every pass. A pass whose every item
-# was proven writes state/t3-needs-me/.synced, the hash of the whole wanted
-# set, which is what status compares. state/needs-me-mentioned/<task-id>
-# holds "<hold-set>#<revision>" as last named in chat.
+# retried every 15 minutes rather than every pass.
 #
 # Each sync pass also pushes the captain's high level objectives, as
 # bin/fm-objectives.sh --reviewed reads them, to the top of T3's Bridge tab
@@ -89,7 +73,6 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONTEXTS="$DATA/needs-me"
 SYNCS="$STATE/t3-needs-me"
-MENTIONED="$STATE/needs-me-mentioned"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 ARCHIVE_AFTER=86400
@@ -97,7 +80,7 @@ BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
 
 usage() {
-  sed -n '13,35p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '13,22p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -105,8 +88,7 @@ usage() {
 VERB=$1
 shift
 case "$VERB:$#" in
-  sync:0|status:0|reply-task:0|reply-task:1) ;;
-  mentioned:*) [ "$#" -ge 1 ] || usage ;;
+  sync:0|reply-task:0|reply-task:1) ;;
   *) usage ;;
 esac
 
@@ -134,10 +116,6 @@ taking_part() {
   fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1 && return 1
   return 0
 }
-
-if [ "$VERB" = mentioned ]; then
-  for id in "$@"; do slug_ok "$id" || { echo "not a task id: $id" >&2; exit 2; }; done
-fi
 
 command -v jq >/dev/null 2>&1 || { echo "t3-needs-me: jq is required"; exit 1; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-needs-me.XXXXXX") || { echo "t3-needs-me: no temporary directory"; exit 1; }
@@ -193,14 +171,13 @@ plan() {
               entries: [$entries[] | entry],
               revision: (($c.revision // 0) + 1)}),
             newestKind: ($entries[-1].kind),
-            newestChanged: ($entries[-1].changed // null),
             local: $l}),
         ($locs | to_entries[] | select(.key | IN($heldIds[]) | not) | .value
          | . as $l
          | {taskId: $l.taskId, title: ($l.title // $l.taskId),
             phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
             snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
-            newestKind: null, newestChanged: null, local: $l})
+            newestKind: null, local: $l})
       ]
   ' > "$WORK/plan.json" || { echo "t3-needs-me: the wanted state could not be built"; return 1; }
   : > "$WORK/hashes.tsv"
@@ -210,46 +187,6 @@ plan() {
     printf '%s\t%s\n' "$id" "$(printf '%s' "$wanted" | sha)" >> "$WORK/hashes.tsv"
   done <<< "$(jq -r '.[] | [.taskId, ({phase, snoozedUntil, decision} | tojson)] | @tsv' "$WORK/plan.json")"
 }
-
-# The hash of the whole wanted set (default: this plan's): what a fully proven
-# pass stores and status compares.
-set_hash() {  # [<hashes-tsv>]
-  sort "${1:-$WORK/hashes.tsv}" | sha
-}
-
-if [ "$VERB" = status ] || [ "$VERB" = mentioned ]; then
-  if ! taking_part; then
-    [ "$VERB" = mentioned ] && exit 0
-    printf 'in_sync: no\nwaiting: 0\n'
-    exit 0
-  fi
-  plan || exit 1
-  if [ "$VERB" = mentioned ]; then
-    mkdir -p "$MENTIONED" || exit 1
-    for id in "$@"; do
-      mark=$(jq -r --arg id "$id" '.[] | select(.taskId == $id and .phase == "active") | "\(.holdSet)#\(.decision.revision)"' "$WORK/plan.json")
-      [ -n "$mark" ] || continue
-      printf '%s\n' "$mark" > "$MENTIONED/$id.tmp" && mv -f "$MENTIONED/$id.tmp" "$MENTIONED/$id"
-    done
-    exit 0
-  fi
-  synced=''
-  [ ! -f "$SYNCS/.synced" ] || synced=$(cat "$SYNCS/.synced")
-  if [ -n "$synced" ] && [ "$synced" = "$(set_hash)" ]; then echo 'in_sync: yes'; else echo 'in_sync: no'; fi
-  printf 'waiting: %s\n' "$(jq '[.[] | select(.phase == "active")] | length' "$WORK/plan.json")"
-  while IFS=$'\t' read -r id hold rev title changed; do
-    [ -n "$id" ] || continue
-    seen=''
-    [ ! -f "$MENTIONED/$id" ] || seen=$(cat "$MENTIONED/$id")
-    [ "$seen" != "$hold#$rev" ] || continue
-    if [ "${seen%#*}" = "$hold" ] && [ -n "$seen" ]; then
-      printf 'changed\t%s\t%s\t%s\n' "$id" "$title" "$changed"
-    else
-      printf 'new\t%s\t%s\n' "$id" "$title"
-    fi
-  done <<< "$(jq -r '.[] | select(.phase == "active") | [.taskId, .holdSet, .decision.revision, .title, (.newestChanged // "")] | @tsv' "$WORK/plan.json")"
-  exit 0
-fi
 
 # --- sync ------------------------------------------------------------------
 
@@ -286,7 +223,6 @@ sync_decisions() {
 
   # Nothing recorded and nothing held: no T3 call at all.
   if [ "$(jq '.items | length' "$WORK/input.json")" = 0 ] && [ "$(jq 'length' "$WORK/plan.json")" = 0 ]; then
-    set_hash > "$SYNCS/.synced"
     return 0
   fi
 
@@ -294,18 +230,14 @@ sync_decisions() {
   fm_backend_t3code_mcp decisions --file "$WORK/input.json" > "$WORK/out.json" 2>"$WORK/out.err" || rc=$?
   case "$rc" in
     0) ;;
-    4) rm -f -- "$SYNCS/.synced"; return 0 ;;
-    *) echo "t3-needs-me: T3 could not take the pass: $(head -n 1 "$WORK/out.err"); the next pass retries"; rm -f -- "$SYNCS/.synced"; return 1 ;;
+    4) return 0 ;;
+    *) echo "t3-needs-me: T3 could not take the pass: $(head -n 1 "$WORK/out.err"); the next pass retries"; return 1 ;;
   esac
   out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
-  if [ -z "$out_parent" ]; then
-    rm -f -- "$SYNCS/.synced"
-    return 0
-  fi
+  [ -n "$out_parent" ] || return 0
   printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"
 
   failed=0
-  : > "$WORK/kept.tsv"
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     hash=$(awk -F '\t' -v id="$id" '$1 == id {print $2}' "$WORK/hashes.tsv")
@@ -337,27 +269,11 @@ sync_decisions() {
     if jq -e '.failed != null' "$WORK/result.json" >/dev/null; then
       echo "t3-needs-me: decision $id: $(jq -r '.failed' "$WORK/result.json"); the next pass retries"
       failed=1
-    else
-      printf '%s\t%s\n' "$id" "$hash" >> "$WORK/kept.tsv"
     fi
   done <<< "$(jq -r '.items[].taskId' "$WORK/out.json")"
 
   # An item held back by the backoff is not proven this pass.
   [ "$(jq '.items | length' "$WORK/input.json")" = "$(jq 'length' "$WORK/plan.json")" ] || failed=1
-  if [ "$failed" = 0 ]; then
-    set_hash "$WORK/kept.tsv" > "$SYNCS/.synced"
-  else
-    rm -f -- "$SYNCS/.synced"
-  fi
-
-  # A decision no longer waiting needs no mention record.
-  if [ -d "$MENTIONED" ]; then
-    for f in "$MENTIONED"/*; do
-      [ -f "$f" ] || continue
-      jq -e --arg id "${f##*/}" 'any(.[]; .taskId == $id and .phase == "active")' \
-        "$WORK/plan.json" >/dev/null || rm -f -- "$f"
-    done
-  fi
   return "$failed"
 }
 
