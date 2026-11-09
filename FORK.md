@@ -161,9 +161,12 @@ Details: [`fm-t3-main-pretool-check.sh`](bin/fm-t3-main-pretool-check.sh).
 ## Current T3 Code releases
 
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.
-FirstMate accepts both the old and the new forms, so it works with 0.1.3 and later as well as earlier builds.
-That rests on two upstream fixes this fork carries ahead of their merge upstream: [#7851](https://github.com/kunchenguid/firstmate/pull/7851), which accepts 0.1.3's merged configuration and pending-request tools, and [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which accepts model options listed as a values array.
-The next upstream sync reconciles them once they merge or change.
+FirstMate uses only the 0.1.3 tool names, which the T3 Code fork serves, and refuses a T3 Code that offers only the earlier names before anything starts.
+Upstream still calls the earlier names, and its open fix [#7851](https://github.com/kunchenguid/firstmate/pull/7851) accepts both; the fork keeps only the new ones, because it ships with the T3 Code fork as one bundle and a second path would only add code and tests nobody here runs.
+If #7851 merges upstream, the next upstream sync keeps the fork's single set of names.
+Model options listed as a values array rest on [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which this fork carries ahead of its merge upstream; the next upstream sync reconciles it once it merges or changes.
+For the same reason, a Claude worker is no longer told to avoid T3 Code's pull-request tools.
+Upstream keeps that warning for T3 builds before `0.0.46-nightly.20261010.2935`, on which those tools crashed a Claude session, and the T3 Code fork is far past that build.
 Details: [capability gate](docs/t3code-backend.md#capability-gate).
 
 ## Telemetry warning that fits the T3 Code fork

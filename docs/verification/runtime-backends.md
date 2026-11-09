@@ -2825,7 +2825,7 @@ ps -o cputime= -p <T3 server pid>   # before and after each 45 s window
 
 T3's `link_pull_request`, `list_thread_pull_requests`, and `unlink_pull_request` tools crashed a Claude session on a pre-V2 T3 build, so Claude workers were told not to call them.
 On 2026-10-10, against `t3 v0.0.46-nightly.20261010.2935` with Claude Code 2.1.296, a scratch Claude thread (`claudeAgent`, `claude-haiku-5-5`) called all three, linking and unlinking the merged `https://github.com/kunchenguid/firstmate/pull/1`, and its run completed with every call answered.
-That build is `FM_BACKEND_T3CODE_PR_TOOLS_VERIFIED_FROM` in `bin/backends/t3code.sh`; Claude workers on an older or unreadable server keep the clause.
+That build is `FM_BACKEND_T3CODE_PR_TOOLS_VERIFIED_FROM` in `bin/backends/t3code.sh`; the T3 Code fork this fork requires is past it, so spawn no longer adds the clause on any server.
 The opt-in guard repeats the check and fails naming both versions:
 
 ```sh
@@ -2874,12 +2874,11 @@ Adapter smokes on 2026-09-15, through the pre-V2 transport, established that a C
 On 2026-10-27, `tools/list` on `t3 v0.1.4-nightly.20261027.3770` offered `t3_thread_configure` and `t3_pending_request`, but not `t3_thread_configuration` or the three `t3_pending_request_*` tools.
 Stable `v0.1.3` (commit `d2c44031`) has the same tool set.
 On the new server, `t3_thread_configure` called with only `threadId` returns the thread's `modelSelection`, `runtimeMode`, and `interactionMode`, and `t3_pending_request` takes `action` `list`, `read`, or `respond`.
-`t3 v0.1.3-nightly.20261026.3740` lists both `t3_thread_configuration` and `t3_thread_configure`, but there `t3_thread_configure` without `modelSelection` fails with `Missing key ["modelSelection"]`, so the binding read keeps `t3_thread_configuration` whenever it is listed.
+`t3 v0.1.3-nightly.20261026.3740` lists both `t3_thread_configuration` and `t3_thread_configure`, but there `t3_thread_configure` without `modelSelection` fails with `Missing key ["modelSelection"]`; the helper now calls only the 0.1.3 names, so a launch on such a build fails its binding read-back and is archived and refused.
 
-The rename handling was verified live on Linux x86_64 (kernel 6.8.0) with codex-cli 0.164.0, node v24.21.0, and treehouse v2.3.0.
-One server was the service-managed `t3 v0.1.3-nightly.20261026.3740`; the other was a loopback lab copy of `t3 v0.1.4-nightly.20261027.3770` with its own base directory and port, stopped afterwards.
-Each run used a scratch Firstmate home with `config/backend` `t3code` and a scratch project with a bare origin.
-The home carried this change plus an unrelated local fix to how the helper reads a model's effort options.
+The 0.1.3 names were verified live on Linux x86_64 (kernel 6.8.0) with codex-cli 0.164.0, node v24.21.0, and treehouse v2.3.0, against a loopback lab copy of `t3 v0.1.4-nightly.20261027.3770` with its own base directory and port, stopped afterwards.
+The run used a scratch Firstmate home with `config/backend` `t3code` and a scratch project with a bare origin.
+The home carried the helper's earlier support for both name sets plus an unrelated local fix to how the helper reads a model's effort options; on this server it chose the 0.1.3 names for both capabilities, the only path the helper keeps.
 
 ```sh
 bin/fm-t3-mcp.mjs status
@@ -2888,12 +2887,12 @@ bin/fm-t3-mcp.mjs wait <thread>
 bin/fm-teardown.sh <id>
 ```
 
-| Step | `0.1.3-nightly.20261026.3740` | `0.1.4-nightly.20261027.3770` |
-| --- | --- | --- |
-| Capability gate and `status` | earlier tool family for both capabilities | current tool family for both capabilities |
-| Codex scout spawn, including the binding read-back | launched; the Codex session recorded `"effort":"high"` | launched; the Codex session recorded `"effort":"high"` |
-| `wait` until the scout's `done` line and report | `"status":"completed","timedOut":false` | `"status":"completed","timedOut":false` |
-| Teardown | the thread read `archived:true` | the thread read `archived:true` |
+| Step | `0.1.4-nightly.20261027.3770` |
+| --- | --- |
+| Capability gate and `status` | the 0.1.3 names for both capabilities |
+| Codex scout spawn, including the binding read-back | launched; the Codex session recorded `"effort":"high"` |
+| `wait` until the scout's `done` line and report | `"status":"completed","timedOut":false` |
+| Teardown | the thread read `archived:true` |
 
 ### Per-thread channels on the T3 fork
 

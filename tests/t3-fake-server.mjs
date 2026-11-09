@@ -19,14 +19,10 @@
 //   - a send is committed before its reply, which dropReplyTools can lose;
 //   - pendingRequestCount counts every pending runtime request, while the
 //     pending-request tools see only user-input questions;
-//   - T3 0.1.3 merged t3_thread_configuration into t3_thread_configure (a
-//     read when called without modelSelection; earlier T3 also lists
-//     t3_thread_configure but refuses it without modelSelection) and
-//     t3_pending_request_list, _read, and _respond into t3_pending_request
-//     {action}. The fake serves both generations; tools/list offers the
-//     earlier one by default and CURRENT_TOOLS when the world sets toolset
-//     "current", and a tools/call for a tool tools/list does not offer is
-//     refused, as T3 refuses it;
+//   - the fake serves T3 0.1.3's tool names: t3_thread_configure called
+//     without modelSelection is the configuration read, and
+//     t3_pending_request takes action list|read|respond; a tools/call for a
+//     tool tools/list does not offer is refused, as T3 refuses it;
 //   - tools/list declares t3_thread_interrupt's `stop` and t3_thread_list's
 //     `allProjects` in their input schemas, and a peer from before `stop`
 //     (world noStop) drops it and interrupts the run alone; with stop, the
@@ -109,8 +105,7 @@
 // one JSON line to <case-dir>/requests.jsonl, so a test can switch cases and
 // edit the world between calls. World keys (all optional):
 //   tokens (accepted bearers; sign-in appends), environmentId, serverVersion,
-//   tools (array of names; default all), toolset ("current": the T3 0.1.3
-//   tool names instead of the earlier default), revoked (every /mcp call is 401),
+//   tools (array of names; default all), revoked (every /mcp call is 401),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
@@ -148,14 +143,10 @@ for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].slice(2)] 
 
 const ALL_TOOLS = [
   "t3_thread_launch", "t3_thread_send", "t3_thread_read", "t3_thread_wait", "t3_thread_interrupt",
-  "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configuration", "t3_thread_configure", "t3_project_list", "t3_project_create",
-  "t3_pending_request_list", "t3_pending_request_read", "t3_pending_request_respond",
-  "orchestrator_capabilities", "t3_environment_read",
+  "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
+  "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const CURRENT_TOOLS = ALL_TOOLS.filter((n) => n !== "t3_thread_configuration" && !n.startsWith("t3_pending_request_"))
-  .concat(["t3_pending_request"]);
-const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS)
-  .concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : []);
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : []);
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
@@ -543,19 +534,14 @@ async function callTool(w, name, a) {
       const nextCursor = cursor + page.length < list.length ? cursor + page.length : null;
       return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}) })), nextCursor, total: list.length }), false];
     }
-    case "t3_thread_configure":
+    case "t3_thread_configure": {
       if (w.coordinatorRestartNote && typeof a.coordinator === "boolean") {
         if (!t) return [notFound(a.threadId), false];
         if (a.coordinator) for (const x of Object.values(threads)) if (x.projectId === t.projectId) x.coordinator = false;
         t.coordinator = a.coordinator;
         return [ok({ threadId: t.threadId, coordinator: t.coordinator }), true];
       }
-      if (a.modelSelection === undefined && offeredTools(w).includes("t3_thread_configuration")) {
-        return [err("invalid_params", "Invalid parameters for tool 't3_thread_configure': Missing key at [\"modelSelection\"]"), false];
-      }
       if (a.modelSelection !== undefined) return [err("unsupported", "the fake serves only the configuration read"), false];
-    // falls through: from T3 0.1.3, without modelSelection it is the read
-    case "t3_thread_configuration": {
       if (!t) return [notFound(a.threadId), false];
       const modelSelection = t.modelSelection ?? { instanceId: t.providerInstanceId, model: t.model };
       const facts = w.threadFacts
@@ -649,18 +635,13 @@ async function callTool(w, name, a) {
       t.title = a.title;
       return [ok({ threadId: t.threadId, action: "rename", title: t.title }), true];
     }
-    case "t3_pending_request":
+    case "t3_pending_request": {
       if (!["list", "read", "respond"].includes(a.action)) return [err("invalid_action", `unknown action ${a.action}`), false];
-      return callTool(w, `t3_pending_request_${a.action}`, a);
-    case "t3_pending_request_list":
       if (!t) return [notFound(a.threadId), false];
-      return [ok(pendingList(w, t)), false];
-    case "t3_pending_request_read":
-    case "t3_pending_request_respond": {
-      if (!t) return [notFound(a.threadId), false];
+      if (a.action === "list") return [ok(pendingList(w, t)), false];
       const appr = w.approvalResponses && pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "approval");
       if (appr) {
-        if (name === "t3_pending_request_read") return [ok(approvalEntry(appr)), false];
+        if (a.action === "read") return [ok(approvalEntry(appr)), false];
         if (!["allow", "deny"].includes(a.decision)) return [err("invalid_request", "decision must be allow or deny"), false];
         appr.status = "resolved";
         appr.decision = a.decision;
@@ -670,7 +651,7 @@ async function callTool(w, name, a) {
       }
       const q = pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "user_input");
       if (!q) return [err("request_not_found", `Request ${a.requestId} is not a pending question in thread ${a.threadId}.`), false];
-      if (name === "t3_pending_request_read") return [ok({ requestId: q.id, questions: q.questions ?? [] }), false];
+      if (a.action === "read") return [ok({ requestId: q.id, questions: q.questions ?? [] }), false];
       q.status = "resolved";
       q.answers = a.answers;
       return [ok({ sequence: 1 }), true];

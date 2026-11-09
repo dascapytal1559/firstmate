@@ -16,7 +16,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
 - [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.
-- [Current T3 releases](FORK.md#current-t3-code-releases): works with T3 Code 0.1.3 and later as well as earlier builds.
+- [Current T3 releases](FORK.md#current-t3-code-releases): uses T3 Code 0.1.3's tool names, which the T3 Code fork serves, and nothing older.
 - [Telemetry warning](FORK.md#telemetry-warning-that-fits-the-t3-code-fork): warns only when T3 telemetry is on or unreadable.
 
 Outside T3 Code:

@@ -1369,9 +1369,7 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   instructions=$(t3_request "$create" 'r.arguments.instructions')
   assert_contains "$instructions" "task worker launched by Firstmate" "the launch instructions must carry the channel statement"
   assert_contains "$instructions" "first-party task instructions" "the launch instructions must name the brief and inbox as first-party"
-  assert_contains "$instructions" "link_pull_request, list_thread_pull_requests, and unlink_pull_request tools were verified" \
-    "on a server older than the verified build the launch instructions must steer the worker off T3's PR tools"
-  assert_contains "$instructions" "done: PR <url> status line" "the launch instructions must name Firstmate's PR-recording channel"
+  assert_not_contains "$instructions" "link_pull_request" "no T3 build gets a clause steering the worker off T3's PR tools"
   assert_absent "$wt/CLAUDE.local.md" "the channel statement rides the thread, not CLAUDE.local.md"
   [ "$(t3_log_line_of 'r.tool === "t3_thread_launch"')" -gt "$(t3_log_line_of 'r.tool === "treehouse"')" ] \
     || fail "the thread launch must follow the lease"
@@ -1447,13 +1445,11 @@ test_spawn_claude_worker_rides_thread_channels() {
   local id out rc settings
   id=$(t3_uid t3claudethr1)
   t3_case spawn-claude-thread
-  t3_world_set 'w.serverVersion = "0.1.5"'
   t3_worker_setup "$id"
   out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "a claude scout on a T3 with per-thread facts should spawn"$'\n'"$out"
   [ "$(t3_launch_field 'a.environment.FM_TASK_ID')" = "$id" ] || fail "a claude thread environment must carry FM_TASK_ID"
   assert_contains "$(t3_launch_field 'a.instructions')" "You are a task worker launched by Firstmate" "the channel statement rides the launch instructions"
-  assert_not_contains "$(t3_launch_field 'a.instructions')" "predates T3" "a server at or past the verified build gets no pull-request clause"
   settings="$WORKER_WT/.claude/settings.local.json"
   assert_present "$settings" "the claude busy hooks stay in the worktree"
   [ "$(t3_json_field "$settings" 'Object.keys(d.hooks).sort().join(" ")')" = "SessionEnd Stop StopFailure UserPromptSubmit" ] || fail "the claude busy hooks must be armed"
@@ -2413,7 +2409,7 @@ test_push_wait_escalates_pending_approval_with_detail() {
   local thread=mcp:5c6d7e8f-0a1b-4c2d-8e3f-23456789abcd state
   t3_case push-approval running
   t3_world "$(t3_thread_json "$thread" running false)"
-  FM_T3_T="$thread" t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-perm", kind: "approval", status: "pending", requestKind: "command", command: "python3 - <<EOF\nprint(1)\nEOF", reason: "heredoc into an interpreter", override: "provider_check" }]'
+  FM_T3_T="$thread" t3_world_set 'w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-perm", kind: "approval", status: "pending", requestKind: "command", command: "python3 - <<EOF\nprint(1)\nEOF", reason: "heredoc into an interpreter", override: "provider_check" }]'
   state="$CASE_DIR/state"
   mkdir -p "$state"
   fm_write_meta "$state/t3appr1.meta" "window=fm-t3appr1" "backend=t3code" "t3_thread_id=$thread" "kind=ship" "harness=claude"
@@ -2434,7 +2430,7 @@ test_push_wait_escalates_t3_approval_beside_herdr_worker() {
   local thread=mcp:7d8e9fa0-2b3c-4d4e-9f5a-456789abcdef state bin
   t3_case push-approval-mixed running
   t3_world "$(t3_thread_json "$thread" running false)"
-  FM_T3_T="$thread" t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-rm", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf \"$OUT\"/frames", reason: "Dangerous rm operation on possibly-empty variable path", override: "provider_check" }]'
+  FM_T3_T="$thread" t3_world_set 'w.approvalResponses = true; w.threads[process.env.FM_T3_T].runtimeRequests = [{ id: "req-rm", kind: "approval", status: "pending", requestKind: "command", command: "rm -rf \"$OUT\"/frames", reason: "Dangerous rm operation on possibly-empty variable path", override: "provider_check" }]'
   state="$CASE_DIR/state"
   bin="$CASE_DIR/bin"
   mkdir -p "$state" "$bin"
@@ -2476,7 +2472,7 @@ test_approve_script_answers_and_records_approvals() {
   assert_contains "$out" "bin/fm-control.sh $id interrupt" "the refusal points at the interrupt-and-steer fallback"
   assert_absent "$record" "a refused answer records no decision"
 
-  t3_world_set 'w.toolset = "current"; w.approvalResponses = true'
+  t3_world_set 'w.approvalResponses = true'
   out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_CONFIG_OVERRIDE="$CONFIG" "$ROOT/bin/fm-t3-answer.sh" "$id" 2>&1); rc=$?
   expect_code 0 "$rc" "listing pending requests: $out"
   assert_contains "$out" '"approvalRequests":[{"requestId":"req-a","kind":"command","detail":"python3 - <<EOF"' "fm-t3-answer.sh lists the approval with its command"
@@ -2515,8 +2511,8 @@ test_answer_script_reads_and_answers_questions() {
   assert_contains "$out" "Ship it?" "the question's content is listed"
   out=$(run_answer "$id" req-q1 '{"q1":"yes"}'); rc=$?
   expect_code 0 "$rc" "answering: $out"
-  [ "$(t3_fake_calls t3_pending_request_respond | tail -1)" = "{\"threadId\":\"$thread\",\"requestId\":\"req-q1\",\"answers\":{\"q1\":\"yes\"}}" ] \
-    || fail "the answer must reach t3_pending_request_respond, got '$(t3_fake_calls t3_pending_request_respond)'"
+  [ "$(t3_fake_calls t3_pending_request | tail -1)" = "{\"action\":\"respond\",\"threadId\":\"$thread\",\"requestId\":\"req-q1\",\"answers\":{\"q1\":\"yes\"}}" ] \
+    || fail "the answer must reach t3_pending_request action respond, got '$(t3_fake_calls t3_pending_request)'"
   fm_write_meta "$CTRL_STATE/tmuxtask.meta" "window=s:w" "kind=ship"
   out=$(run_answer tmuxtask); rc=$?
   expect_code 1 "$rc" "a non-T3 task has no pending requests to answer"
@@ -2987,7 +2983,7 @@ test_t3_restart_recover_pins_coordinator() {
   RS_HOME="$REPO"; RS_STATE="$RS_HOME/state"; RS_DATA="$RS_HOME/data"
   mkdir -p "$RS_STATE" "$RS_DATA"
   t3_world "$(t3_thread_json "$main" running false)"
-  t3_world_set 'w.toolset = "current"; w.coordinatorRestartNote = true'
+  t3_world_set 'w.coordinatorRestartNote = true'
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_equals "" "$out" "the pin prints nothing"
   assert_equals 1 "$(t3_fake_calls t3_thread_configure | grep -c "\"threadId\":\"$main\",\"coordinator\":true" || true)" \
@@ -2999,7 +2995,7 @@ test_t3_restart_recover_pins_coordinator() {
   # Two live root threads leave the home's own thread unknown: nothing is
   # pinned, and recovery still runs and stays silent.
   t3_world "$(t3_thread_json "$main" running false)" "$(t3_thread_json "$other" running false)"
-  t3_world_set 'w.toolset = "current"; w.coordinatorRestartNote = true'
+  t3_world_set 'w.coordinatorRestartNote = true'
   : > "$LOG"
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_equals "" "$out" "an unresolvable pin is silent"
@@ -3007,7 +3003,6 @@ test_t3_restart_recover_pins_coordinator() {
 
   # A T3 without the feature gets no thread lookup and no pin.
   t3_world "$(t3_thread_json "$main" running false)"
-  t3_world_set 'w.toolset = "current"'
   : > "$LOG"
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_equals "" "$out" "a T3 without coordinator pins is silent"
@@ -3116,7 +3111,7 @@ test_push_wait_wakes_on_an_approval_raised_mid_wait() {
   local state rec rc started elapsed bg_pid
   t3_case push-approval-mid-wait running
   state="$CASE_DIR/state"; mkdir -p "$state"
-  t3_world_set 'w.toolset = "current"; w.approvalResponses = true; w.threads["thread-live"].runtimeRequests = []'
+  t3_world_set 'w.approvalResponses = true; w.threads["thread-live"].runtimeRequests = []'
   ( sleep 0.5; t3_world_set 'w.threads["thread-live"].runtimeRequests.push({ id: "req-mid", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt", override: "provider_check" })' ) &
   bg_pid=$!
   started=$(date +%s)

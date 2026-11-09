@@ -283,8 +283,7 @@
 // with FM_HOME defaulting to this repository.
 //
 // The capability gate (every verb, login included) runs tools/list and refuses
-// unless all of REQUIRED_TOOLS and t3_environment_read are present and each
-// TOOL_FAMILIES capability is met by its current or earlier tools, then reads
+// unless all of REQUIRED_TOOLS and t3_environment_read are present, then reads
 // t3_environment_read and refuses unless its environmentId equals the one
 // recorded at sign-in, so a different T3 on the same origin is never driven
 // with this credential.
@@ -326,27 +325,13 @@ export const REQUIRED_TOOLS = [
   "t3_thread_list",
   "t3_project_list",
   "t3_project_create",
+  // Called with only threadId, the read of a thread's binding (this helper
+  // never sends modelSelection).
+  "t3_thread_configure",
+  // action list|read|respond.
+  "t3_pending_request",
   "orchestrator_capabilities",
 ];
-// T3 0.1.3 merged two tool families. Each capability below is met by one
-// complete family, tried in `prefer` order, so one helper drives T3 before
-// and after the merge. The gate records the family it found on the session,
-// and the call sites go through threadConfiguration and pendingRequest.
-//   configuration: earlier T3 reads a thread's binding with
-//     t3_thread_configuration and also lists t3_thread_configure, which there
-//     requires modelSelection and only writes, so the dedicated read wins
-//     whenever T3 lists it. From 0.1.3, t3_thread_configure called with only
-//     threadId is the read (this helper never sends modelSelection).
-//   pendingRequests: t3_pending_request with action list|read|respond;
-//     earlier T3 served t3_pending_request_list|read|respond.
-export const TOOL_FAMILIES = {
-  configuration: { prefer: ["earlier", "current"], current: ["t3_thread_configure"], earlier: ["t3_thread_configuration"] },
-  pendingRequests: {
-    prefer: ["current", "earlier"],
-    current: ["t3_pending_request"],
-    earlier: ["t3_pending_request_list", "t3_pending_request_read", "t3_pending_request_respond"],
-  },
-};
 const ENVIRONMENT_TOOL = "t3_environment_read";
 const EXPIRY_WARN_DAYS = 5;
 const DAY_MS = 86_400_000;
@@ -705,12 +690,6 @@ export async function gate(session, cred) {
   const names = new Set((listed?.tools ?? []).map((t) => t.name));
   const version = server?.serverInfo?.version ?? null;
   const missing = REQUIRED_TOOLS.filter((t) => !names.has(t));
-  const families = {};
-  for (const [capability, family] of Object.entries(TOOL_FAMILIES)) {
-    const found = family.prefer.find((generation) => family[generation].every((t) => names.has(t)));
-    if (found) families[capability] = found;
-    else missing.push(`${family.current.join(", ")} (or ${family.earlier.join(", ")})`);
-  }
   if (missing.length) {
     throw new Refusal(
       "capability_gate",
@@ -733,9 +712,8 @@ export async function gate(session, cred) {
       { environmentId, expected: cred.environment_id },
     );
   }
-  session.toolFamilies = families;
   session.toolSchemas = new Map((listed?.tools ?? []).map((t) => [t.name, t.inputSchema ?? {}]));
-  return { serverVersion: version, environmentId, serverVersionReported: envRead?.serverVersion ?? null, tools: [...names].sort(), toolFamilies: families };
+  return { serverVersion: version, environmentId, serverVersionReported: envRead?.serverVersion ?? null, tools: [...names].sort() };
 }
 
 // Whether the server's tools/list schema for <tool> declares <property>: T3
@@ -746,18 +724,8 @@ function toolOffers(session, tool, property) {
   return Boolean(props && typeof props === "object" && Object.hasOwn(props, property));
 }
 
-// A thread's recorded binding (modelSelection, runtimeMode, and on a server
-// with per-thread facts environment, instructions, effectiveRuntimeMode), read
-// through the configuration family the gate found.
-function threadConfiguration(session, threadId) {
-  if (session.toolFamilies?.configuration === "earlier") return session.call("t3_thread_configuration", { threadId });
-  return session.call("t3_thread_configure", { threadId });
-}
-
-// One pending-request action (list, read, or respond), through the family
-// the gate found.
+// One pending-request action: list, read, or respond.
 function pendingRequest(session, action, args, opts) {
-  if (session.toolFamilies?.pendingRequests === "earlier") return session.call(`t3_pending_request_${action}`, args, opts);
   return session.call("t3_pending_request", { action, ...args }, opts);
 }
 
@@ -1293,7 +1261,7 @@ async function launch(flags) {
   let config;
   try {
     t = threadOf(await session.call("t3_thread_read", { threadId: out.threadId, limit: 1, runLimit: 1 }));
-    config = await threadConfiguration(session, out.threadId);
+    config = await session.call("t3_thread_configure", { threadId: out.threadId });
   } catch (e) {
     const archived = await archiveLaunched();
     throw new Refusal(
