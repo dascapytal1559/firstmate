@@ -362,7 +362,7 @@ sync_decisions() {
   out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
   if [ -z "$out_parent" ]; then
     # No FirstMate thread: T3 took the pass, and nothing changed.
-    pass_taken "$mode" "$(jq 'length == 0' "$WORK/plan.json")"
+    pass_taken "$mode" "$(decisions_record | jq '.empty == true')"
     return 0
   fi
   printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"

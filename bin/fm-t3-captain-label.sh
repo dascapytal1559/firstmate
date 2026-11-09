@@ -38,7 +38,8 @@
 # never rewrite each other's entry. A record is written before its label.
 # <state>/.t3-captain-wait.lock, a symlink naming the running pass's pid, is held
 # for one sync pass, and <state>/.t3-captain-wait.again asks it for another, so
-# a pass that read a worker before a newer event never writes its card last.
+# a pass that read a worker before a newer event never writes its card last;
+# <state>/.t3-captain-wait.runs, written before it, asks that pass for --runs.
 #
 # Sync is level-triggered and compares against the live thread, so it keeps no
 # copy that could go stale: a label that failed or a server that was down
@@ -190,8 +191,9 @@ turn_state() {  # <worker-id> <thread-id>
 # asks it for one more pass and leaves; the holder repeats while asked, and
 # looks again after letting go, so no request is lost between its last pass and
 # its release. A lock whose pid is gone is a killed pass, and is taken over.
-sync_serialized() {  # <pass-args...>
-  local lock="$STATE/.t3-captain-wait.lock" again="$STATE/.t3-captain-wait.again" holder rc=0
+sync_serialized() {  # [--runs]
+  local lock="$STATE/.t3-captain-wait.lock" again="$STATE/.t3-captain-wait.again" runs="$STATE/.t3-captain-wait.runs" holder rc=0
+  [ "$#" = 0 ] || : > "$runs" || return 1
   : > "$again" || return 1
   while [ -e "$again" ]; do
     if ! ln -s "$$" "$lock" 2>/dev/null; then
@@ -208,7 +210,12 @@ sync_serialized() {  # <pass-args...>
     fi
     while [ -e "$again" ]; do
       rm -f -- "$again"
-      sync_pass "$@" || rc=1
+      if [ -e "$runs" ]; then
+        rm -f -- "$runs"
+        sync_pass --runs || rc=1
+      else
+        sync_pass || rc=1
+      fi
     done
     rm -f -- "$lock"
   done

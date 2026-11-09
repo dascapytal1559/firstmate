@@ -451,6 +451,30 @@ test_testing_follows_the_run() {
   pass "fm-t3-captain-label: Testing shows while the run is active and clears when it ends"
 }
 
+test_runs_request_rides_on_the_running_pass() {
+  local holder
+  make_home runs-coalesced
+  in_a_run
+  run_is running
+  sleep 30 &
+  holder=$!
+  ln -s "$holder" "$HOME_DIR/state/.t3-captain-wait.lock"
+  label sync --runs || fail "a pass that finds another running should pass"
+  assert_equals "" "$(card_of)" "it leaves the work to the running pass"
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  label sync || fail "the next pass should pass"
+  assert_equals "$TESTING" "$(card_of)" "the owed pass still looks for runs"
+  assert_absent "$HOME_DIR/state/.t3-captain-wait.lock" "the pass lets go of the lock"
+  run_is ended
+  label sync || fail "a later plain pass should pass"
+  assert_equals "" "$(card_of)" "the end of the run clears the card"
+  run_is running
+  label sync || fail "a later plain pass should pass"
+  assert_equals "" "$(card_of)" "the carried request was used up, so a plain pass finds no new run"
+  pass "fm-t3-captain-label: a --runs request that finds another pass running is carried by the next pass"
+}
+
 test_waiting_outranks_testing() {
   make_home outranks
   in_a_run
@@ -583,6 +607,7 @@ test_only_t3_workers_are_labelled
 test_clear_takes_the_label_off_while_the_hold_stays
 test_teardown_clears_before_it_archives
 test_testing_follows_the_run
+test_runs_request_rides_on_the_running_pass
 test_waiting_outranks_testing
 test_a_scout_never_shows_testing
 test_older_t3_breaks_nothing
