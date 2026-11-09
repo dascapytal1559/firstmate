@@ -922,7 +922,8 @@ publish_result() {  # <result-file>
         # The owner ended the source itself, so its own close is filed as
         # that round's acknowledgement and `start` retires the board, the
         # same outcome as the owner's `handled`, with no note or doorbell.
-        if adapter_result_is_owner_ended "$adapter" "$result"; then
+        if adapter_result_is_owner_ended "$adapter" "$result" \
+          && [ -z "$(source_pending "$id" | awk -v me="/${result##*/}" 'substr($0, length($0) - length(me) + 1) != me')" ]; then
           fm_procevent_mark_handled "$STATE" "$id" "$seq"
           case "$?" in
             0|1)
