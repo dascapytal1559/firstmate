@@ -561,6 +561,22 @@ test_list_carries_every_open_call() {
   pass "fm-t3-needs-me.sh: the Bridge list carries every open call and changes in the same step"
 }
 
+test_list_with_only_blocked_calls_is_sent_once() {
+  make_home list-blocked 'w.decisionsTool = true'
+  (cd "$HOME_DIR" && tasks-axi add w3 "Blocked call" --repo sample --blocked-by w2) >/dev/null 2>&1 \
+    || fail "could not seed a blocked row"
+  captain hold w3 --reason "Choose after w2 lands" >/dev/null 2>&1 || fail "blocked hold should succeed"
+  assert_equals '[]' "$(bridge '.decisionList.decisions')" "a blocked call is left off the Bridge"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "an idle pass should succeed"
+  sync_now >/dev/null || fail "an idle pass should succeed"
+  assert_equals "0" "$(list_calls)" "an empty list already sent is not sent again while the blocked call waits"
+  captain hold w1 --reason "Grid or list for the print view?" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals "1" "$(list_calls)" "a call the captain can answer is sent at once"
+  assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "and only it is shown"
+  pass "fm-t3-needs-me.sh: a list holding only blocked calls is sent empty once and not again"
+}
+
 test_list_resend_keeps_the_captains_answer() {
   make_home list-answered 'w.decisionsTool = true'
   captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
@@ -672,6 +688,22 @@ test_list_without_firstmate_thread_sends_nothing() {
   sync_now >/dev/null || fail "a pass with no FirstMate thread is not a failure"
   assert_equals "0" "$(list_calls)" "a reply would have nowhere to go, so no list is sent"
   pass "fm-t3-needs-me.sh: with no FirstMate thread the list is not sent"
+}
+
+test_list_cleared_while_firstmate_thread_missing_is_sent_once_it_returns() {
+  make_home list-parent-gone 'w.decisionsTool = true'
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "the Bridge shows the call"
+  FM_T3_FM=$FM_THREAD t3_fake_set 'w.gone = w.threads[process.env.FM_T3_FM]; delete w.threads[process.env.FM_T3_FM]'
+  answer w1 || fail "an answer with no FirstMate thread should succeed"
+  assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "with nowhere to reply, the list is not sent"
+  FM_T3_FM=$FM_THREAD t3_fake_set 'w.threads[process.env.FM_T3_FM] = w.gone; delete w.gone'
+  sync_now >/dev/null || fail "the pass after FirstMate's thread returns should succeed"
+  assert_equals '[]' "$(bridge '.decisionList.decisions')" "the emptied list reaches the Bridge once the thread is back"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "an idle pass should succeed"
+  assert_equals "0" "$(list_calls)" "and is not sent again"
+  pass "fm-t3-needs-me.sh: a list emptied while FirstMate's thread was missing is sent once it returns"
 }
 
 test_watcher_wakes_firstmate_on_the_alert() {
@@ -869,11 +901,13 @@ test_unblocked_call_stays_under_firstmate
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part
 test_list_carries_every_open_call
+test_list_with_only_blocked_calls_is_sent_once
 test_list_resend_keeps_the_captains_answer
 test_list_switch_archives_the_old_threads_once
 test_list_failures_wake_firstmate_on_the_third
 test_list_leaves_out_a_decision_t3_would_refuse
 test_list_without_firstmate_thread_sends_nothing
+test_list_cleared_while_firstmate_thread_missing_is_sent_once_it_returns
 test_watcher_wakes_firstmate_on_the_alert
 
 echo "ok: fm-t3-needs-me"

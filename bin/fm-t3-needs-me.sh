@@ -323,13 +323,6 @@ sync_decisions() {
   local home_key parent out_parent mode empty rc=0
   plan || return 1
 
-  # Nothing held, nothing recorded, and nothing shown since the last accepted
-  # pass: no T3 call at all.
-  if [ "$(jq 'length' "$WORK/plan.json")" = 0 ] \
-    && decisions_record | jq -e '.empty == true and (.failures // 0) == 0' >/dev/null; then
-    return 0
-  fi
-
   home_key=$(printf '%s' "$(cd "$FM_HOME" && pwd -P)" | sha | cut -c1-12)
   parent=''
   [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
@@ -352,6 +345,15 @@ sync_decisions() {
             apply: ($h[$p.taskId] != ($p.local.hash // null))}]}
   ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
+  # Nothing to show, nothing recorded, and nothing shown since the last
+  # accepted pass: no T3 call at all. A list leaves blocked calls out; threads
+  # still settle theirs.
+  if decisions_record | jq -e --slurpfile input "$WORK/input.json" --slurpfile plan "$WORK/plan.json" '
+    .empty == true and (.failures // 0) == 0
+    and (if .mode == "list" then ($input[0].list + $input[0].recorded) == [] else $plan[0] == [] end)' >/dev/null; then
+    return 0
+  fi
+
   fm_backend_t3code_mcp decisions --file "$WORK/input.json" > "$WORK/out.json" 2>"$WORK/out.err" || rc=$?
   case "$rc" in
     0) ;;
@@ -362,7 +364,7 @@ sync_decisions() {
   out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
   if [ -z "$out_parent" ]; then
     # No FirstMate thread: T3 took the pass, and nothing changed.
-    pass_taken "$mode" "$(jq 'length == 0' "$WORK/plan.json")"
+    pass_taken "$mode" "$(decisions_record | jq '.empty == true')"
     return 0
   fi
   printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"

@@ -248,6 +248,24 @@ wait_file "$(inbox worker-g)/001.msg" || fail "captain words in a worker-ended s
 [ ! -e "$(handled_marker 1)" ] || fail "a worker-ended round carrying captain words was filed unread"
 pass "a worker-ended session that still carries captain words is delivered"
 
+new_board self-end-open 0.1.96 worker-h
+lv arm "$ART" --for worker-h >/dev/null || fail "arming the self-end-open board failed"
+wait_polls 1 || fail "the self-end-open board never listened"
+feedback 1 "make the header bolder"
+wait_file "$(inbox worker-h)/001.msg" || fail "round 1 of the self-end-open board was not delivered"
+wait_polls 2 || fail "the self-end-open board did not keep listening"
+session_end 2 agent
+wait_file "$(inbox worker-h)/002.msg" \
+  || fail "a worker that ended its board with round 1 still open was not told to acknowledge it"
+assert_contains "$(cat "$(inbox worker-h)/002.msg")" "acknowledge any earlier round" \
+  "the note did not ask for the open earlier round"
+[ ! -e "$(handled_marker 2)" ] || fail "the worker's close was filed while round 1 was still open"
+[ "$(board_state)" = "task:worker-h/round-open" ] || fail "the board did not stay open: $(board_state)"
+pe handled "$SRC" 1 >/dev/null || fail "acknowledging the open round failed"
+concl=$(pe handled "$SRC" 2) || fail "acknowledging the worker's close failed"
+assert_contains "$concl" "retired: $SRC" "acknowledging the worker's close did not retire the board"
+pass "a worker that ends its board with an earlier round open is told to acknowledge both"
+
 # --- a listener that dies mid-round is restarted by reconcile ----------------
 new_board restart 0.1.96 worker-b
 lv arm "$ART" --for worker-b >/dev/null || fail "arming the restart board failed"
