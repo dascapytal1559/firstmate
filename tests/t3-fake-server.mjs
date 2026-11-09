@@ -65,8 +65,8 @@
 //     title. A T3 with crew card status (world statusLabels, the T3 Code fork)
 //     declares statusLabel and also sets and clears a thread's label, stored and
 //     read back as statusLabel, answering with the label left (world
-//     statusLabelAnswers answers another one); without it those actions are
-//     unknown.
+//     statusLabelAnswers answers another one), and stamps statusLabelSince
+//     when a new label lands; without it those actions are unknown.
 //   - a T3 with decision threads (world decisions, the T3 Code fork) declares
 //     t3_thread_launch's decisionOf and decision and t3_thread_update's
 //     decision: a launch with decisionOf makes an idle, agent-less thread
@@ -615,8 +615,14 @@ async function callTool(w, name, a) {
     case "t3_thread_update": {
       if (!t) return [notFound(a.threadId), false];
       if (w.statusLabels && (a.action === "set_status_label" || a.action === "clear_status_label")) {
-        if (a.action === "set_status_label") t.statusLabel = a.statusLabel;
-        else delete t.statusLabel;
+        if (a.action === "set_status_label") {
+          // As the fork's orchestrator: only a new label restarts its clock.
+          if (a.statusLabel !== t.statusLabel || !t.statusLabelSince) t.statusLabelSince = now();
+          t.statusLabel = a.statusLabel;
+        } else {
+          delete t.statusLabel;
+          delete t.statusLabelSince;
+        }
         const label = w.statusLabelAnswers ?? t.statusLabel;
         return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(label === undefined ? {} : { statusLabel: label }) }), true];
       }

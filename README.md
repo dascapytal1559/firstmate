@@ -12,7 +12,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
 - [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
 - [Bridge decisions](FORK.md#every-open-decision-on-t3-codes-bridge): each open decision is listed on T3's Bridge tab with its full context, beside the chat listing.
-- [Card status](FORK.md#waiting-for-captain-and-testing-on-the-workers-card): a worker's card says Waiting for captain or Testing.
+- [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
 - [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.

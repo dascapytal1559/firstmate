@@ -3571,9 +3571,9 @@ t3_pending_read() {  # <thread...>
 
 # t3_wait_settled: given a settled T3 wait's line (its event, then the ids of the
 # runs it found active), make the T3 card sync due at once when a run ended,
-# during this wait or since the last one, so a captain wait shows again on the
-# worker's card as soon as its turn ends with the hold still open
-# (bin/fm-t3-captain-label.sh). The comparison spends no extra server call.
+# during this wait or since the last one, so a worker's between-turns label
+# shows on its card as soon as its turn ends (bin/fm-t3-crew-status.sh). The
+# comparison spends no extra server call.
 T3_WAIT_RUNS=
 t3_wait_settled() {  # <wait-line>
   local event=${1%% *} runs=' ' prev=$T3_WAIT_RUNS id ended=0
@@ -3583,7 +3583,7 @@ t3_wait_settled() {  # <wait-line>
   for id in $prev; do
     case "$runs" in *" $id "*) ;; *) ended=1 ;; esac
   done
-  [ "$ended" = 0 ] || rm -f "$STATE/.t3-captain-wait-sync"
+  [ "$ended" = 0 ] || rm -f "$STATE/.t3-present-sync"
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -3975,23 +3975,23 @@ lane_capacity_publish_detached() {
   LANE_CAPACITY_PID=$!
 }
 
-T3_CAPTAIN_LABEL_PID=
-t3_captain_label_sync_detached() {
-  if [ -n "$T3_CAPTAIN_LABEL_PID" ]; then
-    if kill -0 "$T3_CAPTAIN_LABEL_PID" 2>/dev/null; then
+T3_PRESENT_PID=
+t3_present_sync_detached() {
+  if [ -n "$T3_PRESENT_PID" ]; then
+    if kill -0 "$T3_PRESENT_PID" 2>/dev/null; then
       return 0
     fi
-    wait "$T3_CAPTAIN_LABEL_PID" 2>/dev/null || true
-    T3_CAPTAIN_LABEL_PID=
+    wait "$T3_PRESENT_PID" 2>/dev/null || true
+    T3_PRESENT_PID=
   fi
-  touch "$STATE/.t3-captain-wait-sync"
+  touch "$STATE/.t3-present-sync"
   {
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-t3-captain-label.sh" sync --runs
+      "$SCRIPT_DIR/fm-t3-crew-status.sh" sync
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
   } </dev/null >/dev/null 2>&1 &
-  T3_CAPTAIN_LABEL_PID=$!
+  T3_PRESENT_PID=$!
 }
 
 # The captain's T3 decisions failed to update three passes in a row
@@ -4177,14 +4177,14 @@ while :; do
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
 
-  # A T3 crew card's status follows its holds and its run here, and so do the
-  # captain's decisions (bin/fm-t3-needs-me.sh): a label or decision that
-  # failed, or a run that started or ended, converges on the next pass, and
-  # decisions that keep failing wake firstmate. Only a home with the T3
-  # credential takes part.
+  # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the captain's
+  # decisions (bin/fm-t3-needs-me.sh) are brought in line here as the
+  # backstop: a label or decision that failed, a label T3 lost, or a run that
+  # started or ended converges on the next pass, and decisions that keep
+  # failing wake firstmate. Only a home with the T3 credential takes part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
-    && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
-    t3_captain_label_sync_detached
+    && [ "$(age_of "$STATE/.t3-present-sync")" -ge 60 ]; then
+    t3_present_sync_detached
   fi
   t3_decisions_alert_tick || {
     echo 'watcher: T3 decisions alert could not be queued' >&2

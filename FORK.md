@@ -88,19 +88,19 @@ A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3'
 A T3 Code without the list keeps one thread per decision under FirstMate's card instead, and the first list it accepts archives those threads.
 Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
-## Waiting for captain and Testing on the worker's card
+## What the worker is waiting on, on its card
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain or sits in a no-mistakes run.
+T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
 When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
-It shows only while the worker is idle: the label comes off within seconds once the worker picks up a reply, and it returns if the worker ends its turn still waiting.
-A worker's own question does not set it, because FirstMate settles most of those itself.
 While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
-The words go when the wait or the run ends, and when the worker is cleaned up.
-Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows neither word and nothing else changes.
-A failed update is retried, so the card comes right within about a minute, and Testing can take that long to appear or go.
+Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
+While the worker works, the card shows T3 Code's own Working, except that Testing stays.
+The words change when the worker's state does and go when the worker is cleaned up.
+FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
+Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows none of these words and nothing else changes.
 Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 

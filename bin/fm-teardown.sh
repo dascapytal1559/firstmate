@@ -4057,10 +4057,10 @@ fi
 # T3 project is deliberately left in place: project.delete refuses while the
 # archived thread exists and would take that transcript with it under force.
 if [ "$BACKEND" = t3code ]; then
-  # A captain wait can outlive its worker, so clear the card's status first: the
-  # archived thread stays in T3. Failing here never stops cleanup.
+  # A card's status can outlive its worker, as a captain wait does, so clear it
+  # first: the archived thread stays in T3. Failing here never stops cleanup.
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-t3-captain-label.sh" clear "$ID" >&2 || true
+    "$SCRIPT_DIR/fm-t3-crew-status.sh" clear "$ID" >&2 || true
   fm_backend_kill t3code "$T" || {
     echo "error: could not stop and archive T3 thread $T for $ID; start T3 Code (or archive the thread there) and re-run teardown" >&2
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1

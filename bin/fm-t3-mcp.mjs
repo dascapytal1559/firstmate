@@ -202,18 +202,27 @@
 //     by the thread reading back coordinator:true, else exit 1
 //     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
 //     harmless.
-//   fm-t3-mcp.mjs status-label --thread <id> [--label <text>]
-//     Makes the thread's crew card status read <text>, or carry none without
-//     --label, through t3_thread_update only when that changes it, so a repeat
-//     is harmless and a retry after a lost reply lands on the same label. A
-//     label is display only, never identity. T3's reply must name the new
-//     label, else exit 1 (status_label_unproven). A thread the verified server
-//     no longer has reads exists:false. An archived thread has no card, so it
-//     reads archived:true and always loses the label. A T3 whose
-//     t3_thread_update does not declare statusLabel has no label to clear, so
-//     only setting one refuses there: exit 4 (status_label_unsupported). That
-//     is checked here rather than in REQUIRED_TOOLS, so such a T3 costs only
-//     the label.
+//   fm-t3-mcp.mjs crew-status --file <json-file>
+//     One pass of bin/fm-t3-crew-status.sh over the crew cards, in one
+//     session. <json-file> is {cards: [{thread, between, working}]}: the
+//     status label a card should carry while its worker is between turns and
+//     while it works, "" for none, or null to leave the card as it is; other
+//     fields are ignored. Each thread is read once. It is working while T3 is
+//     preparing, queueing, starting, or running a turn with no pending
+//     request, and between turns when idle, completed, interrupted,
+//     cancelled, rolled back, or holding a pending request (the busy and idle
+//     split of fm_backend_t3code_state_row); a failed or unrecognized status
+//     leaves the card when the two labels differ. The label changes through
+//     t3_thread_update only when that changes it, so a repeat is harmless,
+//     T3 keeps the label's start time, and a retry after a lost reply lands on
+//     the same label; T3's reply must name the new label. A label is display
+//     only, never identity. An archived thread has no card and always loses
+//     its label. Answers {cards: [{thread, outcome, label}]} in input order,
+//     outcome one of set, cleared, unchanged, left, gone (a thread T3 no
+//     longer has), unsupported (a T3 whose t3_thread_update does not declare
+//     statusLabel, which therefore has no label to clear), or failed with its
+//     error; one card's failure never stops the others. The label is checked
+//     here rather than in REQUIRED_TOOLS, so such a T3 costs only the label.
 //   fm-t3-mcp.mjs decisions --file <json-file>
 //     One pass of bin/fm-t3-needs-me.sh sync over the captain's decisions
 //     (docs/t3code-backend.md "Bridge decisions"), in one session.
@@ -1849,25 +1858,65 @@ async function pinCoordinator(flags) {
   return { ok: true, pinned: true, threadId };
 }
 
-async function statusLabel(flags) {
-  const threadId = need(flags, "thread");
-  const { session } = await verifiedSession(flags);
+const CREW_WORKING = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+const CREW_BETWEEN = new Set(["idle", "completed", "interrupted", "cancelled", "rolled_back"]);
+
+// The label <card> wants on thread <t>: a string, null for none, or
+// undefined to leave the card as it is.
+function crewCardLabel(t, card) {
+  if (t.archived === true || Boolean(t.archivedAt)) return null;
+  let want;
+  if (card.between === card.working) want = card.between;
+  else if ((t.pendingRequestCount ?? 0) > 0 || CREW_BETWEEN.has(t.status)) want = card.between;
+  else if (CREW_WORKING.has(t.status)) want = card.working;
+  if (want === null || want === undefined) return undefined;
+  return want === "" ? null : want;
+}
+
+async function crewCard(session, card) {
+  const threadId = card.thread;
   let t;
   try {
     t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
   } catch (err) {
-    if (isNotFound(err)) return { ok: true, threadId, exists: false, changed: false };
+    if (isNotFound(err)) return { thread: threadId, outcome: "gone" };
     throw err;
   }
-  const archived = t.archived === true || Boolean(t.archivedAt);
-  const label = archived ? null : flags.label ?? null;
-  if (label === (t.statusLabel ?? null)) return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: false };
-  if (!toolOffers(session, "t3_thread_update", "statusLabel")) throw new Refusal("status_label_unsupported", "this T3 has no crew card status label", 4, { threadId });
+  const current = t.statusLabel ?? null;
+  const label = crewCardLabel(t, card);
+  if (label === undefined) return { thread: threadId, outcome: "left", label: current };
+  if (label === current) return { thread: threadId, outcome: "unchanged", label };
+  if (!toolOffers(session, "t3_thread_update", "statusLabel")) return { thread: threadId, outcome: "unsupported", label: current };
   const out = await session.call("t3_thread_update", label === null
     ? { threadId, action: "clear_status_label" }
     : { threadId, action: "set_status_label", statusLabel: label });
-  if ((out?.statusLabel ?? null) !== label) throw new Refusal("status_label_unproven", `T3 accepted the status label of ${threadId} but answered with a different one`, 1, { threadId });
-  return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: true };
+  if ((out?.statusLabel ?? null) !== label) throw new Refusal("status_label_unproven", `T3 accepted the status label of ${threadId} but answered with a different one`, 1);
+  return { thread: threadId, outcome: label === null ? "cleared" : "set", label };
+}
+
+async function crewStatus(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  const labelOk = (v) => v === null || typeof v === "string";
+  if (!Array.isArray(input?.cards) || !input.cards.every((c) => typeof c?.thread === "string" && labelOk(c.between) && labelOk(c.working))) {
+    usage("--file needs cards[], each {thread, between, working} with a label, \"\", or null");
+  }
+  const { session } = await verifiedSession(flags);
+  const cards = [];
+  for (const card of input.cards) {
+    try {
+      cards.push(await crewCard(session, card));
+    } catch (err) {
+      if (err instanceof Refusal && err.exit === 2) throw err;
+      const r = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
+      cards.push({ thread: card.thread, outcome: "failed", error: { code: r.code, message: r.message } });
+    }
+  }
+  return { ok: true, cards };
 }
 
 // --- Bridge decisions (docs/t3code-backend.md "Bridge decisions") ---------
@@ -2260,7 +2309,7 @@ const VERBS = {
   close,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
-  "status-label": statusLabel,
+  "crew-status": crewStatus,
   decisions,
   "objectives-payload": objectivesPayloadVerb,
   objectives,
