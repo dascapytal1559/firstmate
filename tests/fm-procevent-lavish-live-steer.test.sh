@@ -202,6 +202,52 @@ mv "$(inbox worker-a)"/*.msg "$(inbox worker-a)/handled/"
 [ -z "$(pe task-board worker-a)" ] || fail "task-board still listed items after everything was read"
 pass "acknowledged rounds and filed notes clear the board's unread list"
 
+# --- a worker that ends its own board is not told to conclude it -------------
+session_end() {  # <round> <ended_by>
+  printf 'session:\n  status: ended\n  ended_by: %s\n' "$2" > "$LS_ROOT/response$1"
+  touch "$LS_ROOT/trigger$1"
+  touch "$LS_ROOT/ended"
+}
+wait_retired() {
+  local _
+  for _ in $(seq 1 300); do [ -z "$(board_state)" ] && return 0; sleep 0.02; done
+  return 1
+}
+
+new_board self-end 0.1.96 worker-e
+lv arm "$ART" --for worker-e >/dev/null || fail "arming the self-end board failed"
+wait_polls 1 || fail "the self-end board never listened"
+session_end 1 agent
+wait_retired || fail "a board its worker ended stayed registered: $(board_state)"
+[ -e "$(handled_marker 1)" ] || fail "the worker's own close was not filed as handled"
+[ -z "$(find "$(inbox worker-e)" -name '*.msg' 2>/dev/null)" ] \
+  || fail "the worker was sent a note about closing its own board"
+[ ! -s "$HOME_DIR/state/.wake-queue" ] || fail "the worker's own close woke firstmate"
+pe reconcile >/dev/null 2>&1 || true
+sleep 0.3
+[ "$(polls)" = 1 ] || fail "the retired self-ended board was polled again ($(polls) polls)"
+pass "a session the worker ended itself is filed quietly and the board retires"
+
+new_board captain-end 0.1.96 worker-f
+lv arm "$ART" --for worker-f >/dev/null || fail "arming the captain-end board failed"
+wait_polls 1 || fail "the captain-end board never listened"
+session_end 1 user
+wait_file "$(inbox worker-f)/001.msg" || fail "a session the captain ended did not reach the worker"
+assert_contains "$(cat "$(inbox worker-f)/001.msg")" "do not re-arm" "the captain-ended note did not say to stop"
+[ ! -e "$(handled_marker 1)" ] || fail "a captain-ended round was filed before the worker acknowledged it"
+[ "$(board_state)" = "task:worker-f/round-open" ] || fail "the captain-ended board did not stay open: $(board_state)"
+pass "a session the captain ended still tells the worker to conclude the review"
+
+new_board agent-end-content 0.1.96 worker-g
+lv arm "$ART" --for worker-g >/dev/null || fail "arming the agent-end-content board failed"
+wait_polls 1 || fail "the agent-end-content board never listened"
+printf 'session:\n  status: feedback\n  session_ended: true\n  ended_by: agent\nprompts[1]{uid,prompt,selector,tag,text}:\n  "","late words","","message",""\n' \
+  > "$LS_ROOT/response1"
+touch "$LS_ROOT/trigger1" "$LS_ROOT/ended"
+wait_file "$(inbox worker-g)/001.msg" || fail "captain words in a worker-ended session did not reach the worker"
+[ ! -e "$(handled_marker 1)" ] || fail "a worker-ended round carrying captain words was filed unread"
+pass "a worker-ended session that still carries captain words is delivered"
+
 # --- a listener that dies mid-round is restarted by reconcile ----------------
 new_board restart 0.1.96 worker-b
 lv arm "$ART" --for worker-b >/dev/null || fail "arming the restart board failed"

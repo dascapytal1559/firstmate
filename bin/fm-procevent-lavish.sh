@@ -8,6 +8,7 @@
 #   fm-procevent-lavish.sh classify <result-file>
 #   fm-procevent-lavish.sh terminal <result-file>
 #   fm-procevent-lavish.sh silent <result-file>
+#   fm-procevent-lavish.sh owner-ended <result-file>
 #   fm-procevent-lavish.sh answers <result-file>
 #   fm-procevent-lavish.sh reconciles <result-file>
 #   fm-procevent-lavish.sh read <result-file>
@@ -79,6 +80,12 @@
 #            only place Lavish's notion of "nothing was said" is decided.
 #            Task-owned terminal rounds bypass generic silence so their owner
 #            receives the stop-and-conclude instruction.
+# owner-ended
+#            Exit 0 when a captured terminal result is an empty session the
+#            owning worker ended itself (`ended_by: agent`), so the runner
+#            files that round without telling the worker what it just did.
+#            A captain-ended session or one still carrying content exits
+#            nonzero and keeps the stop-and-conclude instruction.
 #
 # AN EMPTY BOARD CLOSE IS NOT NEWS, and that is what `silent` exists to say.
 # Closing a review surface that carried nothing is the single most common Lavish
@@ -827,6 +834,19 @@ cmd_silent() {
   [ "$content_rc" -eq 1 ]
 }
 
+# Whether a captured terminal result is the owning worker closing its own board,
+# for the runner's owner-ended seam: an empty `ended` session that Lavish
+# records as ended by the agent. The captain's close (`ended_by: user`), any
+# result still carrying queued content, and anything unreadable keep the
+# owner's stop-and-conclude note.
+cmd_owner_ended() {
+  local file=${1-}
+  [ -n "$file" ] || usage
+  [ "$(session_field "$file" ended_by)" = agent ] || return 1
+  cmd_silent "$file" || return 1
+  [ "$(cmd_classify "$file")" = ended ]
+}
+
 # Print `key<TAB>answer<TAB>label[<TAB>mode]` for each non-reconcile structured choice the
 # captain submitted in a captured result; the optional mode column relays the
 # card's declared close mode (`done` or `release`) to the keyed-answer intake.
@@ -1041,6 +1061,7 @@ case "${1-}" in
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;
   silent)    shift; cmd_silent "$@" ;;
+  owner-ended) shift; cmd_owner_ended "$@" ;;
   answers)   shift; cmd_answers "$@" ;;
   reconciles) shift; cmd_reconciles "$@" ;;
   read)      shift; cmd_read "$@" ;;

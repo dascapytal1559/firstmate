@@ -2988,6 +2988,7 @@ The captain's words on a worker's board live only in that worker's open rounds a
 **Conclude a terminal round**
 
 - A terminal result, including `session_ended`, an empty End, or missing, is delivered to the owner with an explicit stop-and-conclude instruction and is never auto-rearmed.
+- The one exception is an empty session the worker ended itself, which Lavish records as ended by the agent and the adapter's `owner-ended` command recognizes: that round is recorded handled with no note and no doorbell, and the board retires as the owner's own acknowledgement would; a captain-ended session or one still carrying the captain's words is delivered as above.
 - That round keeps the board with its owner: the source record is not retired while the terminal capture is unacknowledged, so no second armer can take the board, and acknowledging it with `bin/fm-procevent.sh handled <source-id> <sequence>` is what concludes and retires it.
 - That conclude retains the registration it is retiring, removes it, then records the acknowledgement and restores the registration if that record cannot be written, so a failed conclude never leaves the round open with its owner gone.
 - An interruption between those two durable steps leaves the board unregistered with its terminal round still open, which nothing relaunches and the same `handled` call finishes.
