@@ -441,61 +441,70 @@ test_pin_coordinator() {
   pass "fm-t3-mcp pin-coordinator: pins the live root thread as the one coordinator only where T3 offers it"
 }
 
-# status-label sets and clears a thread's crew card label, updates only when
-# that changes it, proves T3's answer, and leaves a thread that is gone alone. A
-# T3 without the label refuses only setting one, and still passes the gate.
-test_status_label() {
-  local project thread
-  fresh_case status-label '{"statusLabels":true}'
+# crew-status brings every card in one session in line with the label it wants
+# for its worker's turn: it updates only when that changes the card, proves
+# T3's answer, leaves a card whose turn it cannot read, and reports a gone
+# thread or an older T3 per card. A T3 without the label still passes the gate.
+test_crew_status() {
+  local project thread other
+  fresh_case crew-status '{"statusLabels":true}'
   mcp project-ensure --root "$TMP_ROOT/proj"
   project=$(field "$OUT" projectId)
   mcp launch --project "$project" --title 'Print view' --model-selection "$SEL"
   thread=$(field "$OUT" threadId)
-  mcp status-label --thread "$thread" --label 'Testing'
+  mcp launch --project "$project" --title 'Other' --model-selection "$SEL"
+  other=$(field "$OUT" threadId)
+  FM_T3_A=$thread FM_T3_B=$other t3_fake_set 'for (const id of [process.env.FM_T3_A, process.env.FM_T3_B]) { const t = w.threads[id]; t.status = "completed"; t.activeRunId = null; }'
+  : > "$T3_FAKE_LOG"
+  crew_cards() {  # <json-cards> -> runs the verb on {cards: <json-cards>}
+    printf '{"cards":%s}\n' "$1" > "$TMP_ROOT/cards.json"
+    mcp crew-status --file "$TMP_ROOT/cards.json"
+  }
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"},{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
   expect_code 0 "$RC" "labelling should succeed: $ERR"
-  assert_equals 'Testing' "$(field "$OUT" statusLabel)" "the label is set"
-  assert_equals true "$(field "$OUT" changed)" "the first label updates"
-  mcp status-label --thread "$thread" --label 'Testing'
-  assert_equals false "$(field "$OUT" changed)" "a repeat updates nothing"
-  assert_equals 1 "$(t3_fake_calls t3_thread_update | wc -l | tr -d ' ')" "a repeat makes no update call"
-  mcp status-label --thread "$thread" --label 'Waiting for captain'
-  assert_equals 'Waiting for captain' "$(field "$OUT" statusLabel)" "another label replaces it"
-  mcp status-label --thread "$thread"
-  expect_code 0 "$RC" "clearing should succeed: $ERR"
-  assert_equals '' "$(field "$OUT" statusLabel)" "no label clears it"
-  assert_equals true "$(field "$OUT" changed)" "clearing updates"
-  mcp status-label --thread "$thread"
-  assert_equals false "$(field "$OUT" changed)" "a clear card needs no update"
+  assert_equals 'set set' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.1.outcome)" "both cards are set"
+  assert_equals 'Testing Ready' "$(field "$OUT" cards.0.label) $(field "$OUT" cards.1.label)" "each to its own label"
+  assert_equals 1 "$(t3_fake_calls t3_environment_read | wc -l | tr -d ' ')" "every card goes through one session"
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  assert_equals unchanged "$(field "$OUT" cards.0.outcome)" "a repeat changes nothing"
+  assert_equals 2 "$(t3_fake_calls t3_thread_update | wc -l | tr -d ' ')" "a repeat makes no update call"
+
+  FM_T3_ID=$other t3_fake_set 'const t = w.threads[process.env.FM_T3_ID]; t.status = "running"; t.activeRunId = "run-x";'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
+  assert_equals cleared "$(field "$OUT" cards.0.outcome)" "a worker at work gets its working label, here none"
+  FM_T3_ID=$other t3_fake_set 'w.threads[process.env.FM_T3_ID].pendingRequestCount = 1'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Waiting\",\"working\":\"\"}]"
+  assert_equals 'set Waiting' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.0.label)" "a pending request is between turns"
+  FM_T3_ID=$other t3_fake_set 'const t = w.threads[process.env.FM_T3_ID]; t.pendingRequestCount = 0; t.status = "failed"; t.activeRunId = null;'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
+  assert_equals 'left Waiting' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.0.label)" "a turn it cannot read leaves the card"
+  crew_cards "[{\"thread\":\"$other\",\"between\":null,\"working\":null}]"
+  assert_equals left "$(field "$OUT" cards.0.outcome)" "null leaves the card whatever the turn"
   assert_equals 0 "$(t3_fake_calls t3_thread_update | grep -c '"action":"rename"')" "a label never renames"
 
   t3_fake_set 'w.statusLabelAnswers = "something else"'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 1 "$RC" "a label T3 does not answer with is unproven"
-  assert_contains "$OUT" status_label_unproven "the failure names the unproven label"
-  t3_fake_set 'delete w.statusLabelAnswers; w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
-  mcp status-label --thread "$thread"
-  expect_code 3 "$RC" "T3's refusal of the update is a typed failure"
-  t3_fake_set 'delete w.failTools'
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"\",\"working\":\"\"},{\"thread\":\"thread-missing\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  expect_code 0 "$RC" "a failed card is reported per card: $ERR"
+  assert_equals failed "$(field "$OUT" cards.0.outcome)" "a label T3 does not answer with is unproven"
+  assert_equals status_label_unproven "$(field "$OUT" cards.0.error.code)" "the failure names the unproven label"
+  assert_equals gone "$(field "$OUT" cards.1.outcome)" "a thread T3 no longer has is gone, and the failure before it stops nothing"
+  t3_fake_set 'delete w.statusLabelAnswers'
 
-  mcp status-label --thread thread-missing --label 'Testing'
-  expect_code 0 "$RC" "a thread T3 no longer has is no failure: $ERR"
-  assert_equals false "$(field "$OUT" exists)" "a missing thread reads exists:false"
   FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Testing"; w.threads[process.env.FM_T3_ID].archived = true'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 0 "$RC" "an archived thread is no failure: $ERR"
-  assert_equals true "$(field "$OUT" archived)" "the result reports the archive"
-  assert_equals '' "$(field "$OUT" statusLabel)" "an archived thread has no card, so it always loses the label"
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  assert_equals 'cleared' "$(field "$OUT" cards.0.outcome)$(field "$OUT" cards.0.label)" "an archived thread has no card, so it always loses the label"
 
   t3_fake_set 'delete w.statusLabels'
-  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = false'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 4 "$RC" "a T3 without the label refuses only this verb"
-  assert_contains "$OUT" status_label_unsupported "the refusal names the missing label"
-  mcp status-label --thread "$thread"
-  expect_code 0 "$RC" "a T3 without the label has none to clear: $ERR"
+  # An older T3 carries no labels at all.
+  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = false; for (const t of Object.values(w.threads)) delete t.statusLabel;'
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"},{\"thread\":\"$other\",\"between\":\"\",\"working\":\"\"}]"
+  expect_code 0 "$RC" "a T3 without the label is no failure: $ERR"
+  assert_equals 'unsupported unchanged' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.1.outcome)" "only setting a label is unsupported there"
+  crew_cards '[{"thread":"x","between":7,"working":""}]'
+  expect_code 2 "$RC" "a malformed card is a usage error"
   mcp state --thread "$thread"
   expect_code 0 "$RC" "the label stays out of the capability gate: $ERR"
-  pass "fm-t3-mcp status-label: one label on the card, proven, and harmless on a repeat, a gone thread, or an older T3"
+  pass "fm-t3-mcp crew-status: every card in one session, proven, and harmless on a repeat, a gone thread, or an older T3"
 }
 
 test_typed_failure_and_transport_errors() {
@@ -1505,7 +1514,7 @@ test_launch_refusals
 test_send_state_capture_interrupt_archive
 test_thread_for_root
 test_pin_coordinator
-test_status_label
+test_crew_status
 test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_start
