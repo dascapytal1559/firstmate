@@ -803,3 +803,91 @@ The choices made:
 
 The evidence is two new cases in `tests/fm-merge-local.test.sh`: a rebased, reworded branch lands and is recorded, and extra, amended, whitespace-only, merge, reordered, and squashed variants are each refused with the differing commits named.
 Swapping the verbatim comparison for Git's whitespace-blind one makes the whitespace case fail, which shows the test guards it.
+
+## 32. The card says Working as soon as the worker picks up a reply (9 November 2026)
+
+![A worker's card while a captain call is open: Waiting for captain, then T3's own Working the moment the reply reaches the worker, then Waiting for captain again if the turn ends with the call still open](media/crew-card-turns.svg)
+
+With review-board replies reaching workers in seconds, one gap was left on the T3 card:
+
+> Now the only thing that's still to be refined is when I reply I can see that the agent's working, but I don't immediately get an update to the T3 code thread. Like T3 code thread will continue to say waiting for captain until you action it or something?
+>
+> — 9 November 2026
+
+The card read `Waiting for captain` for as long as the captain hold was open, and the hold stays open until firstmate records the answer, so the card kept waiting while the worker was visibly at work on the reply.
+
+What was built:
+
+- **The wait shows only between turns.** While the worker works, the label comes off and T3 shows its own Working state. "Works" means T3 reads the thread busy, or a message is still unread in the worker's steering inbox, which covers the moment the reply lands before T3 reports the turn.
+- **It comes back when the turn ends with the call still open**, so a worker that returns still needing the captain shows it again.
+- **No new polling.** Delivering a message to a T3 worker re-syncs the card at once. The watcher's existing wait on T3 now reports which runs it saw active, so a run that ended, during a wait or between two, makes the card sync due straight away with no extra server call.
+
+The choices made:
+
+- **The hold itself is untouched.** The label is display only; the call stays open and is answered exactly as before.
+- **One sync at a time.** The delivery and the watcher can now sync at the same moment, so a sync that read the worker before a newer event could have written its card last. Syncs now run one at a time, and one that arrives during another asks it to run again.
+- **A turn that cannot be read leaves the card alone**, as an unreadable hold or run already did.
+- **`Testing` keeps its meaning.** A ship mid-turn through an open call with an active run shows `Testing`, and the wait returns on top when the turn ends.
+
+The evidence is four new cases in `tests/fm-t3-captain-label.test.sh`: the wait follows the turn (idle shows it, busy or an unread message hides it, the turn's end brings it back, an unreadable turn changes nothing); a delivered message drops the wait within seconds with no watcher running; racing syncs leave no lock behind and a killed sync's lock is taken over; and a real watcher brings the wait back when the run ends, well before its once-a-minute pass.
+
+## 33. A worker that closes its own board is not told to close it (10 November 2026)
+
+Because review boards now keep listening (entry 30), a worker that finished a review and ended its own board got a note straight back: the review result "is terminal ... stop and conclude the review".
+The listener had heard the worker's own close and passed it on as if the captain had ended the board.
+Upstream has nothing listening at that moment, so it never sends that note.
+
+The captain's go-ahead on the proposed fix:
+
+> yeah ok do this
+>
+> — 10 November 2026
+
+What was built:
+
+- **A board the worker ended itself is filed quietly.** Lavish records who ended a session; when it was the worker and the board carried nothing, the round is marked handled and the board retires, exactly as the worker's own acknowledgement would, with no note and no doorbell.
+- **A board the captain ends still tells the worker**, as before.
+
+The choices made:
+
+- **The captain's words always get through.** A worker-ended session that still carries something the captain sent is delivered as before, because quieting it would drop that message.
+- **The fork moves back toward upstream here** rather than adding a new difference: with nothing to hear the worker's close, upstream sends no note either.
+
+The evidence is three new cases in `tests/fm-procevent-lavish-live-steer.test.sh`: a worker-ended board leaves no note, is filed as handled, and is retired and never polled again; a captain-ended board still delivers the stop-and-conclude note and stays open; and a worker-ended board that still carries a message is delivered.
+
+## 34. Bridge decisions become one list, sent with every change (10 November 2026)
+
+![Before: each call passed through a sync file per call, a series of thread calls, and a hidden thread per call; after: FirstMate sends one list in one call and T3 keeps it in one file](media/bridge-decisions-one-list.png)
+
+Each open captain call on T3's Bridge tab was a hidden, agent-less T3 thread, and FirstMate created, settled, snoozed, archived, and read back each one separately.
+A scout found that nothing the Bridge shows needs a thread, and that one update had been failing every 15 minutes because T3 refuses to mark a thread unread when it never ran.
+The captain took the scout's recommendations: T3 keeps the decisions as one list, the Later section goes, the old threads are archived at the switch, and an answered decision vanishes at once.
+On where the list lives, the one condition:
+
+> Yeah, I mean, wherever makes sense, just make sure that it's updated at the same time.  As 1st mate's internal records.  That's all I would want from it. Rest go with ur rec
+>
+> — 10 November 2026
+
+The T3 Code fork's side landed first, with the new `t3_decisions_set` tool.
+This entry is FirstMate's side:
+
+- **One call carries the whole list.** When T3 offers the tool, the sync sends every open call in one `t3_decisions_set` call, built from the same records as before: the captain holds, how long each has waited, and each call's recorded context.
+  A call deferred to a date carries that date and waits under Scheduled; a blocked, answered, or released call is simply left off.
+- **Same step as the records.** Every hold, answer, reconcile, and context already ran the sync before returning; now that sync is one cheap call, so the Bridge changes in the same command that changes FirstMate's records.
+  The watcher's minute pass stays as the backstop.
+- **Failures are no longer silent.** A list T3 refuses is reported and sent again on the next pass, and the third refusal in a row wakes FirstMate with T3's exact error, once per run of failures.
+- **The switch happens once.** The first list T3 accepts archives every decision thread FirstMate has on record and deletes its per-call sync records; an archive that fails is tried again on the next pass.
+- **Older T3 keeps working.** A T3 without the tool still gets the decision threads, unchanged, until the fork's next build removes them.
+
+![The Bridge after the switch, with made-up decisions: objectives on top, then Needs you and Scheduled, and no Later section](media/bridge-decisions-list.jpg)
+
+The choices made:
+
+- **The list is sent on every pass that has something to show**, not only when it changed, so a T3 that lost its file is filled again within a minute; T3 treats an identical list as no change.
+  An empty list is sent once and then not again.
+- **A decision T3 would refuse is left off and named**, rather than letting one oversized field block every other decision.
+- **The thread path stays for now** because the installed T3 may not have the tool yet; it is marked for removal with the fork's build 2.
+- **Update FirstMate first, then T3**: the fork's new build shows only the list, so its Bridge stays empty until FirstMate sends one.
+
+The picture of the Bridge is the fork's own, from its build, with made-up data; the diagram is the scout's.
+The evidence is seven new cases in `tests/fm-t3-needs-me.test.sh` against the stand-in T3, which now offers the tool with the fork's bounds: the list's exact shape and contents through holds, deferrals, blocks, updates, and answers; a resent list leaving the captain's answer in place until the records change; the one-time switch, including a failed archive retried; three refusals waking FirstMate once per run; an out-of-bounds decision left off without blocking the rest; no list without FirstMate's thread; and the watcher turning the alert into one durable wake.

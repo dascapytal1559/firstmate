@@ -128,6 +128,100 @@ updates() {
   t3_fake_calls t3_thread_update | wc -l | tr -d ' '
 }
 
+turn_is() {  # <running|settled|failed>
+  FM_T3_ID=$THREAD FM_T3_TURN=$1 t3_fake_set '
+const t = w.threads[process.env.FM_T3_ID];
+const turn = process.env.FM_T3_TURN;
+t.status = turn === "settled" ? "completed" : turn;
+t.activeRunId = turn === "running" ? "run-1" : null;
+t.runs = [{ runId: "run-1", ordinal: 1, status: t.status }];'
+}
+
+inbox_message() {  # -> the path of a fresh unhandled steering-inbox message for w1
+  # shellcheck disable=SC2016  # expanded by the inner shell
+  home_env bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" w1 "the captain replied"' _ "$ROOT" "$HOME_DIR/state"
+}
+
+await_card() {  # <label>: up to 10s
+  local i=0
+  while [ "$i" -lt 100 ] && [ "$(card_of)" != "$1" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+test_wait_shows_only_between_turns() {
+  local msg
+  make_home turns
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  assert_equals "$WAITING" "$(card_of)" "a hold with the worker between turns shows the wait"
+
+  turn_is running
+  label sync || fail "sync should pass"
+  assert_equals "" "$(card_of)" "a worker mid-turn drops the wait so T3 shows Working"
+  assert_present "$HOME_DIR/state/t3-captain-wait/w1/w1" "the record stays while the hold is open"
+  captain open w1 || fail "the label never touches the hold"
+  turn_is settled
+  label sync || fail "sync should pass"
+  assert_equals "$WAITING" "$(card_of)" "the turn ending with the hold open brings the wait back"
+
+  msg=$(inbox_message) || fail "could not write an inbox message"
+  label sync || fail "sync should pass"
+  assert_equals "" "$(card_of)" "an unhandled steering-inbox message drops the wait before T3 reports the turn"
+  mkdir -p "${msg%/*}/handled" && mv "$msg" "${msg%/*}/handled/"
+  label sync || fail "sync should pass"
+  assert_equals "$WAITING" "$(card_of)" "once the message is handled and the turn is over, the wait is back"
+
+  turn_is failed
+  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
+  label sync || fail "sync should pass"
+  assert_equals "Unchanged" "$(card_of)" "a turn that cannot be read changes no card"
+  assert_present "$HOME_DIR/state/t3-captain-wait/w1/w1" "a turn that cannot be read keeps the record"
+
+  turn_is settled
+  answer w1 --release || fail "the release should succeed"
+  assert_equals "" "$(card_of)" "the release still clears the card"
+  assert_absent "$HOME_DIR/state/t3-captain-wait" "and leaves no record"
+  pass "fm-t3-captain-label: the wait shows only between turns and returns when a turn ends with the hold open"
+}
+
+test_inbox_delivery_drops_the_wait_at_once() {
+  local msg
+  make_home delivery
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  assert_equals "$WAITING" "$(card_of)" "the wait shows first"
+  msg=$(inbox_message) || fail "could not write an inbox message"
+  # shellcheck disable=SC2016  # expanded by the inner shell
+  home_env bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_ring t3code "$2" "$3" fm-w1' _ "$ROOT" "$THREAD" "$msg" \
+    || fail "the doorbell should ring"
+  await_card ""
+  assert_equals "" "$(card_of)" "a delivered doorbell drops the wait within seconds, with no watcher running"
+  captain open w1 || fail "the delivery leaves the hold open"
+  assert_present "$HOME_DIR/state/t3-captain-wait/w1/w1" "and keeps the record for the wait's return"
+  pass "fm-task-inbox-lib: a doorbell delivered to a T3 worker drops its card's wait at once"
+}
+
+test_concurrent_syncs_end_on_the_latest_read() {
+  local pids='' i
+  make_home concurrent
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  turn_is running
+  for i in 1 2 3 4; do
+    label sync >/dev/null 2>&1 &
+    pids="$pids $!"
+  done
+  # shellcheck disable=SC2086  # one pid per word
+  wait $pids
+  assert_equals "" "$(card_of)" "racing passes all read the worker mid-turn"
+  assert_absent "$HOME_DIR/state/.t3-captain-wait.lock" "the last pass lets go of the lock"
+  assert_absent "$HOME_DIR/state/.t3-captain-wait.again" "no pass is left owed"
+  ln -s 999999 "$HOME_DIR/state/.t3-captain-wait.lock"
+  turn_is settled
+  label sync || fail "a lock left by a killed pass is taken over"
+  assert_equals "$WAITING" "$(card_of)" "the pass after a killed one still runs"
+  pass "fm-t3-captain-label: passes run one at a time, and a killed pass's lock is taken over"
+}
+
 test_hold_labels_and_release_clears() {
   make_home own-row
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
@@ -357,6 +451,30 @@ test_testing_follows_the_run() {
   pass "fm-t3-captain-label: Testing shows while the run is active and clears when it ends"
 }
 
+test_runs_request_rides_on_the_running_pass() {
+  local holder
+  make_home runs-coalesced
+  in_a_run
+  run_is running
+  sleep 30 &
+  holder=$!
+  ln -s "$holder" "$HOME_DIR/state/.t3-captain-wait.lock"
+  label sync --runs || fail "a pass that finds another running should pass"
+  assert_equals "" "$(card_of)" "it leaves the work to the running pass"
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  label sync || fail "the next pass should pass"
+  assert_equals "$TESTING" "$(card_of)" "the owed pass still looks for runs"
+  assert_absent "$HOME_DIR/state/.t3-captain-wait.lock" "the pass lets go of the lock"
+  run_is ended
+  label sync || fail "a later plain pass should pass"
+  assert_equals "" "$(card_of)" "the end of the run clears the card"
+  run_is running
+  label sync || fail "a later plain pass should pass"
+  assert_equals "" "$(card_of)" "the carried request was used up, so a plain pass finds no new run"
+  pass "fm-t3-captain-label: a --runs request that finds another pass running is carried by the next pass"
+}
+
 test_waiting_outranks_testing() {
   make_home outranks
   in_a_run
@@ -367,6 +485,12 @@ test_waiting_outranks_testing() {
   assert_equals "$WAITING" "$(card_of)" "a hold outranks the run at once"
   label sync --runs || fail "the pass should pass"
   assert_equals "$WAITING" "$(card_of)" "a later pass keeps the wait on top"
+  turn_is running
+  label sync || fail "the pass should pass"
+  assert_equals "$TESTING" "$(card_of)" "a worker mid-turn through the wait shows its active run"
+  turn_is settled
+  label sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "the turn's end puts the wait back on top"
   answer w1 --release || fail "the release should succeed"
   assert_equals "$TESTING" "$(card_of)" "the end of the wait falls back to the run"
   run_is ended
@@ -447,6 +571,29 @@ test_watcher_finds_a_run_with_no_record() {
   pass "fm-watch.sh: the same pass finds an active run on a worker with no record"
 }
 
+test_watcher_brings_the_wait_back_when_the_run_ends() {
+  local i=0
+  make_home watcher-turn
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  turn_is running
+  start_watcher
+  await_card ""
+  while [ "$i" -lt 100 ] && ! t3_fake_calls t3_thread_wait | grep -q run-1; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  assert_equals "" "$(card_of)" "the watcher's pass drops the wait while the worker is mid-turn"
+  t3_fake_calls t3_thread_wait | grep -q run-1 || fail "the watcher's T3 wait never watched the run"
+  turn_is settled
+  await_card_then_stop_watcher "$WAITING"
+  assert_equals "$WAITING" "$(card_of)" "the run's end brings the wait back long before the minute pass"
+  pass "fm-watch.sh: a T3 run ending with the hold open brings the wait back at once"
+}
+
+test_wait_shows_only_between_turns
+test_inbox_delivery_drops_the_wait_at_once
+test_concurrent_syncs_end_on_the_latest_read
+test_watcher_brings_the_wait_back_when_the_run_ends
 test_hold_labels_and_release_clears
 test_answer_and_repeat_hold_are_clean
 test_status_decision_alone_is_no_captain_wait
@@ -460,6 +607,7 @@ test_only_t3_workers_are_labelled
 test_clear_takes_the_label_off_while_the_hold_stays
 test_teardown_clears_before_it_archives
 test_testing_follows_the_run
+test_runs_request_rides_on_the_running_pass
 test_waiting_outranks_testing
 test_a_scout_never_shows_testing
 test_older_t3_breaks_nothing

@@ -24,9 +24,9 @@ Put the question and its options in the hold reason, and keep one held task per 
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
 Write the ask once and say it twice: before raising a held call in chat, record the message section you are about to send, its question, options, and any report or picture with `bin/fm-captain-hold.sh context <id>`, then send that same text.
 When you tell the captain something new about a held call, record it with `context <id> --changed "<one line>"` in the same turn.
-That record is the original context the captain's T3 decision thread shows; without it the thread falls back to the hold reason.
-A captain message carrying a `needs-me-task: <task-id>` line is his reply from that decision thread (`bin/fm-t3-needs-me.sh reply-task` reads the id): it is his answer to that task, recorded with `answer <id> --decision-file` in his words, or `hold <id> --until <date>` for Later, exactly as any chat answer, through no other channel.
-When such a reply leaves the call open, record what changed with `context --changed` so the call shows as unsettled in his sidebar again instead of staying settled.
+That record is the original context the captain's T3 Bridge shows for the call; without it the Bridge falls back to the hold reason.
+A captain message carrying a `needs-me-task: <task-id>` line is his reply from the Bridge (`bin/fm-t3-needs-me.sh reply-task` reads the id): it is his answer to that task, recorded with `answer <id> --decision-file` in his words, or `hold <id> --until <date>` for Later, exactly as any chat answer, through no other channel.
+When such a reply leaves the call open, record what changed with `context --changed` so the call shows on his Bridge again instead of staying hidden as answered.
 After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
 A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
 For a non-empty inventory or a refused command, the scout reports to firstmate rather than writing metadata or backlog records.

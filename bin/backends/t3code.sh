@@ -496,9 +496,11 @@ fm_backend_t3code_events_capable() {  # <session>
 # (pane_id = thread id, workspace_id = request signature, detail = each
 # answerable approval's id, kind, command or file, reason, and override) on a
 # fresh pending request; 1 when a run ended, the budget passed, or nothing was
-# running (the budget is slept); 2 when the server could not be read. A zero
-# budget only reads the pending requests, for a watcher cycle whose wait
-# another push backend holds.
+# running (the budget is slept), printing one line of the event (run-ended,
+# timeout, or none) and the ids of the runs the wait found active, so a caller
+# comparing two waits sees a run that ended between them; 2 when the server
+# could not be read. A zero budget only reads the pending requests, for a
+# watcher cycle whose wait another push backend holds.
 fm_backend_t3code_wait_transition() {  # <session> <timeout_secs> <state_dir> <thread...>
   local timeout=$2 state=$3 thread marker out
   shift 3
@@ -518,7 +520,7 @@ const approval = (a) =>
   `${a.reason ? ` - reason: ${clip(a.reason, 200)}` : ""}${a.override ? ` - override: ${a.override}` : ""}`;
 for (const id of d.cleared ?? []) console.log(`cleared\t${id}`);
 if (d.event === "blocked") console.log(`blocked\t${d.threadId}\t${d.signature}\t${(d.approvalRequests ?? []).map(approval).join("; ")}`);
-else console.log(`event\t${d.event}`);
+else console.log(`event\t${d.event}\t${(d.runIds ?? []).join(" ")}`);
 ') || return 2
   local kind a b c
   while IFS=$'\t' read -r kind a b c; do
@@ -528,7 +530,10 @@ else console.log(`event\t${d.event}`);
         fm_transition_record "$a" "$b" "" blocked t3code "$c"
         return 0
         ;;
-      event) [ "$a" != none ] || sleep "$timeout" ;;
+      event)
+        [ "$a" != none ] || sleep "$timeout"
+        printf '%s\n' "$a${b:+ $b}"
+        ;;
     esac
   done <<< "$out"
   return 1

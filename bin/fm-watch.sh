@@ -3449,10 +3449,30 @@ heartbeat_scan_finds_actionable() {
 # escalation is the push path's own (handle_push_transition, once per request
 # set); a server the read cannot reach leaves the poll loop as the backstop.
 t3_pending_read() {  # <thread...>
-  local session
+  local session rc=0
   session=$(fm_backend_event_session t3code "$1")
-  watcher_waited fm_backend_wait_transition t3code "$session" 0 "$STATE" "$@" || return 0
-  handle_push_transition t3code "$session" "$WATCHER_CAPTURE"
+  watcher_waited fm_backend_wait_transition t3code "$session" 0 "$STATE" "$@" || rc=$?
+  case "$rc" in
+    0) handle_push_transition t3code "$session" "$WATCHER_CAPTURE" ;;
+    1) t3_wait_settled "$WATCHER_CAPTURE" ;;
+  esac
+}
+
+# t3_wait_settled: given a settled T3 wait's line (its event, then the ids of the
+# runs it found active), make the T3 card sync due at once when a run ended,
+# during this wait or since the last one, so a captain wait shows again on the
+# worker's card as soon as its turn ends with the hold still open
+# (bin/fm-t3-captain-label.sh). The comparison spends no extra server call.
+T3_WAIT_RUNS=
+t3_wait_settled() {  # <wait-line>
+  local event=${1%% *} runs=' ' prev=$T3_WAIT_RUNS id ended=0
+  [ "$event" = "$1" ] || runs=" ${1#* } "
+  T3_WAIT_RUNS=$runs
+  [ "$event" != run-ended ] || ended=1
+  for id in $prev; do
+    case "$runs" in *" $id "*) ;; *) ended=1 ;; esac
+  done
+  [ "$ended" = 0 ] || rm -f "$STATE/.t3-captain-wait-sync"
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -3554,6 +3574,7 @@ event_wait_or_sleep() {
       # 1: a clean full-budget wait with no actionable edge - the reader already
       # blocked ~POLL, so just continue; the next cycle re-scans.
       _event_cap_fails=0
+      [ "$first_backend" != t3code ] || t3_wait_settled "$rec"
       ;;
   esac
 }
@@ -3862,6 +3883,28 @@ t3_captain_label_sync_detached() {
   T3_CAPTAIN_LABEL_PID=$!
 }
 
+# The captain's T3 decisions failed to update three passes in a row
+# (bin/fm-t3-needs-me.sh owns when): its one-line reason becomes one durable
+# check wake, and the alert is consumed, so the same run of failures never
+# wakes twice.
+t3_decisions_alert_tick() {
+  local alert="$STATE/t3-needs-me/.alert" reason queued
+  [ -f "$alert" ] || return 0
+  reason=$(head -n 1 "$alert" 2>/dev/null || true)
+  case "$reason" in
+    'check: t3-decisions: '*) ;;
+    *) rm -f -- "$alert"; return 0 ;;
+  esac
+  queued=$(fm_wake_queued_keys check)
+  if printf '%s\n' "$queued" | grep -Fx t3-decisions >/dev/null 2>&1; then
+    rm -f -- "$alert"
+    return 0
+  fi
+  fm_wake_append check t3-decisions "$reason" || return 1
+  rm -f -- "$alert"
+  wake "$reason"
+}
+
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
 # A merged poll may have queued its terminal wake and then lost the process
@@ -4024,13 +4067,18 @@ while :; do
   fm_pending_reply_tick "$STATE" || true
 
   # A T3 crew card's status follows its holds and its run here, and so do the
-  # captain's decision threads (bin/fm-t3-needs-me.sh): a label or decision
-  # that failed, a thread that came back, or a run that started or ended
-  # converges on the next pass. Only a home with the T3 credential takes part.
+  # captain's decisions (bin/fm-t3-needs-me.sh): a label or decision that
+  # failed, or a run that started or ended, converges on the next pass, and
+  # decisions that keep failing wake firstmate. Only a home with the T3
+  # credential takes part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
     && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
     t3_captain_label_sync_detached
   fi
+  t3_decisions_alert_tick || {
+    echo 'watcher: T3 decisions alert could not be queued' >&2
+    exit 1
+  }
 
   open_decision_reminder_tick || {
     echo 'watcher: open-decision reminder check failed' >&2

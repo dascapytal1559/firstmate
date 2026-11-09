@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="760" height="200" fill="#ffffff"/>
+  <text x="20" y="30" font-size="16" font-weight="600" fill="#1f2328">A worker's card while a captain call is open</text>
+  <line x1="20" y1="120" x2="740" y2="120" stroke="#8c959f" stroke-width="2"/>
+  <rect x="20" y="95" width="200" height="50" rx="8" fill="#fff4d6" stroke="#bf8700"/>
+  <text x="120" y="125" text-anchor="middle" fill="#1f2328">Waiting for captain</text>
+  <rect x="280" y="95" width="200" height="50" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="380" y="125" text-anchor="middle" fill="#1f2328">Working (T3's own)</text>
+  <rect x="540" y="95" width="200" height="50" rx="8" fill="#fff4d6" stroke="#bf8700"/>
+  <text x="640" y="125" text-anchor="middle" fill="#1f2328">Waiting for captain</text>
+  <text x="250" y="80" text-anchor="middle" fill="#57606a">reply reaches the inbox</text>
+  <text x="250" y="170" text-anchor="middle" fill="#57606a">label off at once</text>
+  <text x="510" y="80" text-anchor="middle" fill="#57606a">turn ends, call still open</text>
+  <text x="510" y="170" text-anchor="middle" fill="#57606a">label back within seconds</text>
+</svg>

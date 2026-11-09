@@ -60,8 +60,9 @@
 # --until`, so a "revisit later" answer is stored as a date instead of a live
 # card. A live T3 worker's card shows the hold (bin/fm-t3-captain-label.sh),
 # and every hold, answer, and reconcile close brings that card up to date.
-# The same commands, and `context`, also run bin/fm-t3-needs-me.sh sync, which
-# keeps the captain's T3 decision threads in line with his open calls.
+# The same commands, and `context`, also run bin/fm-t3-needs-me.sh sync before
+# they return, which brings the decisions on the captain's T3 Bridge in line
+# with his open calls in the same step.
 #
 # `context` records what Firstmate told the captain about an open captain call,
 # in data/needs-me/<task-id>.json, the only writer of that record (schema
@@ -306,9 +307,9 @@ captain_hold_cleanup() {
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
   fm_afk_contract_lock_release || true
-  # After the locks: a T3 crew card and the captain's decision threads follow
-  # the hold (the script's header owns how), and a slow or failed sync never
-  # changes this command's result.
+  # After the locks, before returning: a T3 crew card and the captain's Bridge
+  # decisions follow the hold (each script's header owns how), and a slow or
+  # failed sync never changes this command's result; its report goes to stderr.
   [ "$CAPTAIN_LABEL_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-captain-label.sh" sync >&2 || true
   [ "$CAPTAIN_LABEL_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
 }
@@ -2322,10 +2323,10 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 
 # The context record of one captain call (data/needs-me/<task-id>.json): what
 # Firstmate said when it raised the call and each later update, so T3's
-# decision thread can show the original words. The header owns the contract.
+# Bridge can show the original words. The header owns the contract.
 NEEDS_ME_ENTRY_MAX=12
-# T3's bounds on a decision (the T3 Code fork's threadDecision.ts), checked
-# here so a recorded context always fits its thread.
+# T3's bounds on a decision (the T3 Code fork's decisions.ts), checked here so
+# a recorded context always fits the Bridge.
 context_fits() {  # <label> <value> <max-characters>
   [ "${#2}" -le "$3" ] || fail "$1 exceeds $3 characters"
 }

@@ -866,6 +866,8 @@ test_watch_is_event_driven_and_bounded() {
   expect_code 0 "$RC" "watch: $ERR"
   assert_equals run-ended "$(field "$OUT" event)" "a run reaching a terminal status ends the wait"
   assert_equals run-w "$(field "$OUT" runId)" "the ended run is named"
+  assert_equals run-w "$(field "$OUT" runIds.0)" "the runs the wait found active are listed"
+  assert_equals "" "$(field "$OUT" runIds.1)" "a thread with no active run lists none"
   [ "$elapsed" -lt 10 ] || fail "the run end must wake the wait promptly, took ${elapsed}s"
   assert_equals run-w "$(field "$(t3_fake_calls t3_thread_wait | tail -1)" runId)" "the wait names the exact active run"
   : > "$T3_FAKE_LOG"

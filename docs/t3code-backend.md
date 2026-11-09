@@ -212,58 +212,71 @@ T3 still shows Approval, Input, Request, Limited, Failed, and Woke over it.
 It reads `Waiting for captain` while a captain hold is open on the worker, because only Firstmate knows the worker is waiting on the captain.
 A hold counts when it is on the worker's own task or on a task whose `--origin` is the worker, so firstmate holds the question as it escalates; a worker's `needs-decision` line alone does not count, because firstmate settles most of those itself.
 A hold on a task with no live T3 ship or scout has no card and changes nothing.
+The label shows only while the worker is between turns.
+While the worker works, which is T3 reading its thread busy or an unhandled message waiting in its steering inbox, as when the captain's reply has just arrived, the label comes off and T3 shows its own Working state.
+When the turn ends with the hold still open, the label returns.
+The hold itself is unchanged: it stays open until firstmate records the captain's answer.
 
 It reads `Testing` while a ship's no-mistakes run is active, which is when [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads that run as working or parked at a gate.
 A run left only watching a PR with green checks reads as done there, so the card clears then.
-`Waiting for captain` outranks `Testing`, and `Testing` returns when the wait ends if the run is still active.
+A shown `Waiting for captain` outranks `Testing`, and `Testing` shows when the wait ends, or while the worker works through it, if the run is still active.
 
 The label is display only, and T3's `crewOf` stays what makes a thread crew.
 [`bin/fm-t3-captain-label.sh`](../bin/fm-t3-captain-label.sh) sets it after every hold, answer, and reconcile close, and cleanup clears it before archiving the thread, even while the hold stays open.
+Two worker events also update it within seconds: a message delivered to the worker's steering inbox takes the wait off at once, and a T3 run ending puts it back when the hold is still open.
+The watcher sees a run end from its own wait on T3, which reports the runs it found active, so a run that ended during a wait or between two waits counts; the label returns at once where that wait holds the watcher's cycle, and within one poll interval in a home that also has a Herdr or Rex worker.
 The watcher's pass, about once a minute, also reads the run of every live T3 ship, so `Testing` can lag a run's start or end by that long.
-It works from the thread's live label and a record of each labelled worker, so a label that failed or a T3 that was down is repaired by that pass, a label already set survives a restart, and a hold or run that cannot be read leaves the card as it is.
+It works from the thread's live label and a record of each labelled worker, so a label that failed or a T3 that was down is repaired by that pass, a label already set survives a restart, and a hold, turn, or run that cannot be read leaves the card as it is.
 
 A T3 without the status label shows neither word, and holds and cleanup carry on as usual.
 Its records stay, so the card catches up on the first pass after T3 is updated.
 
-### Decision threads
+### Bridge decisions
 
-Each open captain call is its own thread in FirstMate's project, listed in the captain's sidebar under the FirstMate card after its workers, reading Needs captain.
-A decision thread has no agent and no turn.
-It carries the call's question, its options, its project (the task's repo, shown on the card), when it started waiting (the hold's start, which the card's age counts from), and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
+Each open captain call is one decision on T3's Bridge tab, listed under Needs you, or under Scheduled while it waits for a deferred date.
+It carries the call's question, its options, its project (the task's repo), when it started waiting (the hold's start, which the row's age counts from), and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
 A call with no recorded context still appears, with its hold reason as the question.
 
-[`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) keeps the threads in line with the backlog after every hold, answer, reconcile, and context, and on the watcher's pass about once a minute:
+T3 keeps the decisions as one list that FirstMate replaces whole.
+[`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) sends it after every hold, answer, reconcile, and context, before that command returns, so the Bridge changes in the same step as FirstMate's own records; the watcher sends it again about once a minute as the backstop:
 
-- a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card until it is answered or closed, however long it waits;
-- a call deferred with `--until` is snoozed until 00:00 UTC on that date;
-- a blocked call sits in Settled until it unblocks;
-- an answered or released call is settled, then archived a day later;
-- an update marks the thread unread.
+- a live call, or one that has waited longer than the aging threshold, is listed until it is answered or closed, however long it waits;
+- a call deferred with `--until` is listed with a return date of 00:00 UTC on that date, so it waits under Scheduled until then;
+- a blocked, answered, released, or closed call is left out, so it leaves the Bridge with the next list.
 
-A settle, snooze, or archive the captain makes himself stands until FirstMate's records for that call change, and replying settles the thread at once.
-FirstMate's thread is the project's pinned coordinator, else the live thread at the home's root; with neither, nothing is made.
+When the captain replies, T3 hides that decision at once.
+It shows again only when FirstMate's version of it changes, as when his reply left the call open and FirstMate records an update.
+
+A list T3 refuses is reported and sent again on the next pass.
+The third refusal in a row also wakes FirstMate with a `check: t3-decisions` wake carrying T3's exact error, once per run of failures; FirstMate reads the error, checks that T3 is running and current, and fixes the cause rather than waiting on it.
+A single decision outside T3's bounds is left off the list and named in the pass's output, so it never holds back the rest.
+FirstMate's thread, where replies go, is the project's pinned coordinator, else the live thread at the home's root; with neither, no list is sent.
 Only a main home takes part, because a secondmate's calls reach the captain through its parent.
-A T3 without decision threads gets none, and holds carry on as usual.
 
-The T3 Code fork's `fork/README.md` "Decision threads" owns the T3 side: the payload schema and its bounds, the reply message, and the stale-reply guard.
+The T3 Code fork's `fork/README.md` "Bridge" owns the T3 side: the list's schema and its bounds, the reply message, and the stale-reply guard.
 What FirstMate sends and relies on:
 
-- Create: `t3_thread_launch` with `projectId`, `title`, `decisionOf` (FirstMate's thread id), `decision`, and `clientRequestId`, and no `message` or workspace strategy; a retry with the same request id answers with the thread already made.
-  The thread must read back with that `decisionOf`, the payload's `revision`, and no run.
-- Payload: FirstMate always sends its own `revision`, which T3 stores as given: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision.
+- Set: `t3_decisions_set` with `replyTo`, FirstMate's thread id, and `decisions`, the whole list; a decision left out is gone, and an identical list changes nothing.
+  T3 must answer with the same `replyTo` and exactly the ids and revisions sent.
+- Decision: `id` (the task id), `title`, `projectName`, `since`, `question`, `options`, `entries`, `revision`, and `wakeAt` for a deferred call.
+  FirstMate always sends its own `revision`: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision.
   `detail`, `changed`, and `label` are left out when absent, and an attachment's path is absolute, or a URL for a link.
   Entries are oldest first, at most 12, each text at most 8192 bytes; `bin/fm-captain-hold.sh context` checks every other field against the fork's bounds when it records it.
-  FirstMate sends no `message` reference yet, because it cannot know the message id of what it is saying.
-- Update: `t3_thread_update` `set_decision` replaces the payload and must answer with `decisionRevision`; FirstMate retires a decision by settling or archiving it, never with `clear_decision`.
-- Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil` or with no date (it stays snoozed until FirstMate wakes it), `unsnooze`, `mark_unread`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
 - Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
 
-The threads are an additional track beside chat, never a replacement for it.
-Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision's thread keeps its full context and every update since it was raised.
+`bin/fm-t3-mcp.mjs` `decisions` owns the exact call and its proof.
+
+A T3 without `t3_decisions_set` keeps the earlier decision threads instead: one agent-less thread per call under the FirstMate card, active while listed, snoozed until a deferred date, settled while blocked, and settled, then archived a day later, once answered or released.
+The same script's header owns that path, which goes once no T3 lacks the list.
+The first list T3 accepts is the switch: every decision thread FirstMate has on record is archived and its record under `state/t3-needs-me/` deleted, and an archive that fails is tried again on the next pass.
+Update FirstMate before the T3 Code fork build that adds the list, because that build's Bridge shows only the list and stays empty until FirstMate sends one.
+
+The Bridge is an additional track beside chat, never a replacement for it.
+Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision on the Bridge keeps its full context and every update since it was raised.
 
 ### Objectives
 
-T3's Bridge tab (formerly Needs me) shows the captain's high level objectives above the decision threads.
+T3's Bridge tab (formerly Needs me) shows the captain's high level objectives above the decisions.
 Their source is the home's `data/high-level-objectives.md`: a heading, a short preamble, a `Last reviewed: YYYY-MM-DD` line, then one `- **Name:** text` bullet per objective.
 Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
 The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which stays in the file and is not sent to T3.

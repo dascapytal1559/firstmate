@@ -11,7 +11,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
 - [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
 - [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
-- [Decision threads](FORK.md#each-open-decision-is-its-own-t3-code-thread): each open decision is its own T3 thread with its full context, beside the chat listing.
+- [Bridge decisions](FORK.md#every-open-decision-on-t3-codes-bridge): each open decision is listed on T3's Bridge tab with its full context, beside the chat listing.
 - [Card status](FORK.md#waiting-for-captain-and-testing-on-the-workers-card): a worker's card says Waiting for captain or Testing.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.

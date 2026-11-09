@@ -162,7 +162,9 @@
 # result is recorded handled and never announced, so it neither wakes a handler
 # now nor returns on a later reconcile. Task-owned terminal rounds bypass this
 # generic silence path and go to their owner's steering inbox so the owner can
-# conclude the board. A missing command, an error, or any other exit publishes
+# conclude the board, unless the built-in adapter's `owner-ended` command exits
+# 0 because the owner ended the source itself; that round is recorded handled
+# without a note and the board retires as the owner's `handled` would. A missing command, an error, or any other exit publishes
 # the wake exactly as before, so an adapter with no notion of a
 # no-op needs no change and an unknown or degraded result always reaches its
 # handler. This runner still inspects nothing and still names no adapter-specific
@@ -410,6 +412,19 @@ adapter_result_is_silent() {  # <adapter> <result-file>
   script=$(adapter_script "$1")
   [ -f "$script" ] && [ ! -L "$script" ] || return 1
   "$script" silent "$2" >/dev/null 2>&1
+}
+
+# Ask a built-in adapter whether a task-owned terminal round is its owner ending
+# the source itself, which the owner needs no note about. Exit 0 is the only
+# yes; an extension result, a missing command, or any other exit keeps the
+# owner's stop-and-conclude note.
+adapter_result_is_owner_ended() {  # <adapter> <result-file>
+  local script
+  fm_procevent_result_extension_load "$2"
+  [ "$?" -eq 1 ] || return 1
+  script=$(adapter_script "$1")
+  [ -f "$script" ] && [ ! -L "$script" ] || return 1
+  "$script" owner-ended "$2" >/dev/null 2>&1
 }
 
 # Ask the adapter whether its autohandled results announce themselves through a
@@ -904,6 +919,19 @@ publish_result() {  # <result-file>
   if ! fm_procevent_is_handled "$STATE" "$id" "$seq"; then
     if [ -n "$owner_task" ]; then
       if adapter_result_is_terminal "$adapter" "$result"; then
+        # The owner ended the source itself, so its own close is filed as
+        # that round's acknowledgement and `start` retires the board, the
+        # same outcome as the owner's `handled`, with no note or doorbell.
+        if adapter_result_is_owner_ended "$adapter" "$result" \
+          && [ -z "$(source_pending "$id" | awk -v me="/${result##*/}" 'substr($0, length($0) - length(me) + 1) != me')" ]; then
+          fm_procevent_mark_handled "$STATE" "$id" "$seq"
+          case "$?" in
+            0|1)
+              fm_procevent_source_lock_release "$id"
+              return 1
+              ;;
+          esac
+        fi
         message="Lavish review result $id sequence $seq is terminal at $result. Read it with bin/fm-procevent-lavish.sh read $result, stop and conclude the review, and do not re-arm the board. The board stays yours until you acknowledge this round with bin/fm-procevent.sh handled $id $seq, which retires it; acknowledge any earlier round of this board that is still open the same way once you have applied it."
       else
         export FM_PROCEVENT_CAPTURE_SOURCE_LOCK_HELD=1
