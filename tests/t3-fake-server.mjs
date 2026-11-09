@@ -85,6 +85,15 @@
 //     offers t3_objectives_set, which replaces world objectives with
 //     {markdown} (markdown null clears) within the fork's bounds and answers
 //     {objectives} (world objectivesAnswer answers another value instead).
+//   - a T3 with the Bridge decision list (world decisionsTool, the T3 Code
+//     fork) offers t3_decisions_set {replyTo, decisions}, which replaces world
+//     decisionList {replyTo, decisions} within the fork's bounds: replyTo an
+//     existing thread, at most 200 decisions with distinct ids, and each
+//     decision exactly the fork's fields (no others) within their bounds. A
+//     decision equal to the stored one keeps its `answered` mark (world tests
+//     set it to stand for the captain's reply), a changed one loses it, and an
+//     identical list writes nothing. It answers {replyTo, decisions [{id,
+//     revision, answered}]} (world decisionsAnswer answers another value).
 //   - t3_thread_launch answers a repeated clientRequestId with the thread it
 //     already made; t3_thread_organize settle, unsettle, snooze (with
 //     snoozedUntil, or with no date), unsnooze, mark_unread (refused on a
@@ -145,7 +154,8 @@ const ALL_TOOLS = [
 ];
 const CURRENT_TOOLS = ALL_TOOLS.filter((n) => n !== "t3_thread_configuration" && !n.startsWith("t3_pending_request_"))
   .concat(["t3_pending_request"]);
-const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS).concat(w.objectivesTool ? ["t3_objectives_set"] : []);
+const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS)
+  .concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : []);
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
@@ -343,6 +353,24 @@ function decisionProblem(d) {
   return null;
 }
 
+// The fork's Decision (packages/contracts/src/decisions.ts): exactly these
+// fields, trimmed text within its bounds, and a positive revision. Returns
+// the first problem, or null.
+const LIST_DECISION_FIELDS = new Set(["id", "title", "projectName", "since", "question", "options", "entries", "revision", "wakeAt"]);
+function listDecisionProblem(d) {
+  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
+  const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
+  if (!d || typeof d !== "object") return "decision must be an object";
+  const extra = Object.keys(d).find((k) => !LIST_DECISION_FIELDS.has(k));
+  if (extra) return `unknown field ${extra}`;
+  if (!text(d.id, 200) || !text(d.title, 200) || !text(d.question, 4000)) return "id, title and question must be bounded non-empty text";
+  if (d.projectName !== undefined && !text(d.projectName, 200)) return "projectName must be bounded non-empty text";
+  if ((d.since !== undefined && !time(d.since)) || (d.wakeAt !== undefined && !time(d.wakeAt))) return "since and wakeAt must be dates";
+  if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
+  // Options and entries share the thread payload's bounds.
+  return decisionProblem({ ...d, taskId: d.id });
+}
+
 function listItem(x) {
   return {
     threadId: x.threadId, title: x.title, status: x.status, latestRunId: x.latestRunId ?? null,
@@ -382,6 +410,28 @@ async function callTool(w, name, a) {
       if (Object.keys(a).some((k) => k !== "markdown")) return [err("invalid_params", "unknown argument"), false];
       w.objectives = md === null ? null : { markdown: md };
       return [ok({ objectives: w.objectivesAnswer ?? w.objectives }), true];
+    }
+    case "t3_decisions_set": {
+      if (Object.keys(a).some((k) => k !== "replyTo" && k !== "decisions")) return [err("invalid_params", "unknown argument"), false];
+      if (typeof a.replyTo !== "string" || !threads[a.replyTo]) return [err("invalid_request", `replyTo thread ${a.replyTo} was not found.`), false];
+      if (!Array.isArray(a.decisions) || a.decisions.length > 200) return [err("invalid_params", "at most 200 decisions"), false];
+      if (new Set(a.decisions.map((d) => d?.id)).size !== a.decisions.length) return [err("invalid_params", "Each decision needs its own id."), false];
+      for (const d of a.decisions) {
+        const problem = listDecisionProblem(d);
+        if (problem) return [err("invalid_params", problem), false];
+      }
+      const before = w.decisionList ?? { replyTo: null, decisions: [] };
+      const kept = new Map(before.decisions.map((d) => [d.id, d]));
+      const decisions = a.decisions.map((d) => {
+        const old = kept.get(d.id);
+        const { answered, ...was } = old ?? {};
+        return old && answered && JSON.stringify(was) === JSON.stringify(d) ? { ...d, answered } : d;
+      });
+      const next = { replyTo: a.replyTo, decisions };
+      const changed = JSON.stringify(next) !== JSON.stringify(before);
+      if (changed) w.decisionList = next;
+      const answer = { replyTo: next.replyTo, decisions: decisions.map((d) => ({ id: d.id, revision: d.revision, answered: d.answered !== undefined })) };
+      return [ok(w.decisionsAnswer ?? answer), changed];
     }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];

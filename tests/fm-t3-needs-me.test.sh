@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# tests/fm-t3-needs-me.test.sh - the captain's T3 decision threads follow his
-# open captain calls: bin/fm-captain-hold.sh context, bin/fm-t3-needs-me.sh
-# sync and reply-task, driven through the real
-# bin/fm-captain-hold.sh and tasks-axi backlogs against the fake T3 server.
+# tests/fm-t3-needs-me.test.sh - the captain's T3 Bridge decisions follow his
+# open captain calls, as one list on a T3 with t3_decisions_set and as
+# decision threads on one without: bin/fm-captain-hold.sh context,
+# bin/fm-t3-needs-me.sh sync and reply-task, and bin/fm-watch.sh's alert,
+# driven through the real bin/fm-captain-hold.sh and tasks-axi backlogs
+# against the fake T3 server.
 set -u
 
 # A fleet pane already carries GIT_CONFIG core.hooksPath.
@@ -510,6 +512,194 @@ test_secondmate_home_takes_no_part() {
   pass "fm-t3-needs-me.sh: a secondmate home makes no decision threads"
 }
 
+# --- Bridge decision list --------------------------------------------------
+
+# bridge <jq-filter>: that value of the decision list T3 keeps.
+bridge() {
+  jq -c "$1" "$T3_FAKE_WORLD"
+}
+
+list_calls() {
+  t3_fake_calls t3_decisions_set | wc -l | tr -d ' '
+}
+
+test_list_carries_every_open_call() {
+  make_home list 'w.decisionsTool = true'
+  (cd "$HOME_DIR" && tasks-axi add w3 "Blocked call" --repo sample --blocked-by w2) >/dev/null 2>&1 \
+    || fail "could not seed a blocked row"
+  : > "$T3_FAKE_LOG"
+  captain hold w1 --reason "Grid or list for the print view?" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals "1" "$(list_calls)" "the hold sends the list in one call before it returns"
+  assert_equals "\"$FM_THREAD\"" "$(bridge '.decisionList.replyTo')" "replies go to FirstMate's thread"
+  assert_equals '["entries","id","options","projectName","question","revision","since","title"]' \
+    "$(bridge '.decisionList.decisions[0] | keys')" "a decision carries exactly T3's fields"
+  assert_equals '"w1"' "$(bridge '.decisionList.decisions[0].id')" "keyed by the task id"
+  assert_equals '"Pick the print layout"' "$(bridge '.decisionList.decisions[0].title')" "titled by the task"
+  assert_equals '"sample"' "$(bridge '.decisionList.decisions[0].projectName')" "naming the task's repo"
+  assert_equals '"Grid or list for the print view?"' "$(bridge '.decisionList.decisions[0].question')" "the hold reason is the question"
+  assert_equals '1' "$(bridge '.decisionList.decisions[0].revision')" "at revision 1"
+  assert_equals "0" "$(decision_count)" "and no thread is made"
+  assert_absent "$HOME_DIR/state/t3-needs-me/w1.json" "nor any record per decision"
+  captain hold w2 --reason "Give the word to buy the camera" --until 2099-01-02 >/dev/null 2>&1 || fail "dated hold should succeed"
+  assert_equals '"2099-01-02T00:00:00Z"' "$(bridge '.decisionList.decisions[] | select(.id == "w2") | .wakeAt')" \
+    "a dated hold waits under Scheduled until its date"
+  assert_equals 'null' "$(bridge '.decisionList.decisions[] | select(.id == "w1") | .wakeAt')" "an undated one does not"
+  captain hold w3 --reason "Choose after w2 lands" >/dev/null 2>&1 || fail "blocked hold should succeed"
+  assert_equals '["w1","w2"]' "$(bridge '[.decisionList.decisions[].id]')" "a blocked call is left out"
+  captain context w1 --text-file "$(say 'Grid, list, or cards?')" --question "Which layout?" --option "Grid" >/dev/null 2>&1 \
+    || fail "raise should succeed"
+  assert_equals '2' "$(bridge '.decisionList.decisions[] | select(.id == "w1") | .revision')" "context reaches the Bridge at once"
+  assert_equals '"Which layout?"' "$(bridge '.decisionList.decisions[] | select(.id == "w1") | .question')" "with its question"
+  answer w1 || fail "answer should succeed"
+  assert_equals '["w2"]' "$(bridge '[.decisionList.decisions[].id]')" "an answered call leaves the list"
+  answer w2 --release || fail "release should succeed"
+  answer w3 --release || fail "release should succeed"
+  assert_equals '[]' "$(bridge '.decisionList.decisions')" "the last answer empties it"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "an idle pass should succeed"
+  assert_equals "0" "$(list_calls)" "an empty list already sent is not sent again"
+  pass "fm-t3-needs-me.sh: the Bridge list carries every open call and changes in the same step"
+}
+
+test_list_resend_keeps_the_captains_answer() {
+  make_home list-answered 'w.decisionsTool = true'
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  # T3 marks a decision answered when the captain replies from the Bridge.
+  t3_fake_set 'w.decisionList.decisions[0].answered = { commandId: "cmd-1", at: "2099-01-01T00:00:00Z" }'
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "sync should succeed"
+  assert_equals "1" "$(list_calls)" "every pass with something to show sends the list"
+  assert_equals '"cmd-1"' "$(bridge '.decisionList.decisions[0].answered.commandId')" \
+    "unchanged records send the same decision, so the answer stands and it stays hidden"
+  captain context w1 --text-file "$(say 'Grid or list?')" --question "Which layout?" >/dev/null 2>&1 \
+    || fail "an update after his reply should succeed"
+  assert_equals 'null' "$(bridge '.decisionList.decisions[0].answered')" "a reply that left the call open shows its update"
+  pass "fm-t3-needs-me.sh: resending the list leaves the captain's answer until the records change"
+}
+
+test_list_switch_archives_the_old_threads_once() {
+  make_home switch
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
+  answer w2 || fail "answer should succeed"
+  assert_equals "2" "$(decision_count)" "the older T3 has a thread per call"
+  assert_present "$HOME_DIR/state/t3-needs-me/w1.json" "and a record each"
+  assert_present "$HOME_DIR/state/t3-needs-me/.objectives" "beside the objectives record"
+  t3_fake_set 'w.decisionsTool = true; w.failTools = { t3_thread_organize: { code: "orchestration_error", message: "thread is busy" } }'
+  local out rc archived
+  out=$(sync_now)
+  rc=$?
+  expect_code 1 "$rc" "an archive that fails is reported: $out"
+  assert_contains "$out" "thread is busy" "with T3's words"
+  assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "the list still lands"
+  assert_present "$HOME_DIR/state/t3-needs-me/w1.json" "and the record waits for the next pass"
+  t3_fake_set 'delete w.failTools'
+  sync_now >/dev/null || fail "the next pass should succeed"
+  archived=$(node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(String(Object.values(w.threads).filter((t) => t.decisionOf && t.archived).length));' "$T3_FAKE_WORLD")
+  assert_equals "2" "$archived" "every decision thread on record is archived"
+  assert_absent "$HOME_DIR/state/t3-needs-me/w1.json" "its record is deleted"
+  assert_absent "$HOME_DIR/state/t3-needs-me/w2.json" "the answered call's too"
+  assert_present "$HOME_DIR/state/t3-needs-me/.objectives" "the objectives record stays"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a later pass should succeed"
+  assert_equals "" "$(t3_fake_calls t3_thread_organize)" "the switch happens once"
+  assert_equals "1" "$(list_calls)" "and later passes send only the list"
+  captain context w1 --text-file "$(say 'Grid or list?')" >/dev/null 2>&1 || fail "a raise should succeed"
+  assert_equals "2" "$(decision_count)" "an update makes no thread"
+  assert_equals '2' "$(bridge '.decisionList.decisions[0].revision')" "it reaches the list"
+  pass "fm-t3-needs-me.sh: the first accepted list archives every old decision thread, once"
+}
+
+test_list_failures_wake_firstmate_on_the_third() {
+  make_home list-fail 'w.decisionsTool = true'
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  local alert="$HOME_DIR/state/t3-needs-me/.alert" out rc n
+  t3_fake_set 'w.failTools = { t3_decisions_set: { code: "unavailable", message: "decisions file is busy" } }'
+  for n in 1 2; do
+    out=$(sync_now)
+    rc=$?
+    expect_code 1 "$rc" "failed pass $n is reported: $out"
+    assert_contains "$out" "decisions file is busy" "with T3's words"
+  done
+  assert_absent "$alert" "two failures in a row only report"
+  out=$(sync_now)
+  assert_contains "$out" "the next pass retries" "the third is still retried"
+  assert_present "$alert" "and leaves an alert for firstmate"
+  assert_contains "$(cat "$alert")" "check: t3-decisions: " "as a check wake reason"
+  assert_contains "$(cat "$alert")" "3 passes in a row: fm-t3-mcp: T3 t3_decisions_set failed: decisions file is busy" \
+    "carrying the exact error"
+  rm -f "$alert"
+  sync_now >/dev/null
+  assert_absent "$alert" "the same run of failures alerts once"
+  captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "holds carry on while T3 refuses"
+  FM_T3_FM=$FM_THREAD t3_fake_set 'delete w.failTools; w.decisionsAnswer = { replyTo: process.env.FM_T3_FM, decisions: [] }'
+  out=$(sync_now)
+  expect_code 1 "$?" "an answer that differs from the list sent is no proof: $out"
+  t3_fake_set 'delete w.decisionsAnswer'
+  sync_now >/dev/null || fail "the next pass should succeed"
+  assert_equals '["w1","w2"]' "$(bridge '[.decisionList.decisions[].id]')" "and lands the whole list"
+  assert_equals "0" "$(jq -r '.failures' "$HOME_DIR/state/t3-needs-me/.decisions")" "which ends the run"
+  t3_fake_set 'w.failTools = { t3_decisions_set: { code: "unavailable", message: "still busy" } }'
+  for n in 1 2; do sync_now >/dev/null; done
+  assert_absent "$alert" "a new run counts from one"
+  sync_now >/dev/null
+  assert_present "$alert" "and alerts again on its third"
+  t3_fake_set 'delete w.failTools'
+  sync_now >/dev/null || fail "the next pass should succeed"
+  assert_absent "$alert" "an accepted pass takes an unread alert away"
+  pass "fm-t3-needs-me.sh: a refused list is retried every pass and wakes firstmate on the third in a row"
+}
+
+test_list_leaves_out_a_decision_t3_would_refuse() {
+  make_home list-bounds 'w.decisionsTool = true'
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
+  captain context w1 --text-file "$(say 'Grid or list?')" --option "Grid" >/dev/null 2>&1 || fail "raise should succeed"
+  local rec="$HOME_DIR/data/needs-me/w1.json" out rc
+  jq --arg long "$(head -c 300 /dev/zero | tr '\0' 'g')" '.options[0].label = $long' "$rec" > "$rec.tmp" && mv "$rec.tmp" "$rec"
+  out=$(sync_now)
+  rc=$?
+  expect_code 1 "$rc" "a decision outside T3's bounds is reported: $out"
+  assert_contains "$out" "decision w1 was left off the Bridge" "naming it"
+  assert_equals '["w2"]' "$(bridge '[.decisionList.decisions[].id]')" "and the rest still lands"
+  pass "fm-t3-needs-me.sh: one decision T3 would refuse never blocks the rest"
+}
+
+test_list_without_firstmate_thread_sends_nothing() {
+  make_home list-no-parent 'w.decisionsTool = true; w.threads = {}'
+  captain hold w1 --reason "Pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  sync_now >/dev/null || fail "a pass with no FirstMate thread is not a failure"
+  assert_equals "0" "$(list_calls)" "a reply would have nowhere to go, so no list is sent"
+  pass "fm-t3-needs-me.sh: with no FirstMate thread the list is not sent"
+}
+
+test_watcher_wakes_firstmate_on_the_alert() {
+  make_home list-watch 'w.decisionsTool = true'
+  local alert="$HOME_DIR/state/t3-needs-me/.alert" out="$HOME_DIR/watch.out" reason i=0
+  reason='check: t3-decisions: T3 did not take the captain'"'"'s decisions 3 passes in a row: fm-t3-mcp: boom'
+  mkdir -p "$HOME_DIR/state/t3-needs-me"
+  printf '%s\n' "$reason" > "$alert"
+  fm_test_track_watcher_state "$HOME_DIR/state"
+  FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
+    FM_DATA_OVERRIDE="$HOME_DIR/data" PATH="$HOME_DIR/fakebin:$PATH" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$ROOT/bin/fm-watch.sh" > "$out" 2>/dev/null &
+  local pid=$!
+  while [ "$i" -lt 150 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1 || true
+    fail "the watcher did not wake on the alert"
+  fi
+  wait "$pid" 2>/dev/null
+  assert_contains "$(cat "$out")" "$reason" "the watcher wakes firstmate with the alert's reason"
+  assert_absent "$alert" "and consumes the alert"
+  assert_contains "$(cut -f4,5 "$HOME_DIR/state/.wake-queue")" "t3-decisions	$reason" "behind one durable check wake"
+  pass "fm-watch.sh: a T3 decisions alert wakes firstmate once, durably"
+}
+
 # --- objectives ------------------------------------------------------------
 
 # write_objectives <file>: a made-up objectives file in the shape the home
@@ -678,5 +868,12 @@ test_re_asked_deferred_call_stays_under_firstmate
 test_unblocked_call_stays_under_firstmate
 test_no_firstmate_thread_or_old_t3_does_nothing
 test_secondmate_home_takes_no_part
+test_list_carries_every_open_call
+test_list_resend_keeps_the_captains_answer
+test_list_switch_archives_the_old_threads_once
+test_list_failures_wake_firstmate_on_the_third
+test_list_leaves_out_a_decision_t3_would_refuse
+test_list_without_firstmate_thread_sends_nothing
+test_watcher_wakes_firstmate_on_the_alert
 
 echo "ok: fm-t3-needs-me"

@@ -215,18 +215,35 @@
 //     is checked here rather than in REQUIRED_TOOLS, so such a T3 costs only
 //     the label.
 //   fm-t3-mcp.mjs decisions --file <json-file>
-//     One pass of bin/fm-t3-needs-me.sh sync over the captain's decision
-//     threads (docs/t3code-backend.md "Decision threads"), in one session.
-//     <json-file> is {root, parent, items[]}: root is the home's absolute
-//     path; parent the FirstMate thread id the last pass found, or null;
+//     One pass of bin/fm-t3-needs-me.sh sync over the captain's decisions
+//     (docs/t3code-backend.md "Bridge decisions"), in one session.
+//     <json-file> is {root, parent, list[], recorded[], items[]}: root is the
+//     home's absolute path; parent the FirstMate thread id the last pass
+//     found, or null. The FirstMate thread is the cached parent while it is
+//     still a live, worktree-less thread of the project rooted at root, else
+//     that project's one pinned coordinator, else thread-for-root's; with
+//     none the pass changes nothing and answers parent:null.
+//     Where tools/list offers t3_decisions_set, the pass is mode "list":
+//     list[] is every decision the Bridge shows, each {id, title,
+//     projectName?, since?, question, options[], entries[], revision,
+//     wakeAt?}, and it replaces T3's whole list in one t3_decisions_set call
+//     with replyTo the FirstMate thread. A decision outside T3's bounds is
+//     left out and named in rejected[] {id, problem}, so it never blocks the
+//     rest. T3 must answer with that replyTo and exactly the ids and
+//     revisions sent, else exit 1 (decisions_unproven). Only after that
+//     answer, each recorded[] {taskId, thread} (the decision threads an
+//     earlier pass made) is retired: its thread archived when it is still an
+//     unarchived decision thread, nothing when it is gone, archived, or none.
+//     Prints {mode, parent, projectId, decisions (T3's answer, each {id,
+//     revision, answered}), rejected[], migrated[] (each {taskId, ok} or ok
+//     false with its error)}.
+//     Otherwise the pass is mode "threads", the decision threads a T3
+//     without the list keeps (removed once no T3 lacks t3_decisions_set):
 //     each item {taskId, title, phase (active|snoozed|parked|closed|archived),
 //     snoozedUntil, decision (the payload), thread (its last known id, or
-//     null), generation, requestId, apply}. The FirstMate thread
-//     is the cached parent while it is still a live, worktree-less thread of
-//     the project rooted at root, else that project's one pinned coordinator,
-//     else thread-for-root's; with none the pass changes nothing and answers
-//     parent:null. An item with no thread, or whose thread is gone or belongs
-//     to another FirstMate thread, gets a new agent-less thread
+//     null), generation, requestId, apply}. An item with no thread, or
+//     whose thread is gone or belongs to another FirstMate thread, gets a
+//     new agent-less thread
 //     (t3_thread_launch with decisionOf and decision, no message) under
 //     clientRequestId <requestId>:<generation>, the generation moving on
 //     only when a thread it had is replaced, so a retry after a lost reply
@@ -239,11 +256,12 @@
 //     snoozedUntil (with no date when it is null), or settled to match the
 //     phase, and read back to prove it.
 //     Without apply only a payload whose revision differs is set again, so a
-//     settle, snooze, or archive the captain made himself stands. Prints {parent, projectId, items[]},
-//     each item {taskId, ok, thread, generation, created, changed[]} or ok
+//     settle, snooze, or archive the captain made himself stands. Prints
+//     {mode, parent, projectId, items[]}, each item {taskId, ok, thread, generation, created, changed[]} or ok
 //     false with its error, still naming any thread it made. Exit 4
-//     (decisions_unsupported) when t3_thread_launch does not declare
-//     decisionOf or t3_thread_update does not declare decision.
+//     (decisions_unsupported) when this T3 has neither t3_decisions_set nor
+//     decision threads (t3_thread_launch declaring decisionOf and
+//     t3_thread_update declaring decision).
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
 //     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
@@ -1884,7 +1902,95 @@ async function statusLabel(flags) {
   return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: true };
 }
 
-// --- decision threads (docs/t3code-backend.md "Decision threads") ---------
+// --- Bridge decisions (docs/t3code-backend.md "Bridge decisions") ---------
+
+// T3's bounds on one Bridge decision (the T3 Code fork's Decision schema):
+// text is trimmed, then must be non-empty and at most its length. Returns the
+// first problem, or null.
+export const DECISION_LIST_MAX = 200;
+export function bridgeDecisionProblem(d) {
+  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
+  const optionalText = (v, max) => v === undefined || text(v, max);
+  const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
+  if (!d || typeof d !== "object" || Array.isArray(d)) return "a decision must be an object";
+  if (!text(d.id, 200)) return "id must be non-empty text of at most 200 characters";
+  if (!text(d.title, 200)) return "title must be non-empty text of at most 200 characters";
+  if (!text(d.question, 4000)) return "question must be non-empty text of at most 4000 characters";
+  if (!optionalText(d.projectName, 200)) return "projectName must be non-empty text of at most 200 characters";
+  if (d.since !== undefined && !time(d.since)) return `since ${d.since} is not a date`;
+  if (d.wakeAt !== undefined && !time(d.wakeAt)) return `wakeAt ${d.wakeAt} is not a date`;
+  if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
+  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
+  for (const o of d.options) if (!text(o?.label, 200) || !optionalText(o?.detail, 2000)) return "an option needs a label of at most 200 characters and a detail of at most 2000";
+  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
+  for (const e of d.entries) {
+    if (!time(e?.at)) return `entry time ${e?.at} is not a date`;
+    if (!["raised", "update"].includes(e.kind)) return `entry kind ${e.kind} is neither raised nor update`;
+    if (!text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs text of at most 8192 characters and a changed line of at most 500";
+    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
+    for (const x of e.attachments ?? []) if (!text(x?.kind, 32) || !text(x?.path, 2048) || !optionalText(x?.label, 200)) return "an attachment needs a kind of at most 32 characters, a path of at most 2048, and a label of at most 200";
+  }
+  return null;
+}
+
+// Retire one decision thread an earlier pass made: archived when it is still
+// an unarchived decision thread; a thread that is gone, already archived, or
+// not a decision thread is left as it is.
+async function retireDecisionThread(session, threadId) {
+  if (!threadId) return { thread: null, archived: false };
+  let t;
+  try {
+    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  } catch (err) {
+    if (isNotFound(err)) return { thread: threadId, archived: false, missing: true };
+    throw err;
+  }
+  if ((t.decisionOf ?? null) === null || isArchived(t)) return { thread: threadId, archived: false };
+  await archiveThread(session, threadId, ARCHIVE_TIMEOUT_MS);
+  return { thread: threadId, archived: true };
+}
+
+// The list pass: one t3_decisions_set call carrying every decision the Bridge
+// shows, proven by T3's answer, then the one-time retirement of the decision
+// threads still on record.
+async function decisionList(session, input) {
+  const parent = await decisionParent(session, input.root, input.parent ?? null);
+  if (!parent) return { ok: true, mode: "list", parent: null, projectId: null, decisions: [], rejected: [], migrated: [] };
+  const rejected = [];
+  const sent = [];
+  const seen = new Set();
+  for (const d of input.list) {
+    let problem = bridgeDecisionProblem(d);
+    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
+    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
+    if (problem) {
+      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
+      continue;
+    }
+    seen.add(d.id);
+    sent.push(d);
+  }
+  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
+  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
+  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
+  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
+  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
+    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
+  }
+  const migrated = [];
+  for (const r of input.recorded) {
+    try {
+      migrated.push({ taskId: r.taskId, ok: true, ...(await retireDecisionThread(session, r.thread ?? null)) });
+    } catch (err) {
+      const e = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
+      migrated.push({ taskId: r.taskId, ok: false, thread: r.thread ?? null, error: { code: e.code, message: e.message } });
+    }
+  }
+  return { ok: true, mode: "list", parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected, migrated };
+}
+
+// --- decision threads, for a T3 without t3_decisions_set -------------------
+// Removed once no T3 lacks the list (the T3 Code fork's build 2 drops them).
 
 // Where each phase leaves a decision thread: active needs the captain (top
 // level), snoozed waits for its date, parked and closed sit in Settled.
@@ -2041,13 +2147,17 @@ async function decisions(flags) {
   } catch (err) {
     usage(`--file is not readable JSON: ${err.message}`);
   }
-  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root) || !Array.isArray(input.items)) usage("--file needs root (an absolute path) and items[]");
+  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root)
+    || !Array.isArray(input.items) || !Array.isArray(input.list) || !Array.isArray(input.recorded)) {
+    usage("--file needs root (an absolute path), list[], recorded[], and items[]");
+  }
   const { session } = await verifiedSession(flags);
+  if (session.toolSchemas.has("t3_decisions_set")) return decisionList(session, input);
   if (!toolOffers(session, "t3_thread_launch", "decisionOf") || !toolOffers(session, "t3_thread_update", "decision")) {
-    throw new Refusal("decisions_unsupported", "this T3 has no decision threads", 4);
+    throw new Refusal("decisions_unsupported", "this T3 has neither a decision list nor decision threads", 4);
   }
   const parent = await decisionParent(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, parent: null, projectId: null, items: [] };
+  if (!parent) return { ok: true, mode: "threads", parent: null, projectId: null, items: [] };
   const items = [];
   for (const it of input.items) {
     // Shared with decisionItem, so a failure still reports a thread it made.
@@ -2060,7 +2170,7 @@ async function decisions(flags) {
       items.push({ ...result, ok: false, error: { code: r.code, message: r.message, ...r.extra } });
     }
   }
-  return { ok: true, parent: parent.threadId, projectId: parent.projectId, items };
+  return { ok: true, mode: "threads", parent: parent.threadId, projectId: parent.projectId, items };
 }
 
 // --- objectives (docs/t3code-backend.md "Objectives") ---------------------

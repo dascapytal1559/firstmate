@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# fm-t3-needs-me.sh - keep the captain's T3 decision threads in line with his
-# open captain calls (docs/t3code-backend.md "Decision threads").
+# fm-t3-needs-me.sh - keep the decisions on the captain's T3 Bridge tab in
+# line with his open captain calls (docs/t3code-backend.md "Bridge decisions").
 #
-# Each captain-held task gets one agent-less T3 thread under FirstMate's own,
-# carrying the call's question, options, its project (the task's repo), when
-# it started waiting (the hold's start), and the words Firstmate raised and
-# updated it with, so the captain's sidebar shows what needs him. The
+# Each open captain call is one decision on the Bridge, carrying the call's
+# question, options, its project (the task's repo), when it started waiting
+# (the hold's start), and the words Firstmate raised and updated it with. The
 # wanted state comes from structured records only: the backlog's captain holds
 # and their hold_bucket (bin/fm-fleet-snapshot.sh), the call's context record
 # (data/needs-me/<task-id>.json, written only by bin/fm-captain-hold.sh
@@ -14,50 +13,69 @@
 # Usage:
 #   fm-t3-needs-me.sh sync
 #     bin/fm-captain-hold.sh runs this after every hold, answer, reconcile, and
-#     context, and bin/fm-watch.sh about once a minute. One pass, one T3 call,
-#     and one more when the objectives changed.
+#     context, before it returns, and bin/fm-watch.sh about once a minute as
+#     the backstop. One pass, one T3 session, and one more when the objectives
+#     changed.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
-#     Prints the task id a captain reply from a decision thread names on its
+#     Prints the task id a captain reply from the Bridge names on its
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
 #     message names none, 2 when it names more than one or a malformed id.
 #
-# Wanted state, per task: a live or aged hold is an active thread (under
-# FirstMate's card) until it is answered or closed, however long it waits; a
-# dated hold (--until) is snoozed until 00:00 UTC on that date; a
-# blocked hold is parked in Settled, kept, and un-settled when it unblocks; a call
-# that closed or was released is settled, then archived a day after that
-# settle was proven. The payload is the context record from this hold (same
-# hold-set stamp) or, without one, the hold reason as the question and the
-# only entry. The payload's revision is the record's plus one (1 with no
-# record), always positive as T3 requires, so every raise and update reaches
-# T3 as a new revision. A pass never marks a thread unread: T3 refuses that on
-# a thread with no completed run, and a decision thread never runs.
+# Wanted state, per task: a live or aged hold is listed until it is answered
+# or closed, however long it waits; a dated hold (--until) is listed with
+# wakeAt 00:00 UTC on that date, so it waits under Scheduled until then; a
+# blocked, answered, released, or closed call is left out. The payload is the
+# context record from this hold (same hold-set stamp) or, without one, the
+# hold reason as the question and the only entry. Its revision is the
+# record's plus one (1 with no record), always positive as T3 requires, so
+# every raise and update reaches T3 as a new revision.
 #
-# Level-triggered, like bin/fm-t3-captain-label.sh: a pass compares each task's
-# wanted state, hashed, with the hash its last proven pass stored under
-# state/t3-needs-me/<task-id>.json, and reads every recorded thread back.
-# A changed hash applies the whole state; an equal one only restores a lost
-# payload, so a thread the captain settled (as his reply does), snoozed, or
-# archived himself stays so until Firstmate's records change. A failed call,
-# a lost reply, or a T3 restart keeps the old hash, and the next pass applies
-# it again; thread creation is retried under the same request id, so it lands
-# on the thread T3 already made. An item that failed three times in a row is
-# retried every 15 minutes rather than every pass.
+# Where T3 offers t3_decisions_set, a pass sends the whole list in that one
+# call (bin/fm-t3-mcp.mjs decisions owns the call and its proof), so the
+# Bridge changes in the same step as Firstmate's records. Only a list that is
+# empty and was empty on the last accepted pass makes no call. The first
+# accepted list is also the switch from decision threads: every decision
+# thread on record is archived and its record under state/t3-needs-me/ is
+# deleted; one whose archive fails keeps its record and is tried again on the
+# next pass, and with none on record there is nothing to switch.
+#
+# A pass T3 does not take is reported on stdout and sent again on the next
+# pass. The third such pass in a row also leaves its exact error, as a
+# one-line wake reason, in state/t3-needs-me/.alert, which bin/fm-watch.sh
+# turns into a `check: t3-decisions` wake for firstmate. It is written once
+# per run of failures, which state/t3-needs-me/.decisions counts, and the
+# next accepted pass deletes it.
+#
+# A T3 without t3_decisions_set keeps decision threads instead, until no T3
+# lacks the list: each call is one agent-less thread under FirstMate's own,
+# active while listed, snoozed until a dated hold's date, settled while
+# blocked, and settled, then archived a day later, once answered or released.
+# A pass compares each task's wanted state, hashed, with the hash its last
+# proven pass stored under state/t3-needs-me/<task-id>.json, and reads every
+# recorded thread back. A changed hash applies the whole state; an equal one
+# only restores a lost payload, so a thread the captain settled (as his reply
+# does), snoozed, or archived himself stays so until Firstmate's records
+# change. A failed call keeps the old hash, and the next pass applies it
+# again; thread creation is retried under the same request id, so it lands on
+# the thread T3 already made. An item that failed three times in a row is
+# retried every 15 minutes rather than every pass. A pass never marks a thread
+# unread: T3 refuses that on a thread with no completed run.
 #
 # Each sync pass also pushes the captain's high level objectives, as
 # bin/fm-objectives.sh reads them, to the top of T3's Bridge tab
 # (docs/t3code-backend.md "Objectives"), only when the payload bin/fm-t3-mcp.mjs
 # objectives-payload builds from them differs from the last proven push,
 # whose hash state/t3-needs-me/.objectives keeps; an absent file, or one with
-# no bullets, clears them once. A failed push is reported and retried like a
-# decision and never holds the decisions back; a T3 without objectives is
-# retried the same way, quietly.
+# no bullets, clears them once. A failed push is reported and retried three
+# times in a row, then every 15 minutes, and never holds the decisions back;
+# a T3 without objectives is retried the same way, quietly.
 #
 # Only a main home with config/t3code-token takes part: a secondmate's calls
 # reach the captain through its parent. With no FirstMate thread in T3 (none
-# pinned as coordinator and none live), a pass changes no decision thread, and
-# a T3 without decision threads leaves the decisions alone; the objectives push
-# still runs in both cases.
+# pinned as coordinator and none live), a pass changes no decision, since a
+# reply would have nowhere to go, and a T3 with neither the list nor decision
+# threads leaves the decisions alone; the objectives push still runs in both
+# cases.
 #
 # Exit: 0, or 1 when the records could not be read, a decision could not be
 # brought in line, or the objectives could not be pushed (a line on stdout
@@ -74,10 +92,13 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONTEXTS="$DATA/needs-me"
 SYNCS="$STATE/t3-needs-me"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
+DECISIONS_SYNC="$SYNCS/.decisions"
+ALERT="$SYNCS/.alert"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 ARCHIVE_AFTER=86400
 BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
+ALERT_AFTER=3
 
 usage() {
   sed -n '13,22p' "$0" | sed 's/^# \{0,1\}//' >&2
@@ -196,45 +217,68 @@ mkdir -p "$SYNCS" || { echo "t3-needs-me: could not create $SYNCS"; exit 1; }
 fm_lock_acquire_wait_max "$SYNCS/.lock" 30 || { echo "t3-needs-me: another pass holds the lock; the next pass catches up"; exit 0; }
 LOCK_HELD=1
 
-# One pass over the decision threads; 0, or 1 when one was not brought in line.
-sync_decisions() {
-  local home_key parent out_parent failed id hash
-  plan || return 1
+# The record of the last decisions passes, {mode, empty, failures, failedAt,
+# error}: empty says the last accepted pass had nothing to show, and failures
+# counts the passes T3 has not taken since. {} when absent or unreadable.
+decisions_record() {
+  local rec=''
+  [ ! -f "$DECISIONS_SYNC" ] || rec=$(jq -c 'select(type == "object")' "$DECISIONS_SYNC" 2>/dev/null) || rec=''
+  [ -n "$rec" ] || rec='{}'
+  printf '%s\n' "$rec"
+}
 
-  home_key=$(printf '%s' "$(cd "$FM_HOME" && pwd -P)" | sha | cut -c1-12)
-  parent=''
-  [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
-  jq -n --slurpfile plan "$WORK/plan.json" --rawfile hashes "$WORK/hashes.tsv" --arg root "$(cd "$FM_HOME" && pwd -P)" \
-    --arg parent "$parent" --arg key "$home_key" --argjson now "$NOW" \
-    --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" '
-    ($hashes | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $h
-    | {root: $root, parent: (if $parent == "" then null else $parent end),
-       items: [$plan[0][]
-         | . as $p
-         | select(($p.local.failures // 0) < $failures or ($now - ($p.local.failedAt // 0)) >= $backoff)
-         | {taskId, title, phase, snoozedUntil, decision,
-            thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
-            requestId: "fm-needs-me:\($key):\($p.taskId)",
-            apply: ($h[$p.taskId] != ($p.local.hash // null))}]}
-  ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
+write_decisions_record() {  # <json>
+  printf '%s\n' "$1" > "$DECISIONS_SYNC.tmp" && mv -f "$DECISIONS_SYNC.tmp" "$DECISIONS_SYNC"
+}
 
-  # Nothing recorded and nothing held: no T3 call at all.
-  if [ "$(jq '.items | length' "$WORK/input.json")" = 0 ] && [ "$(jq 'length' "$WORK/plan.json")" = 0 ]; then
-    return 0
-  fi
+# T3 took the pass: the run of failures ends and any unread alert goes with it.
+pass_taken() {  # <mode> <empty: true|false>
+  write_decisions_record "$(jq -cn --arg mode "$1" --argjson empty "$2" \
+    '{mode: $mode, empty: $empty, failures: 0, failedAt: null, error: null}')" \
+    || echo "t3-needs-me: could not record the pass"
+  rm -f -- "$ALERT"
+}
 
-  local rc=0
-  fm_backend_t3code_mcp decisions --file "$WORK/input.json" > "$WORK/out.json" 2>"$WORK/out.err" || rc=$?
-  case "$rc" in
-    0) ;;
-    4) return 0 ;;
-    *) echo "t3-needs-me: T3 could not take the pass: $(head -n 1 "$WORK/out.err"); the next pass retries"; return 1 ;;
-  esac
-  out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
-  [ -n "$out_parent" ] || return 0
-  printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"
+# T3 did not take the pass: reported, counted, and on the third in a row left
+# for the watcher to wake firstmate with.
+pass_refused() {  # <error>
+  local error=$1 failures reason
+  failures=$(( $(decisions_record | jq -r '.failures // 0') + 1 ))
+  write_decisions_record "$(decisions_record | jq -c --argjson failures "$failures" --argjson now "$NOW" --arg error "$error" \
+    '. + {failures: $failures, failedAt: $now, error: $error}')" \
+    || echo "t3-needs-me: could not record the failed pass"
+  echo "t3-needs-me: T3 could not take the decisions: $error; the next pass retries"
+  [ "$failures" = "$ALERT_AFTER" ] || return 0
+  reason="check: t3-decisions: T3 did not take the captain's decisions $failures passes in a row: $error"
+  { printf '%s' "$reason" | fm_wake_clean_field && printf '\n'; } > "$ALERT.tmp" && mv -f "$ALERT.tmp" "$ALERT" \
+    || echo "t3-needs-me: could not leave the alert for firstmate"
+}
 
-  failed=0
+# The list pass's result: rejected decisions reported, and each retired
+# decision thread's record deleted. 0, or 1 when something is left over.
+list_result() {
+  local failed=0 id ok message
+  while IFS=$'\t' read -r id message; do
+    [ -n "$id$message" ] || continue
+    echo "t3-needs-me: decision $id was left off the Bridge: $message"
+    failed=1
+  done <<< "$(jq -r '.rejected[]? | [(.id // "?"), .problem] | @tsv' "$WORK/out.json")"
+  while IFS=$'\t' read -r id ok message; do
+    [ -n "$id" ] || continue
+    if [ "$ok" = true ]; then
+      ! slug_ok "$id" || rm -f -- "$SYNCS/$id.json"
+    else
+      echo "t3-needs-me: the old decision thread of $id was not archived: $message; the next pass retries"
+      failed=1
+    fi
+  done <<< "$(jq -r '.migrated[]? | [.taskId, .ok, (.error.message // "")] | @tsv' "$WORK/out.json")"
+  return "$failed"
+}
+
+# The decision threads pass's result, per item; 0, or 1 when one was not
+# brought in line.
+threads_result() {
+  local failed=0 id hash
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     hash=$(awk -F '\t' -v id="$id" '$1 == id {print $2}' "$WORK/hashes.tsv")
@@ -272,6 +316,65 @@ sync_decisions() {
   # An item held back by the backoff is not proven this pass.
   [ "$(jq '.items | length' "$WORK/input.json")" = "$(jq 'length' "$WORK/plan.json")" ] || failed=1
   return "$failed"
+}
+
+# One pass over the decisions; 0, or 1 when one was not brought in line.
+sync_decisions() {
+  local home_key parent out_parent mode empty rc=0
+  plan || return 1
+
+  # Nothing held, nothing recorded, and nothing shown since the last accepted
+  # pass: no T3 call at all.
+  if [ "$(jq 'length' "$WORK/plan.json")" = 0 ] \
+    && decisions_record | jq -e '.empty == true and (.failures // 0) == 0' >/dev/null; then
+    return 0
+  fi
+
+  home_key=$(printf '%s' "$(cd "$FM_HOME" && pwd -P)" | sha | cut -c1-12)
+  parent=''
+  [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
+  jq -n --slurpfile plan "$WORK/plan.json" --rawfile hashes "$WORK/hashes.tsv" --arg root "$(cd "$FM_HOME" && pwd -P)" \
+    --arg parent "$parent" --arg key "$home_key" --argjson now "$NOW" \
+    --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" '
+    ($hashes | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $h
+    | {root: $root, parent: (if $parent == "" then null else $parent end),
+       list: [$plan[0][] | select(.phase == "active" or .phase == "snoozed")
+         | . as $p
+         | {id: $p.decision.taskId} + ($p.decision | del(.taskId))
+           + (if $p.phase == "snoozed" and $p.snoozedUntil != null then {wakeAt: $p.snoozedUntil} else {} end)],
+       recorded: [$plan[0][] | select(.local != null) | {taskId, thread: (.local.thread // null)}],
+       items: [$plan[0][]
+         | . as $p
+         | select(($p.local.failures // 0) < $failures or ($now - ($p.local.failedAt // 0)) >= $backoff)
+         | {taskId, title, phase, snoozedUntil, decision,
+            thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
+            requestId: "fm-needs-me:\($key):\($p.taskId)",
+            apply: ($h[$p.taskId] != ($p.local.hash // null))}]}
+  ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
+
+  fm_backend_t3code_mcp decisions --file "$WORK/input.json" > "$WORK/out.json" 2>"$WORK/out.err" || rc=$?
+  case "$rc" in
+    0) ;;
+    4) return 0 ;;
+    *) pass_refused "$(head -n 1 "$WORK/out.err" | grep . || echo "exit $rc")"; return 1 ;;
+  esac
+  mode=$(jq -r '.mode // "threads"' "$WORK/out.json")
+  out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
+  if [ -z "$out_parent" ]; then
+    # No FirstMate thread: T3 took the pass, and nothing changed.
+    pass_taken "$mode" "$(jq 'length == 0' "$WORK/plan.json")"
+    return 0
+  fi
+  printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"
+
+  if [ "$mode" = list ]; then
+    empty=$(jq '.list | length == 0' "$WORK/input.json")
+    pass_taken list "$empty"
+    list_result
+    return
+  fi
+  pass_taken threads "$(jq 'length == 0' "$WORK/plan.json")"
+  threads_result
 }
 
 # The Bridge's objectives follow the home's objectives file: built locally,

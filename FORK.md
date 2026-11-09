@@ -77,14 +77,16 @@ The T3 Code fork's wait ends the moment a request appears, so FirstMate no longe
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
-## Each open decision is its own T3 Code thread
+## Every open decision on T3 Code's Bridge
 
-Each open captain decision is its own thread under FirstMate's card in T3 Code's sidebar, reading Needs captain, with the question, its options, its project, when it started waiting, and every update FirstMate has made to it since it was raised.
+Each open captain decision is listed on T3 Code's Bridge tab with the question, its options, its project, when it started waiting, and every update FirstMate has made to it since it was raised.
 This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
-Upstream keeps decisions in chat alone; the fork adds the threads so each call keeps its full context in one place the captain can open and answer from.
-A decision stays at the top until it is answered or closed, however long it waits; one deferred to a date waits out of the way until that date.
-An answered or released call is settled, then archived a day later, and replying in the thread settles it at once.
-Details: [decision threads](docs/t3code-backend.md#decision-threads) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
+Upstream keeps decisions in chat alone; the fork adds the Bridge so each call keeps its full context in one place the captain can open and answer from.
+A decision stays under Needs you until it is answered or closed, however long it waits; one deferred to a date waits under Scheduled until that date.
+FirstMate sends the whole list in the same step as it changes its own records, so an answered call leaves the Bridge at once, and replying hides it straight away.
+A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
+A T3 Code without the list keeps one thread per decision under FirstMate's card instead, and the first list it accepts archives those threads.
+Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
 ## Waiting for captain and Testing on the worker's card
 

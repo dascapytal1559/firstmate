@@ -3883,6 +3883,28 @@ t3_captain_label_sync_detached() {
   T3_CAPTAIN_LABEL_PID=$!
 }
 
+# The captain's T3 decisions failed to update three passes in a row
+# (bin/fm-t3-needs-me.sh owns when): its one-line reason becomes one durable
+# check wake, and the alert is consumed, so the same run of failures never
+# wakes twice.
+t3_decisions_alert_tick() {
+  local alert="$STATE/t3-needs-me/.alert" reason queued
+  [ -f "$alert" ] || return 0
+  reason=$(head -n 1 "$alert" 2>/dev/null || true)
+  case "$reason" in
+    'check: t3-decisions: '*) ;;
+    *) rm -f -- "$alert"; return 0 ;;
+  esac
+  queued=$(fm_wake_queued_keys check)
+  if printf '%s\n' "$queued" | grep -Fx t3-decisions >/dev/null 2>&1; then
+    rm -f -- "$alert"
+    return 0
+  fi
+  fm_wake_append check t3-decisions "$reason" || return 1
+  rm -f -- "$alert"
+  wake "$reason"
+}
+
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
 
 # A merged poll may have queued its terminal wake and then lost the process
@@ -4045,13 +4067,18 @@ while :; do
   fm_pending_reply_tick "$STATE" || true
 
   # A T3 crew card's status follows its holds and its run here, and so do the
-  # captain's decision threads (bin/fm-t3-needs-me.sh): a label or decision
-  # that failed, a thread that came back, or a run that started or ended
-  # converges on the next pass. Only a home with the T3 credential takes part.
+  # captain's decisions (bin/fm-t3-needs-me.sh): a label or decision that
+  # failed, or a run that started or ended, converges on the next pass, and
+  # decisions that keep failing wake firstmate. Only a home with the T3
+  # credential takes part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
     && [ "$(age_of "$STATE/.t3-captain-wait-sync")" -ge 60 ]; then
     t3_captain_label_sync_detached
   fi
+  t3_decisions_alert_tick || {
+    echo 'watcher: T3 decisions alert could not be queued' >&2
+    exit 1
+  }
 
   open_decision_reminder_tick || {
     echo 'watcher: open-decision reminder check failed' >&2

@@ -854,3 +854,40 @@ The choices made:
 - **The fork moves back toward upstream here** rather than adding a new difference: with nothing to hear the worker's close, upstream sends no note either.
 
 The evidence is three new cases in `tests/fm-procevent-lavish-live-steer.test.sh`: a worker-ended board leaves no note, is filed as handled, and is retired and never polled again; a captain-ended board still delivers the stop-and-conclude note and stays open; and a worker-ended board that still carries a message is delivered.
+
+## 34. Bridge decisions become one list, sent with every change (10 November 2026)
+
+![Before: each call passed through a sync file per call, a series of thread calls, and a hidden thread per call; after: FirstMate sends one list in one call and T3 keeps it in one file](media/bridge-decisions-one-list.png)
+
+Each open captain call on T3's Bridge tab was a hidden, agent-less T3 thread, and FirstMate created, settled, snoozed, archived, and read back each one separately.
+A scout found that nothing the Bridge shows needs a thread, and that one update had been failing every 15 minutes because T3 refuses to mark a thread unread when it never ran.
+The captain took the scout's recommendations: T3 keeps the decisions as one list, the Later section goes, the old threads are archived at the switch, and an answered decision vanishes at once.
+On where the list lives, the one condition:
+
+> Yeah, I mean, wherever makes sense, just make sure that it's updated at the same time.  As 1st mate's internal records.  That's all I would want from it. Rest go with ur rec
+>
+> — 10 November 2026
+
+The T3 Code fork's side landed first, with the new `t3_decisions_set` tool.
+This entry is FirstMate's side:
+
+- **One call carries the whole list.** When T3 offers the tool, the sync sends every open call in one `t3_decisions_set` call, built from the same records as before: the captain holds, how long each has waited, and each call's recorded context.
+  A call deferred to a date carries that date and waits under Scheduled; a blocked, answered, or released call is simply left off.
+- **Same step as the records.** Every hold, answer, reconcile, and context already ran the sync before returning; now that sync is one cheap call, so the Bridge changes in the same command that changes FirstMate's records.
+  The watcher's minute pass stays as the backstop.
+- **Failures are no longer silent.** A list T3 refuses is reported and sent again on the next pass, and the third refusal in a row wakes FirstMate with T3's exact error, once per run of failures.
+- **The switch happens once.** The first list T3 accepts archives every decision thread FirstMate has on record and deletes its per-call sync records; an archive that fails is tried again on the next pass.
+- **Older T3 keeps working.** A T3 without the tool still gets the decision threads, unchanged, until the fork's next build removes them.
+
+![The Bridge after the switch, with made-up decisions: objectives on top, then Needs you and Scheduled, and no Later section](media/bridge-decisions-list.jpg)
+
+The choices made:
+
+- **The list is sent on every pass that has something to show**, not only when it changed, so a T3 that lost its file is filled again within a minute; T3 treats an identical list as no change.
+  An empty list is sent once and then not again.
+- **A decision T3 would refuse is left off and named**, rather than letting one oversized field block every other decision.
+- **The thread path stays for now** because the installed T3 may not have the tool yet; it is marked for removal with the fork's build 2.
+- **Update FirstMate first, then T3**: the fork's new build shows only the list, so its Bridge stays empty until FirstMate sends one.
+
+The picture of the Bridge is the fork's own, from its build, with made-up data; the diagram is the scout's.
+The evidence is seven new cases in `tests/fm-t3-needs-me.test.sh` against the stand-in T3, which now offers the tool with the fork's bounds: the list's exact shape and contents through holds, deferrals, blocks, updates, and answers; a resent list leaving the captain's answer in place until the records change; the one-time switch, including a failed archive retried; three refusals waking FirstMate once per run; an out-of-bounds decision left off without blocking the rest; no list without FirstMate's thread; and the watcher turning the alert into one durable wake.
