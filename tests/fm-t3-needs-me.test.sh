@@ -237,7 +237,7 @@ test_hold_creates_an_agentless_decision() {
   pass "fm-t3-needs-me.sh: a hold makes one agent-less decision thread beside FirstMate"
 }
 
-test_context_updates_the_payload_and_marks_unread() {
+test_context_updates_the_payload_without_marking_unread() {
   make_home update
   captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
   set_decision_thread w2 't.unread = false;'
@@ -254,9 +254,10 @@ test_context_updates_the_payload_and_marks_unread() {
   assert_equals "Only the purchase is left" "$(decision w2 't.decision.entries[1].changed')" "with what changed"
   assert_equals "$(cd "$HOME_DIR" && pwd -P)/config/t3code-token" "$(decision w2 't.decision.entries[1].attachments[0].path')" \
     "a picture travels as an absolute path"
-  assert_equals "true" "$(decision w2 't.unread')" "an update marks the thread unread"
+  assert_equals "false" "$(decision w2 't.unread')" "an update does not mark the thread unread, which T3 refuses on a thread with no run"
   assert_equals "1" "$(decision_count)" "still one thread"
-  pass "fm-t3-needs-me.sh: context reaches the thread, and an update marks it unread"
+  assert_equals "0" "$(jq -r '.failures // 0' "$HOME_DIR/state/t3-needs-me/w2.json")" "so the pass records no failure"
+  pass "fm-t3-needs-me.sh: context reaches the thread, and an update never asks T3 to mark it unread"
 }
 
 test_dated_hold_snoozes_and_wakes() {
@@ -299,7 +300,7 @@ test_captain_settle_stands_until_an_update() {
   captain context w2 --changed "His reply asked which mount; still open" --text-file "$(say 'Wall or window mount?')" >/dev/null 2>&1 \
     || fail "update should succeed"
   assert_equals "false" "$(decision w2 't.settled')" "a reply that left the call open unsettles it with the update"
-  assert_equals "true" "$(decision w2 't.unread')" "and marks it unread"
+  assert_equals "false" "$(decision w2 't.unread')" "and leaves its read state alone"
   set_decision_thread w2 't.archived = true;'
   sync_now >/dev/null || fail "sync should succeed"
   assert_equals "true" "$(decision w2 't.archived')" "an archive he made himself stands too"
@@ -659,7 +660,7 @@ test_context_raise_update_and_guards
 test_context_starts_over_on_a_new_hold
 test_reply_marker
 test_hold_creates_an_agentless_decision
-test_context_updates_the_payload_and_marks_unread
+test_context_updates_the_payload_without_marking_unread
 test_dated_hold_snoozes_and_wakes
 test_answer_settles_then_archives
 test_captain_settle_stands_until_an_update

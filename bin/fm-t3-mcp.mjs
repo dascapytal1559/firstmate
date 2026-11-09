@@ -221,7 +221,7 @@
 //     path; parent the FirstMate thread id the last pass found, or null;
 //     each item {taskId, title, phase (active|snoozed|parked|closed|archived),
 //     snoozedUntil, decision (the payload), thread (its last known id, or
-//     null), generation, requestId, apply, markUnread}. The FirstMate thread
+//     null), generation, requestId, apply}. The FirstMate thread
 //     is the cached parent while it is still a live, worktree-less thread of
 //     the project rooted at root, else that project's one pinned coordinator,
 //     else thread-for-root's; with none the pass changes nothing and answers
@@ -237,7 +237,7 @@
 //     on a new thread) the payload is set (t3_thread_update set_decision) and
 //     the thread is unarchived, unsettled, unsnoozed, snoozed until
 //     snoozedUntil (with no date when it is null), or settled to match the
-//     phase, marked unread when markUnread, and read back to prove it.
+//     phase, and read back to prove it.
 //     Without apply only a payload whose revision differs is set again, so a
 //     settle, snooze, or archive the captain made himself stands. Prints {parent, projectId, items[]},
 //     each item {taskId, ok, thread, generation, created, changed[]} or ok
@@ -2026,7 +2026,6 @@ async function decisionItem(session, parent, it, result) {
     if (t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
     if (t.settled !== true) result.changed.push(await organize(session, id, "settle"));
   }
-  if (it.markUnread === true && (it.phase === "active" || it.phase === "snoozed")) result.changed.push(await organize(session, id, "mark_unread"));
   if (result.changed.length) {
     const back = threadOf(await session.call("t3_thread_read", { threadId: id, limit: 1, runLimit: 1 }));
     const problem = decisionShapeProblem(back, it.phase, it.snoozedUntil);

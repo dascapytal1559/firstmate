@@ -87,7 +87,8 @@
 //     {objectives} (world objectivesAnswer answers another value instead).
 //   - t3_thread_launch answers a repeated clientRequestId with the thread it
 //     already made; t3_thread_organize settle, unsettle, snooze (with
-//     snoozedUntil, or with no date), unsnooze, mark_unread, mark_read, and
+//     snoozedUntil, or with no date), unsnooze, mark_unread (refused on a
+//     thread with no completed run, as T3 refuses it), mark_read, and
 //     unarchive change what t3_thread_read reports as settled, settledAt,
 //     snoozed, and snoozedUntil.
 //
@@ -555,7 +556,10 @@ async function callTool(w, name, a) {
           // The T3 fork allows a snooze with no date (it waits until woken by hand).
           t.snoozed = true; t.snoozedUntil = a.snoozedUntil ?? null; t.settled = false; t.settledAt = null; break;
         case "unsnooze": t.snoozed = false; t.snoozedUntil = null; break;
-        case "mark_unread": t.unread = true; break;
+        case "mark_unread":
+          // T3 refuses it on a thread with no completed run, so a decision thread never takes it.
+          if (!(t.runs ?? []).some((r) => r.completedAt)) return [err("thread_not_markable_unread", `Thread ${t.threadId} has no completed run to mark unread.`), false];
+          t.unread = true; break;
         case "mark_read": t.unread = false; break;
         case "unarchive": t.archived = false; break;
         default: break;

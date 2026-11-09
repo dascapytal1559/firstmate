@@ -243,8 +243,9 @@ A call with no recorded context still appears, with its hold reason as the quest
 - a live call, or one that has waited longer than the aging threshold, is an active thread under the FirstMate card until it is answered or closed, however long it waits;
 - a call deferred with `--until` is snoozed until 00:00 UTC on that date;
 - a blocked call sits in Settled until it unblocks;
-- an answered or released call is settled, then archived a day later;
-- an update marks the thread unread.
+- an answered or released call is settled, then archived a day later.
+
+FirstMate never marks a decision thread unread: T3 refuses that on a thread with no completed run, and a decision thread never runs.
 
 A settle, snooze, or archive the captain makes himself stands until FirstMate's records for that call change, and replying settles the thread at once.
 FirstMate's thread is the project's pinned coordinator, else the live thread at the home's root; with neither, nothing is made.
@@ -261,7 +262,7 @@ What FirstMate sends and relies on:
   Entries are oldest first, at most 12, each text at most 8192 bytes; `bin/fm-captain-hold.sh context` checks every other field against the fork's bounds when it records it.
   FirstMate sends no `message` reference yet, because it cannot know the message id of what it is saying.
 - Update: `t3_thread_update` `set_decision` replaces the payload and must answer with `decisionRevision`; FirstMate retires a decision by settling or archiving it, never with `clear_decision`.
-- Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil` or with no date (it stays snoozed until FirstMate wakes it), `unsnooze`, `mark_unread`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
+- Place: `t3_thread_organize` `settle`, `unsettle`, `snooze` with `snoozedUntil` or with no date (it stays snoozed until FirstMate wakes it), `unsnooze`, `unarchive`, and `archive`; `t3_thread_read` reports `decisionOf`, `decision`, `settled`, `snoozed`, `snoozedUntil`, and `archived`.
 - Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
 
 The threads are an additional track beside chat, never a replacement for it.

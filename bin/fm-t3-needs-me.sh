@@ -30,8 +30,8 @@
 # hold-set stamp) or, without one, the hold reason as the question and the
 # only entry. The payload's revision is the record's plus one (1 with no
 # record), always positive as T3 requires, so every raise and update reaches
-# T3 as a new revision. A pass marks a thread unread when the newest entry is
-# an update at a revision the thread had not had.
+# T3 as a new revision. A pass never marks a thread unread: T3 refuses that on
+# a thread with no completed run, and a decision thread never runs.
 #
 # Level-triggered, like bin/fm-t3-captain-label.sh: a pass compares each task's
 # wanted state, hashed, with the hash its last proven pass stored under
@@ -170,14 +170,13 @@ plan() {
               options: [($c.options // [])[] | {label} + (if .detail then {detail} else {} end)],
               entries: [$entries[] | entry],
               revision: (($c.revision // 0) + 1)}),
-            newestKind: ($entries[-1].kind),
             local: $l}),
         ($locs | to_entries[] | select(.key | IN($heldIds[]) | not) | .value
          | . as $l
          | {taskId: $l.taskId, title: ($l.title // $l.taskId),
             phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
             snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
-            newestKind: null, local: $l})
+            local: $l})
       ]
   ' > "$WORK/plan.json" || { echo "t3-needs-me: the wanted state could not be built"; return 1; }
   : > "$WORK/hashes.tsv"
@@ -216,9 +215,7 @@ sync_decisions() {
          | {taskId, title, phase, snoozedUntil, decision,
             thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
             requestId: "fm-needs-me:\($key):\($p.taskId)",
-            apply: ($h[$p.taskId] != ($p.local.hash // null)),
-            markUnread: ($p.local != null and ($p.local.holdSet // "") == $p.holdSet
-              and $p.newestKind == "update" and ($p.decision.revision // 0) > ($p.local.revision // 0))}]}
+            apply: ($h[$p.taskId] != ($p.local.hash // null))}]}
   ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
   # Nothing recorded and nothing held: no T3 call at all.
