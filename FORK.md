@@ -95,6 +95,7 @@ Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3
 T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain or sits in a no-mistakes run.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
 When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
+It shows only while the worker is idle: the label comes off within seconds once the worker picks up a reply, and it returns if the worker ends its turn still waiting.
 A worker's own question does not set it, because FirstMate settles most of those itself.
 While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
 The words go when the wait or the run ends, and when the worker is cleaned up.
