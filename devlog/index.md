@@ -803,3 +803,30 @@ The choices made:
 
 The evidence is two new cases in `tests/fm-merge-local.test.sh`: a rebased, reworded branch lands and is recorded, and extra, amended, whitespace-only, merge, reordered, and squashed variants are each refused with the differing commits named.
 Swapping the verbatim comparison for Git's whitespace-blind one makes the whitespace case fail, which shows the test guards it.
+
+## 32. The card says Working as soon as the worker picks up a reply (9 November 2026)
+
+![A worker's card while a captain call is open: Waiting for captain, then T3's own Working the moment the reply reaches the worker, then Waiting for captain again if the turn ends with the call still open](media/crew-card-turns.svg)
+
+With review-board replies reaching workers in seconds, one gap was left on the T3 card:
+
+> Now the only thing that's still to be refined is when I reply I can see that the agent's working, but I don't immediately get an update to the T3 code thread. Like T3 code thread will continue to say waiting for captain until you action it or something?
+>
+> — 9 November 2026
+
+The card read `Waiting for captain` for as long as the captain hold was open, and the hold stays open until firstmate records the answer, so the card kept waiting while the worker was visibly at work on the reply.
+
+What was built:
+
+- **The wait shows only between turns.** While the worker works, the label comes off and T3 shows its own Working state. "Works" means T3 reads the thread busy, or a message is still unread in the worker's steering inbox, which covers the moment the reply lands before T3 reports the turn.
+- **It comes back when the turn ends with the call still open**, so a worker that returns still needing the captain shows it again.
+- **No new polling.** Delivering a message to a T3 worker re-syncs the card at once. The watcher's existing wait on T3 now reports which runs it saw active, so a run that ended, during a wait or between two, makes the card sync due straight away with no extra server call.
+
+The choices made:
+
+- **The hold itself is untouched.** The label is display only; the call stays open and is answered exactly as before.
+- **One sync at a time.** The delivery and the watcher can now sync at the same moment, so a sync that read the worker before a newer event could have written its card last. Syncs now run one at a time, and one that arrives during another asks it to run again.
+- **A turn that cannot be read leaves the card alone**, as an unreadable hold or run already did.
+- **`Testing` keeps its meaning.** A ship mid-turn through an open call with an active run shows `Testing`, and the wait returns on top when the turn ends.
+
+The evidence is four new cases in `tests/fm-t3-captain-label.test.sh`: the wait follows the turn (idle shows it, busy or an unread message hides it, the turn's end brings it back, an unreadable turn changes nothing); a delivered message drops the wait within seconds with no watcher running; racing syncs leave no lock behind and a killed sync's lock is taken over; and a real watcher brings the wait back when the run ends, well before its once-a-minute pass.

@@ -3449,10 +3449,30 @@ heartbeat_scan_finds_actionable() {
 # escalation is the push path's own (handle_push_transition, once per request
 # set); a server the read cannot reach leaves the poll loop as the backstop.
 t3_pending_read() {  # <thread...>
-  local session
+  local session rc=0
   session=$(fm_backend_event_session t3code "$1")
-  watcher_waited fm_backend_wait_transition t3code "$session" 0 "$STATE" "$@" || return 0
-  handle_push_transition t3code "$session" "$WATCHER_CAPTURE"
+  watcher_waited fm_backend_wait_transition t3code "$session" 0 "$STATE" "$@" || rc=$?
+  case "$rc" in
+    0) handle_push_transition t3code "$session" "$WATCHER_CAPTURE" ;;
+    1) t3_wait_settled "$WATCHER_CAPTURE" ;;
+  esac
+}
+
+# t3_wait_settled: given a settled T3 wait's line (its event, then the ids of the
+# runs it found active), make the T3 card sync due at once when a run ended,
+# during this wait or since the last one, so a captain wait shows again on the
+# worker's card as soon as its turn ends with the hold still open
+# (bin/fm-t3-captain-label.sh). The comparison spends no extra server call.
+T3_WAIT_RUNS=
+t3_wait_settled() {  # <wait-line>
+  local event=${1%% *} runs=' ' prev=$T3_WAIT_RUNS id ended=0
+  [ "$event" = "$1" ] || runs=" ${1#* } "
+  T3_WAIT_RUNS=$runs
+  [ "$event" != run-ended ] || ended=1
+  for id in $prev; do
+    case "$runs" in *" $id "*) ;; *) ended=1 ;; esac
+  done
+  [ "$ended" = 0 ] || rm -f "$STATE/.t3-captain-wait-sync"
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
@@ -3554,6 +3574,7 @@ event_wait_or_sleep() {
       # 1: a clean full-budget wait with no actionable edge - the reader already
       # blocked ~POLL, so just continue; the next cycle re-scans.
       _event_cap_fails=0
+      [ "$first_backend" != t3code ] || t3_wait_settled "$rec"
       ;;
   esac
 }

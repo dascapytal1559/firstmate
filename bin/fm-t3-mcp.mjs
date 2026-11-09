@@ -168,7 +168,10 @@
 //     within the watcher's poll interval. When every run wait failed rather
 //     than returned, the first failure is the verb's error. --timeout-ms 0
 //     reads the pending requests only and answers event:none without waiting,
-//     for a cycle whose wait another backend holds.
+//     for a cycle whose wait another backend holds. Every answer but
+//     event:blocked also lists in runIds the active runs that opening read
+//     found, so a caller that compares two calls sees a run that ended
+//     between them.
 //   fm-t3-mcp.mjs archive --thread <id> [--timeout-ms <n>]
 //     t3_thread_organize archive, then read back until the thread reports
 //     archived:true and activeRunId:null and no delegated (subagent) thread
@@ -1738,7 +1741,8 @@ async function watch(flags) {
     if (!known.size && !read.pending.approvals && escalated.has(threadId)) cleared.push(threadId);
     if (read.t.activeRunId) runs.push({ threadId, runId: read.t.activeRunId, known });
   }
-  if (!timeoutMs || !runs.length) return { ok: true, event: "none", cleared };
+  const runIds = runs.map((run) => run.runId);
+  if (!timeoutMs || !runs.length) return { ok: true, event: "none", runIds, cleared };
   const push = toolOffers(session, "t3_thread_wait", PENDING_PUSH_FLAG);
   const abort = new AbortController();
   const notEnded = new Error("not ended");
@@ -1754,7 +1758,7 @@ async function watch(flags) {
       return null;
     });
     if (ended?.blocked) return { ...ended.blocked, cleared };
-    return ended?.run ? { ok: true, event: "run-ended", ...ended.run, cleared } : { ok: true, event: "timeout", cleared };
+    return ended?.run ? { ok: true, event: "run-ended", ...ended.run, runIds, cleared } : { ok: true, event: "timeout", runIds, cleared };
   } finally {
     abort.abort();
   }

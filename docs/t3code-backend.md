@@ -212,15 +212,21 @@ T3 still shows Approval, Input, Request, Limited, Failed, and Woke over it.
 It reads `Waiting for captain` while a captain hold is open on the worker, because only Firstmate knows the worker is waiting on the captain.
 A hold counts when it is on the worker's own task or on a task whose `--origin` is the worker, so firstmate holds the question as it escalates; a worker's `needs-decision` line alone does not count, because firstmate settles most of those itself.
 A hold on a task with no live T3 ship or scout has no card and changes nothing.
+The label shows only while the worker is between turns.
+While the worker works, which is T3 reading its thread busy or an unhandled message waiting in its steering inbox, as when the captain's reply has just arrived, the label comes off and T3 shows its own Working state.
+When the turn ends with the hold still open, the label returns.
+The hold itself is unchanged: it stays open until firstmate records the captain's answer.
 
 It reads `Testing` while a ship's no-mistakes run is active, which is when [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads that run as working or parked at a gate.
 A run left only watching a PR with green checks reads as done there, so the card clears then.
-`Waiting for captain` outranks `Testing`, and `Testing` returns when the wait ends if the run is still active.
+A shown `Waiting for captain` outranks `Testing`, and `Testing` shows when the wait ends, or while the worker works through it, if the run is still active.
 
 The label is display only, and T3's `crewOf` stays what makes a thread crew.
 [`bin/fm-t3-captain-label.sh`](../bin/fm-t3-captain-label.sh) sets it after every hold, answer, and reconcile close, and cleanup clears it before archiving the thread, even while the hold stays open.
+Two worker events also update it within seconds: a message delivered to the worker's steering inbox takes the wait off at once, and a T3 run ending puts it back when the hold is still open.
+The watcher sees a run end from its own wait on T3, which reports the runs it found active, so a run that ended during a wait or between two waits counts; the label returns at once where that wait holds the watcher's cycle, and within one poll interval in a home that also has a Herdr or Rex worker.
 The watcher's pass, about once a minute, also reads the run of every live T3 ship, so `Testing` can lag a run's start or end by that long.
-It works from the thread's live label and a record of each labelled worker, so a label that failed or a T3 that was down is repaired by that pass, a label already set survives a restart, and a hold or run that cannot be read leaves the card as it is.
+It works from the thread's live label and a record of each labelled worker, so a label that failed or a T3 that was down is repaired by that pass, a label already set survives a restart, and a hold, turn, or run that cannot be read leaves the card as it is.
 
 A T3 without the status label shows neither word, and holds and cleanup carry on as usual.
 Its records stay, so the card catches up on the first pass after T3 is updated.
