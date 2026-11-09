@@ -16,6 +16,7 @@ unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=tests/t3-fake-lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/t3-fake-lib.sh"
+. "$ROOT/bin/fm-watch-key-lib.sh"
 
 command -v node >/dev/null 2>&1 || { echo "skip: node absent"; exit 0; }
 
@@ -1064,8 +1065,7 @@ test_t3_stale_watcher() {  # <thread-status> <absorb|surface|dead> [harness] [fr
   local session=$1 expected=$2 harness=${3:-codex} state fb hash out _
   local fresh=${4:-} turn=${5:-} busy_bound=3600 turn_at
   local thread=mcp:6a0e1f2b-3c4d-4a5b-8c6d-0123456789ab key
-  # The watcher's per-window marker key turns `:` into `_` (fm-watch.sh window_key).
-  key=${thread//:/_}
+  key=$(window_key "$thread")
   t3_case "watch-$session-$harness-$fresh-$turn" "$session"
   t3_world "$(t3_thread_json "$thread" "$session" false)"
   # The spawn record below is aged past the bound, so only T3's own run
@@ -1358,12 +1358,13 @@ test_spawn_leases_slot_creates_thread_and_starts_launch_turn() {
   [ "$(t3_request "$create" 'r.arguments.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
   [ "$(t3_request "$create" 'r.arguments.environment.FM_TASK_ID')" = "$id" ] || fail "a ship worker's thread environment must carry FM_TASK_ID"
   [ "$(t3_request "$create" 'r.arguments.environment.FM_TASK_INBOX')" = "$state/$id.inbox" ] || fail "a ship worker's thread environment must carry its steering inbox"
+  [ "$(t3_request "$create" 'r.arguments.environment.FM_HOME')" = "$CASE_DIR/home" ] || fail "a ship worker's thread environment must carry the active home"
   [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_VALUE_0')" = "$state/$id.git-hooks" ] || fail "T3 workers must select the installed Git hook"
   [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_KEY_0')" = core.hooksPath ] || fail "T3 workers must select core.hooksPath"
   [ "$(t3_request "$create" 'r.arguments.environment.GIT_CONFIG_COUNT')" = 1 ] || fail "T3 workers must select one Git config override"
   [ "$(t3_request "$create" 'r.arguments.environment.TRACEPARENT')" = undefined ] || fail "TRACEPARENT must be absent when trace context is off"
   [ "$(t3_request "$create" 'r.arguments.environment.COMPACT_ADVISER_DISABLE')" = 1 ] || fail "the thread environment must carry the compact-adviser kill switch every launch carries"
-  [ "$(t3_request "$create" 'Object.keys(r.arguments.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
+  [ "$(t3_request "$create" 'Object.keys(r.arguments.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_HOME FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
     || fail "a worker's thread environment carries the task inbox and Git hook with the launch environment"
   local instructions
   instructions=$(t3_request "$create" 'r.arguments.instructions')
@@ -1402,7 +1403,7 @@ test_spawn_grok_worker_rides_thread_channels() {
   [ "$(t3_launch_field 'a.environment.FM_TASK_INBOX')" = "$CASE_DIR/state/$id.inbox" ] || fail "the thread environment must carry the steering inbox"
   [ "$(t3_launch_field 'a.environment.GOTMPDIR')" = "/tmp/fm-$id/gotmp" ] || fail "the thread environment must carry GOTMPDIR"
   [ "$(t3_launch_field 'a.environment.GIT_CONFIG_VALUE_0')" = "$CASE_DIR/state/$id.git-hooks" ] || fail "the thread environment must select the installed Git hook"
-  [ "$(t3_launch_field 'Object.keys(a.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
+  [ "$(t3_launch_field 'Object.keys(a.environment).sort().join(" ")')" = "COMPACT_ADVISER_DISABLE FM_HOME FM_TASK_ID FM_TASK_INBOX GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GOTMPDIR" ] \
     || fail "the thread environment holds exactly the pane launch facts, got '$(t3_launch_field 'Object.keys(a.environment)')'"
   assert_contains "$(t3_launch_field 'a.instructions')" "first-party task instructions" "the channel statement rides the launch instructions"
   assert_not_contains "$(t3_launch_field 'a.instructions')" "link_pull_request" "the Claude-only pull-request clause never reaches a grok worker"
