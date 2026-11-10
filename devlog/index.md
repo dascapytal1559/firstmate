@@ -919,3 +919,26 @@ The choices made:
 - **The labels are complete enough for T3 to trust.** T3 Code's next change shows FirstMate's label in place of guessing "Waiting" from any process a worker leaves running, so every wait FirstMate knows of now has a word, and the docs say what T3 can rely on.
 
 The evidence is the moved suite, now `tests/fm-t3-crew-status.test.sh`: every earlier case passes on the new pass (origin holds, a pending steer, Testing and its start time, cleanup, a T3 that is down or has no labels), with new cases for Waiting, Ready, and Failed between turns, a restart that loses labels, and an unreadable backlog leaving every card alone.
+
+## 36. A T3 restart has one owner, FirstMate's half (10 November 2026)
+
+![Before: Firstmate read the server's process id with lsof and ps, refused the main's first tool call when its lock named a dead process, and steered every working or waiting worker; after: T3 reports its own start time, its note brings any main to session start, and only workers that have not reported since the restart are steered](media/t3-restart-single-owner.svg)
+
+The same review of both public forks found restart recovery built on a premise that had since changed.
+On 28 October T3 resumed nothing after a restart and nothing woke FirstMate, which justified reading the server's process id, refusing the main's first tool call, and steering every worker.
+T3 now resumes the runs it cut, and its half of this change tells every pinned coordinator about every restart and reports its own start time.
+The captain's answer to the review:
+
+> Okay, in terms of the both forks, go with the recommended and the optional.
+
+What changed on FirstMate's side:
+
+- **T3's start time is the restart identity.** FirstMate reads `serverStartedAt` from T3 instead of the listening process's id and start time, so it no longer runs `lsof` and `ps` for it, and a server reached at a non-loopback address is covered too.
+- **No reminder hook on the main.** T3's note opens whatever message reaches the main after a restart, the resume of a cut turn or a note on its own, so the first-tool-call refusal is gone, and a Codex or other main is covered the same way as a Claude one; the credential guard in the same hook stays.
+- **Fewer redundant steers.** A worker whose current status line was written after the restart has already resumed and said where it stands, so it is left alone; a worker that is merely busy again is still steered, since being busy does not show it checked what the restart took, and an idle worker whose wait vanished is steered as before.
+
+The choices made:
+
+- **The status line's own time decides "since the restart".** Nothing watched the status files at the moment of the restart, so the line's `[at=]` stamp is the only witness; it must be later than the restart's whole second and not in the future, and it only ever spares a line from distrust, never makes an older line current.
+- **No fallback to process ids.** A T3 without the restart time reads as unknown, as a remote server always did, since FirstMate needs the paired T3 Code fork anyway.
+- **A new record name.** The handled restart is now recorded as a time rather than a process id, under a new name, so the first session start after this lands records it quietly instead of reading a format change as a restart.

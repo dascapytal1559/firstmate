@@ -294,7 +294,7 @@ A failed push is reported and retried on the next pass without holding back the 
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
-A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line needs a steer, which the [server restart](#server-restart) recovery sends.
+A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line may need a steer, which the [server restart](#server-restart) recovery sends.
 Thread persistence alone does not prove a live agent.
 
 `bin/backends/t3code.sh` owns one status table over the thread's V2 status, read with `t3_thread_read`:
@@ -311,22 +311,26 @@ Thread persistence alone does not prove a live agent.
 
 ### Server restart
 
-A T3 server restart ends every provider session it hosts at once, a Firstmate main's running as a T3 thread and every worker's.
-T3's restart continuation, on by default (`continueThreadsAfterServerUpdate`), may resume a run the restart cut mid-turn with "Continue where you left off." when its provider session, native thread, and turn still match, at most three times in five minutes; every other thread reads idle.
-Either way its background commands and waits are gone, and its last `working:` or `paused:` line still looks current; a send to an idle thread reopens its session with the same conversation.
-Claude's `SessionStart` hook does not reliably fire on such a reopen, so nothing below depends on it.
+A T3 server restart ends every provider session it hosts at once, a Firstmate main's running as a T3 thread and every worker's, with their background commands and waits.
+T3 owns the restart event, and the [T3 Code fork](https://github.com/dascapytal1559/t3code)'s `fork/README.md` owns what it promises:
 
-- **Detection.** `bin/fm-t3-mcp.mjs status` reports the loopback server's own process identity as `serverStart` (its pid and kernel start time), which changes on every restart; a remote origin has none, so a restart there is not detected.
-- **Recovery.** In a home with `config/t3code-token`, the locked session start runs [`bin/fm-t3-restart.sh`](../bin/fm-t3-restart.sh) `recover`: when `serverStart` differs from the one the home last recorded, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens its session, and the digest lists them under `T3 RESTART`.
-  Firstmate does not detect T3's own continuation: on a resumed run the doorbell steers that run instead, which is harmless, because the steer only asks the worker to re-check what is still running and append a fresh status line, which a resumed worker still owes.
+- **Restart identity.** `t3_restart_status` reports `serverStartedAt`, an ISO time set once per server process, which `bin/fm-t3-mcp.mjs status` passes on.
+  It works for a remote origin too; a T3 without the tool has no identity, so no restart is detected there.
+- **The note.** After each start T3 sends every pinned coordinator one message opening with `The T3 server restarted at <serverStartedAt>.`, naming the crew whose runs were cut and asking it to run its session-start steps again, which for Firstmate is `bin/fm-session-start.sh`.
+  It heads T3's resume when T3 resumes the coordinator's own cut turn, and otherwise comes on its own, queued behind a busy turn.
+- **Continuation.** On by default (`continueThreadsAfterServerUpdate`), T3 resumes a run it cut mid-turn where it can, and wakes an idle worker whose background wait it was marked to wait on (`t3_background_wait`, or a subagent or background task); an unmarked shell wait wakes nobody.
+  Turned off, T3 resumes nothing and sends nothing, but `serverStartedAt` still changes.
+
+What T3 cannot see is Firstmate's durable record: a worker's last `working:` or `paused:` line still reads as current after the session behind it ended.
+[`bin/fm-t3-restart.sh`](../bin/fm-t3-restart.sh) `recover`, run by the locked session start in a home with `config/t3code-token`, reconciles exactly that.
+
+- **Pinning.** Every `recover` pins the home's own thread (the one the away daemon would find) as its project's coordinator where the server advertises `coordinatorRestartNote`, so the note reaches it after every start, even one that cut no crew run.
+  The note is an ordinary user turn, not Firstmate operational input, so a main follows it whatever agent runs it, and Firstmate adds no hook of its own on the main.
+- **Recovery.** When `serverStartedAt` differs from the one the home last handled, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens an idle session or steers a resumed run, and the digest lists them under `T3 RESTART`.
+  A worker whose current claim is stamped after the restart has already resumed and said where it stands, so it gets no steer; a busy resumed run without such a line is still steered, since being busy does not show it checked what the restart took.
   Workers with an open decision, a captain-held wait, or a terminal line are left alone, and an archived thread is reported rather than rung.
-- **Untrusted claims.** Until such a worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
-- **The main's first tool call.** When `state/.lock` names a process that is no longer running, the main's first tool call is denied once with an instruction to run `bin/fm-session-start.sh` ([`bin/fm-t3-main-pretool-check.sh`](../bin/fm-t3-main-pretool-check.sh), registered for Claude only).
-- **Waking the main.** Nothing inside a dead session can reopen the main, so the [T3 Code fork](../FORK.md) does it: on each server start it sends every idle, unarchived, unsnoozed thread that has unarchived crew threads one note attributed to T3 Code, saying when the server restarted, which crew threads had a run cut, and to run `bin/fm-session-start.sh`.
-  Where the server advertises `coordinatorRestartNote`, every `recover` also pins the home's own thread (the one the away daemon would find) as its project's coordinator, so the note reaches it after every server start, even one that cut no crew run.
-  The note is an ordinary user turn, not Firstmate operational input, and the main follows it like any other instruction: it runs session start once, which retakes the lock and runs `recover` above.
-  The project's `continueThreadsAfterServerUpdate` setting switches the note off, and upstream T3 Code sends none.
-  A main whose own run the restart cut gets T3's restart continuation instead of the note, and that continuation does not mention session start, so the first-tool-call reminder above is what brings it back.
+- **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
+- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers every working or waiting worker, since T3 resumed none of them.
 
 ### Fresh session with /clear
 

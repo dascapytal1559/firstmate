@@ -1,43 +1,45 @@
 #!/usr/bin/env bash
-# fm-t3-restart.sh - detect a T3 Code server restart and recover the T3
-# workers it ended (docs/t3code-backend.md "Server restart").
+# fm-t3-restart.sh - reconcile this home's T3 workers after a T3 Code server
+# restart (docs/t3code-backend.md "Server restart").
 #
-# A T3 server restart ends every provider session it hosts at once, the
-# Firstmate main's and every worker's, and T3 resumes none of them: a worker's
-# background waits and running commands are gone, while its last `working:` or
-# `paused:` line still reads as current. A send to a thread reopens its
-# session. Claude's SessionStart hook does not reliably fire on that reopen, so
-# the restart is detected here from the server itself: the verified server's
-# process identity (bin/fm-t3-mcp.mjs status serverStart, "<pid>@<kernel start
-# time>") differs from the one this home last recorded.
+# T3 owns the restart event: it resumes the runs it cut where it can and tells
+# every pinned coordinator to run session start again. What it cannot see is a
+# worker's last `working:` or `paused:` line, which still reads as current
+# after the session behind it ended; this script reconciles exactly that. The
+# restart identity is T3's serverStartedAt (bin/fm-t3-mcp.mjs status), set
+# once per server process.
 #
 # Usage:
 #   fm-t3-restart.sh check
 #     Read-only verdict, one line:
 #       t3-restart: off        this home has no config/t3code-token
-#       t3-restart: unknown    the server's process identity cannot be read
-#                              (unreachable, refused, or not loopback)
+#       t3-restart: unknown    T3's restart identity cannot be read
+#                              (unreachable, refused, or no t3_restart_status)
 #       t3-restart: first      no identity recorded yet
 #       t3-restart: same       the recorded identity is current
 #       t3-restart: restarted  the server restarted since it was recorded
 #   fm-t3-restart.sh recover
 #     The locked session start runs this (bin/fm-session-start.sh). Silent
 #     unless it has something to report. On first, records the identity. On
-#     restarted, for every ship or scout recorded on backend=t3code whose
-#     current claim is `working:`, `paused:`, or nothing yet, and whose thread
-#     the server still has, it writes the marker below and sends the worker a
-#     recovery steer through bin/fm-send.sh (a durable inbox record whose T3
-#     doorbell reopens its session, or steers the run T3's own restart
-#     continuation already resumed, where the steer's re-check and fresh
-#     status line still apply), then records the new identity only when
-#     every steer was recorded, so a rerun retries exactly the workers whose
-#     steer failed. A worker whose
+#     restarted, it goes through every ship or scout recorded on
+#     backend=t3code whose current claim is `working:`, `paused:`, or nothing
+#     yet, and whose thread the server still has:
+#       - A claim stamped ([at=]) after the restart's whole second, and not
+#         in the future, shows the worker resumed and said where it stands,
+#         so it is left alone. Nothing saw the status file at the restart, so
+#         only the stamp can tell; it only spares the current line the
+#         distrust below. A busy resumed run is no such proof.
+#       - Every other claim gets the marker below and one recovery steer
+#         through bin/fm-send.sh, whose T3 doorbell reopens an idle session
+#         or steers a resumed run.
+#     The new identity is recorded only when every steer was recorded, so a
+#     rerun retries exactly the workers whose steer failed. A worker whose
 #     claim is an open decision, a captain-held wait, or a terminal line is
 #     left alone: its claim stays true, and firstmate's own answer reopens it.
 #     Every recover first pins this home's own live T3 thread as its
-#     project's coordinator where the server offers it
-#     (fm_backend_t3code_pin_coordinator), so the next restart wakes it even
-#     when no crew run was cut; that pin is silent and never stops recovery.
+#     project's coordinator where the server offers it (bin/fm-t3-mcp.mjs
+#     pin-coordinator), so T3's note reaches it after every restart; that
+#     pin is silent and never stops recovery.
 #
 # Marker: <state>/<id>.t3-restart, owned here, removed by teardown.
 #   server=<the restarted server's identity>
@@ -49,7 +51,7 @@
 # declared wait and bin/fm-crew-state.sh reports its earlier working or paused
 # claim as unknown. The worker's next status line is its answer.
 #
-# The record of the last handled identity is <state>/.t3code-server-start.
+# The record of the last handled identity is <state>/.t3code-server-started.
 #
 # Every verb exits 0; usage errors exit 2. Bash 3.2 compatible.
 set -u
@@ -59,10 +61,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-RECORD="$STATE/.t3code-server-start"
+RECORD="$STATE/.t3code-server-started"
 
 usage() {
-  sed -n '14,40p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '12,42p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -84,9 +86,11 @@ fm_backend_source t3code >/dev/null 2>&1 || {
   exit 0
 }
 
-[ "$VERB" != recover ] || fm_backend_t3code_pin_coordinator "$FM_HOME" || true
+if [ "$VERB" = recover ] && HOME_REAL=$(cd "$FM_HOME" 2>/dev/null && pwd -P); then
+  fm_backend_t3code_mcp pin-coordinator --root "$HOME_REAL" >/dev/null 2>&1 || true
+fi
 
-CURRENT=$(fm_backend_t3code_server_start 2>/dev/null) || CURRENT=
+CURRENT=$(fm_backend_t3code_mcp status 2>/dev/null | fm_backend_t3code_json_get serverStartedAt) || CURRENT=
 RECORDED=
 [ ! -f "$RECORD" ] || [ -L "$RECORD" ] || RECORDED=$(head -n 1 "$RECORD" 2>/dev/null)
 
@@ -103,7 +107,7 @@ fi
 record_current() {
   local tmp
   mkdir -p "$STATE" 2>/dev/null || return 1
-  tmp=$(mktemp "$STATE/.t3code-server-start.XXXXXX" 2>/dev/null) || return 1
+  tmp=$(mktemp "$RECORD.XXXXXX" 2>/dev/null) || return 1
   if printf '%s\n' "$CURRENT" > "$tmp" && mv -f "$tmp" "$RECORD"; then
     return 0
   fi
@@ -138,10 +142,21 @@ write_marker() {  # <marker> <offset> <doorbell>
   return 1
 }
 
-AT=$(date -u +%Y-%m-%dT%H:%MZ)
-STEER="Firstmate: the T3 server restarted (seen at $AT) and ended your session, so anything that lived only in it is gone: background commands, waits, monitors, and any command that was still running. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
+# The restart's whole second and now: a claim stamped after the first and
+# not after the second was made after the restart.
+STARTED=${CURRENT%Z}
+STARTED=$(fm_utc_iso_to_epoch "${STARTED%%.*}Z") || STARTED=
+NOW=$(date +%s)
+reported_since_restart() {  # <status-line>
+  local at
+  [ -n "$STARTED" ] || return 1
+  at=$(status_line_at_epoch "$1") || return 1
+  [ "$at" -gt "$STARTED" ] && [ "$at" -le "$NOW" ]
+}
 
-echo "t3-restart: the T3 server restarted (was $RECORDED, now $CURRENT); it ended every T3 session, this one included."
+STEER="Firstmate: the T3 server restarted at $CURRENT and ended your session, so anything that lived only in it is gone: background commands, waits, monitors, and any command that was still running. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
+
+echo "t3-restart: the T3 server restarted at $CURRENT; it ended every T3 session, this one included."
 FAILED=0
 WOKEN=0
 for meta in "$STATE"/*.meta; do
@@ -161,6 +176,10 @@ for meta in "$STATE"/*.meta; do
   marker="$STATE/$id.t3-restart"
   if [ -f "$marker" ] && [ "$(marker_value "$marker" server)" = "$CURRENT" ] \
     && [ "$(marker_value "$marker" doorbell)" = sent ]; then
+    continue
+  fi
+  if reported_since_restart "$line"; then
+    echo "t3-restart: $id: reported since the restart ($line); no steer needed"
     continue
   fi
   if [ "$(fm_backend_t3code_agent_state "$thread")" = missing ]; then
@@ -187,6 +206,6 @@ done
 
 if [ "$FAILED" -eq 0 ]; then
   record_current || echo "t3-restart: could not record the T3 server identity in $RECORD; the next session start repeats this recovery"
-  [ "$WOKEN" -gt 0 ] || echo "t3-restart: no T3 worker was working or waiting, so none needed waking."
+  [ "$WOKEN" -gt 0 ] || echo "t3-restart: no T3 worker needed a steer."
 fi
 exit 0

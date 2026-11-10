@@ -102,10 +102,10 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-mcp.mjs`          | T3 Code `/mcp` client: captain-run sign-in, capability gate, and the thread verbs the t3code adapter calls (docs/t3code-backend.md) |
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
-| `fm-t3-restart.sh`       | Detect a T3 server restart and steer the T3 workers it ended                          |
+| `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds and current state |
 | `fm-t3-needs-me.sh`      | Keep the decisions on the captain's T3 Bridge in line with his open captain calls and the Bridge's objectives in line with his objectives file, and read a decision reply's task id |
-| `fm-t3-main-pretool-check.sh` | PreToolUse guard for a T3 home's main: the restart reminder and the credential seatbelt |
+| `fm-t3-main-pretool-check.sh` | PreToolUse credential seatbelt for a T3 home's main |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
 | `fm-procevent-remote-reply.sh` | Relay the remote-secondmate status stream through non-destructive process-event deltas |

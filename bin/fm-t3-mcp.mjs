@@ -23,9 +23,10 @@
 //     Credential expiry, the capability gate, whether a loopback server's
 //     own process runs with telemetry off (telemetry: off|on|unknown; the T3
 //     fork defaults it off, so only an explicit enable or an unreadable
-//     listener reads otherwise, and anything but off adds a stderr warning), and that process's identity
-//     (serverStart: "<pid>@<kernel start time>", null for a remote origin or
-//     an unreadable listener), which changes on every server restart, and
+//     listener reads otherwise, and anything but off adds a stderr warning),
+//     T3's restart identity (serverStartedAt from t3_restart_status, set once
+//     per server process; null where T3 offers no such tool or the read
+//     fails), and
 //     pendingRequestPush: whether t3_thread_wait declares
 //     settleOnPendingRequest (false adds a stderr warning, since watch then
 //     sees a new question or approval only at its next call). Changes
@@ -377,6 +378,9 @@ const APPROVAL_FEATURE = "approvalResponses";
 // t3_thread_configure coordinator and sends every pinned coordinator one
 // restart note after each server start (the T3 Code fork).
 const COORDINATOR_FEATURE = "coordinatorRestartNote";
+// The T3 Code fork's restart registry read, whose serverStartedAt is set once
+// per server process.
+const RESTART_STATUS_TOOL = "t3_restart_status";
 // The pairing code must cover every scope T3 grants a full-access mcp-client:
 // T3 0.1.0 adds settings:write and source-control:write to the read and
 // operate scopes of the 0.0.46 nightlies, and refuses a code that lacks one.
@@ -764,39 +768,29 @@ function isNotFound(err) {
 // reads on. Only a loopback server's own process environment can show that,
 // read from the listening process on this machine; anything else reads
 // `unknown`.
-export function telemetryState(listener) {
-  if (listener === null) return "unknown";
-  const m = listener.env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
-  if (!m) return "off";
-  return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
-}
-
-// The one process listening on a loopback origin's port on this machine: its
-// pid, its kernel start time, and its environment. `serverStart` joins the
-// first two, so a restarted server always reads a new value
-// (bin/fm-t3-restart.sh compares it); a remote origin, no single listener, or
-// an unreadable process reads null.
-export function loopbackListener(origin, probe = probeListener) {
+export function telemetryState(origin, probe = probeListenerEnv) {
   let url;
   try {
     url = new URL(origin);
   } catch {
-    return null;
+    return "unknown";
   }
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return null;
-  return probe(url.port || (url.protocol === "https:" ? "443" : "80"));
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return "unknown";
+  const env = probe(url.port || (url.protocol === "https:" ? "443" : "80"));
+  if (env === null) return "unknown";
+  const m = env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
+  if (!m) return "off";
+  return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
 }
 
-function probeListener(port) {
-  const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+function probeListenerEnv(port) {
   try {
-    const pids = run("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]).split("\n").filter(Boolean);
+    const pids = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n")
+      .filter(Boolean);
     if (pids.length !== 1) return null;
-    const pid = pids[0];
-    const startedAt = run("ps", ["-o", "lstart=", "-p", pid]).trim().replace(/\s+/g, " ");
-    if (!startedAt) return null;
-    const env = process.platform === "linux" ? readFileSync(`/proc/${pid}/environ`, "utf8") : run("ps", ["eww", "-o", "command=", "-p", pid]);
-    return { pid: Number(pid), startedAt, env };
+    if (process.platform === "linux") return readFileSync(`/proc/${pids[0]}/environ`, "utf8");
+    return execFileSync("ps", ["eww", "-o", "command=", "-p", pids[0]], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   } catch {
     return null;
   }
@@ -888,10 +882,15 @@ async function status(flags) {
   if (!pendingRequestPush) {
     process.stderr.write(`warning: T3 at ${cred.origin} lacks t3_thread_wait ${PENDING_PUSH_FLAG}, so a worker's new question or approval reaches Firstmate only at the next poll; install the current T3 Code fork (docs/t3code-backend.md)\n`);
   }
-  const listener = loopbackListener(cred.origin);
-  const telemetry = telemetryState(listener);
+  const telemetry = telemetryState(cred.origin);
   if (telemetry !== "off") {
     process.stderr.write(`warning: T3 telemetry at ${cred.origin} is ${telemetry === "on" ? "on" : "not confirmed off"}; run the server that hosts Firstmate workers with T3CODE_TELEMETRY_ENABLED=false (docs/t3code-backend.md)\n`);
+  }
+  // T3's restart identity, which bin/fm-t3-restart.sh compares.
+  let serverStartedAt = null;
+  if (g.tools.includes(RESTART_STATUS_TOOL)) {
+    const s = await session.call(RESTART_STATUS_TOOL, {}).catch(() => null);
+    if (typeof s?.serverStartedAt === "string" && s.serverStartedAt) serverStartedAt = s.serverStartedAt;
   }
   return {
     ok: true,
@@ -903,7 +902,7 @@ async function status(flags) {
     serverVersion: g.serverVersion,
     recordedServerVersion: cred.server_version ?? null,
     telemetry,
-    serverStart: listener ? `${listener.pid}@${listener.startedAt}` : null,
+    serverStartedAt,
     pendingRequestPush,
     ...(cred.warning ? { credentialWarning: cred.warning } : {}),
   };

@@ -127,11 +127,11 @@ Details: [ideas](docs/configuration.md#ideas).
 ## Recovery after a T3 Code restart
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
-FirstMate notices the restart at its next start and nudges each interrupted worker to check what is still running and report again.
-Until such a worker reports, its last `working:` or `paused:` line no longer counts as current.
-The T3 Code fork tells a FirstMate running inside it that the server restarted, so FirstMate restarts its session once the server is back.
-FirstMate pins its own thread as its project's coordinator, so that note arrives after every restart, even one that cut no worker's run.
-If the restart cut FirstMate's own turn, its first tool call is refused once with a reminder to run session start.
+The T3 Code fork owns the restart: it resumes the runs it cut where it can, and tells FirstMate's thread, which FirstMate pins as its project's coordinator, that the server restarted and to run session start again.
+FirstMate reads the restart from T3's own start time, so it needs no hook of its own on its session, whatever agent runs it.
+Session start then reconciles what only FirstMate knows, each worker's last `working:` or `paused:` line.
+A worker that has reported since the restart is left alone, and every other working or waiting worker is nudged once to check what is still running and report again.
+Until such a worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
 ## Do it when no worker is running

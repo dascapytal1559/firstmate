@@ -80,14 +80,6 @@ fm_backend_t3code_runtime_check() {
   fm_backend_t3code_mcp status >/dev/null
 }
 
-# fm_backend_t3code_server_start: the verified server's process identity
-# (bin/fm-t3-mcp.mjs status serverStart), which changes on every restart.
-# Fails when the server is unreachable, refused, or not a loopback process
-# this machine can read.
-fm_backend_t3code_server_start() {
-  fm_backend_t3code_mcp status 2>/dev/null | fm_backend_t3code_json_get serverStart
-}
-
 fm_backend_t3code_project_ensure() {  # <project-path> -> project id
   local project=$1 real
   real=$(cd "$project" 2>/dev/null && pwd -P) || { echo "error: project path $project is not a directory" >&2; return 1; }
@@ -191,18 +183,6 @@ console.error("error: " + d.error.message);
       ;;
     *) return 1 ;;
   esac
-}
-
-# fm_backend_t3code_pin_coordinator <home>: pin the live T3 thread running the
-# firstmate whose home is <home> (the thread fm_backend_t3code_thread_for_home
-# finds) as its project's coordinator, so the T3 Code fork wakes it after
-# every server restart (bin/fm-t3-mcp.mjs pin-coordinator). Silent: prints
-# nothing, and 0 means pinned or a server without the feature; any failure,
-# including no or several live threads, returns nonzero.
-fm_backend_t3code_pin_coordinator() {  # <home>
-  local real
-  real=$(cd "$1" 2>/dev/null && pwd -P) || return 1
-  fm_backend_t3code_mcp pin-coordinator --root "$real" >/dev/null 2>&1
 }
 
 # One logical delivery keeps one client request id across retries and

@@ -56,6 +56,10 @@
 //     t3_thread_configure takes coordinator true|false (true unpins any other
 //     thread in that project), and t3_thread_read and t3_thread_list report
 //     every thread's coordinator boolean; without it the argument is ignored.
+//   - a T3 with the restart registry (world restartStatus, the T3 Code fork)
+//     offers t3_restart_status, whose serverStartedAt is the time this
+//     process started (world serverStartedAt answers another value), so a
+//     restart behind the same origin reads a new one.
 //   - a T3 with pending-request push (world pendingPush, the T3 Code fork)
 //     declares t3_thread_wait's settleOnPendingRequest and knownRequestIds,
 //     and such a wait also ends on a question or approval outside the known
@@ -110,7 +114,7 @@
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
 //   (override what a launch binds), threadFacts, crewLineage,
-//   coordinatorRestartNote, pendingPush, noStop,
+//   coordinatorRestartNote, restartStatus, serverStartedAt, pendingPush, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -146,7 +150,9 @@ const ALL_TOOLS = [
   "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : []);
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
+  w.restartStatus ? ["t3_restart_status"] : []);
+const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
@@ -426,6 +432,12 @@ async function callTool(w, name, a) {
     }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
+    case "t3_restart_status":
+      return [ok({
+        pending: false, reason: null, requestedAt: null, drained: false,
+        activeTurns: Object.values(threads).filter((x) => ACTIVE.has(x.status)).length,
+        serverStartedAt: w.serverStartedAt ?? STARTED_AT,
+      }), false];
     case "orchestrator_capabilities":
       return [ok({
         parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search),
