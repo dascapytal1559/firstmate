@@ -227,51 +227,21 @@
 //   fm-t3-mcp.mjs decisions --file <json-file>
 //     One pass of bin/fm-t3-needs-me.sh sync over the captain's decisions
 //     (docs/t3code-backend.md "Bridge decisions"), in one session.
-//     <json-file> is {root, parent, list[], recorded[], items[]}: root is the
-//     home's absolute path; parent the FirstMate thread id the last pass
-//     found, or null. The FirstMate thread is the cached parent while it is
-//     still a live, worktree-less thread of the project rooted at root, else
-//     that project's one pinned coordinator, else thread-for-root's; with
-//     none the pass changes nothing and answers parent:null.
-//     Where tools/list offers t3_decisions_set, the pass is mode "list":
-//     list[] is every decision the Bridge shows, each {id, title,
-//     projectName?, since?, question, options[], entries[], revision,
-//     wakeAt?}, and it replaces T3's whole list in one t3_decisions_set call
-//     with replyTo the FirstMate thread. A decision outside T3's bounds is
-//     left out and named in rejected[] {id, problem}, so it never blocks the
-//     rest. T3 must answer with that replyTo and exactly the ids and
-//     revisions sent, else exit 1 (decisions_unproven). Only after that
-//     answer, each recorded[] {taskId, thread} (the decision threads an
-//     earlier pass made) is retired: its thread archived when it is still an
-//     unarchived decision thread, nothing when it is gone, archived, or none.
-//     Prints {mode, parent, projectId, decisions (T3's answer, each {id,
-//     revision, answered}), rejected[], migrated[] (each {taskId, ok} or ok
-//     false with its error)}.
-//     Otherwise the pass is mode "threads", the decision threads a T3
-//     without the list keeps (removed once no T3 lacks t3_decisions_set):
-//     each item {taskId, title, phase (active|snoozed|parked|closed|archived),
-//     snoozedUntil, decision (the payload), thread (its last known id, or
-//     null), generation, requestId, apply}. An item with no thread, or
-//     whose thread is gone or belongs to another FirstMate thread, gets a
-//     new agent-less thread
-//     (t3_thread_launch with decisionOf and decision, no message) under
-//     clientRequestId <requestId>:<generation>, the generation moving on
-//     only when a thread it had is replaced, so a retry after a lost reply
-//     lands on the thread T3 already made; it must read back as that
-//     parent's decision with the payload's revision and no run, else it is
-//     archived and the item fails. A closed item with no thread stays
-//     without one, and an archived item's thread is archived. With apply (or
-//     on a new thread) the payload is set (t3_thread_update set_decision) and
-//     the thread is unarchived, unsettled, unsnoozed, snoozed until
-//     snoozedUntil (with no date when it is null), or settled to match the
-//     phase, and read back to prove it.
-//     Without apply only a payload whose revision differs is set again, so a
-//     settle, snooze, or archive the captain made himself stands. Prints
-//     {mode, parent, projectId, items[]}, each item {taskId, ok, thread, generation, created, changed[]} or ok
-//     false with its error, still naming any thread it made. Exit 4
-//     (decisions_unsupported) when this T3 has neither t3_decisions_set nor
-//     decision threads (t3_thread_launch declaring decisionOf and
-//     t3_thread_update declaring decision).
+//     <json-file> is {root, parent, list[]}: root is the home's absolute
+//     path; parent the FirstMate thread id the last pass found, or null; and
+//     list[] every decision the Bridge shows, each {id, title, projectName?,
+//     since?, question, options[], entries[], revision, wakeAt?}. The
+//     FirstMate thread is the cached parent while it is still a live,
+//     worktree-less thread of the project rooted at root, else that
+//     project's one pinned coordinator, else thread-for-root's; with none the
+//     pass changes nothing and answers parent:null. Otherwise the list
+//     replaces T3's whole list in one t3_decisions_set call with replyTo the
+//     FirstMate thread. A decision outside T3's bounds is left out and named
+//     in rejected[] {id, problem}, so it never blocks the rest. T3 must
+//     answer with that replyTo and exactly the ids and revisions sent, else
+//     exit 1 (decisions_unproven). Prints {parent, projectId, decisions (T3's
+//     answer, each {id, revision, answered}), rejected[]}. Exit 4
+//     (decisions_unsupported) when this T3 has no t3_decisions_set.
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
 //     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
@@ -1967,80 +1937,7 @@ export function bridgeDecisionProblem(d) {
   return null;
 }
 
-// Retire one decision thread an earlier pass made: archived when it is still
-// an unarchived decision thread; a thread that is gone, already archived, or
-// not a decision thread is left as it is.
-async function retireDecisionThread(session, threadId) {
-  if (!threadId) return { thread: null, archived: false };
-  let t;
-  try {
-    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
-  } catch (err) {
-    if (isNotFound(err)) return { thread: threadId, archived: false, missing: true };
-    throw err;
-  }
-  if ((t.decisionOf ?? null) === null || isArchived(t)) return { thread: threadId, archived: false };
-  await archiveThread(session, threadId, ARCHIVE_TIMEOUT_MS);
-  return { thread: threadId, archived: true };
-}
-
-// The list pass: one t3_decisions_set call carrying every decision the Bridge
-// shows, proven by T3's answer, then the one-time retirement of the decision
-// threads still on record.
-async function decisionList(session, input) {
-  const parent = await decisionParent(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, mode: "list", parent: null, projectId: null, decisions: [], rejected: [], migrated: [] };
-  const rejected = [];
-  const sent = [];
-  const seen = new Set();
-  for (const d of input.list) {
-    let problem = bridgeDecisionProblem(d);
-    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
-    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
-    if (problem) {
-      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
-      continue;
-    }
-    seen.add(d.id);
-    sent.push(d);
-  }
-  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
-  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
-  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
-  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
-  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
-    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
-  }
-  const migrated = [];
-  for (const r of input.recorded) {
-    try {
-      migrated.push({ taskId: r.taskId, ok: true, ...(await retireDecisionThread(session, r.thread ?? null)) });
-    } catch (err) {
-      const e = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
-      migrated.push({ taskId: r.taskId, ok: false, thread: r.thread ?? null, error: { code: e.code, message: e.message } });
-    }
-  }
-  return { ok: true, mode: "list", parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected, migrated };
-}
-
-// --- decision threads, for a T3 without t3_decisions_set -------------------
-// Removed once no T3 lacks the list (the T3 Code fork's build 2 drops them).
-
-// Where each phase leaves a decision thread: active needs the captain (top
-// level), snoozed waits for its date, parked and closed sit in Settled.
-const DECISION_PHASES = new Set(["active", "snoozed", "parked", "closed", "archived"]);
 const isArchived = (t) => t.archived === true || Boolean(t.archivedAt);
-const sameInstant = (a, b) => (a ?? null) === (b ?? null) || (a != null && b != null && Date.parse(a) === Date.parse(b));
-
-function decisionShapeProblem(t, phase, snoozedUntil) {
-  const settled = t.settled === true;
-  const snoozed = t.snoozed === true;
-  if (isArchived(t)) return "archived";
-  if (phase === "active" && (settled || snoozed)) return settled ? "settled" : "snoozed";
-  if (phase === "snoozed" && (settled || !snoozed || !sameInstant(t.snoozedUntil, snoozedUntil))) return `snoozed=${snoozed} until ${t.snoozedUntil ?? null}`;
-  if ((phase === "parked" || phase === "closed") && (!settled || snoozed)) return `settled=${settled} snoozed=${snoozed}`;
-  return null;
-}
 
 // The FirstMate thread decisions belong to: the cached id while it is still a
 // live, worktree-less thread of the project rooted at <root>; else that
@@ -2050,7 +1947,7 @@ async function decisionParent(session, rootPath, cached) {
   const project = await projectForRoot(session, rootPath);
   if (!project) return null;
   const usable = (t) => t.projectId === project.id && !isArchived(t) && (t.worktreePath ?? null) === null
-    && (t.relationshipToParent ?? null) === null && (t.decisionOf ?? null) === null;
+    && (t.relationshipToParent ?? null) === null;
   if (cached) {
     try {
       const t = threadOf(await session.call("t3_thread_read", { threadId: cached, limit: 1, runLimit: 1 }));
@@ -2076,104 +1973,8 @@ async function decisionParent(session, rootPath, cached) {
   }
 }
 
-async function organize(session, threadId, action, extra = {}) {
-  await session.call("t3_thread_organize", { threadId, action, ...extra });
-  return action;
-}
-
-// One decision item: create its thread when it has none, then, when the item
-// says apply (its wanted state changed since the last proven pass) or the
-// thread is new, bring the payload and the thread's place in line with the
-// phase and prove it by a read-back. Without apply only a lost payload is
-// restored, so the captain's own settle, snooze, or archive stands until
-// Firstmate's records change.
-async function decisionItem(session, parent, it, result) {
-  if (!DECISION_PHASES.has(it.phase)) throw new Refusal("usage", `item ${it.taskId} has unknown phase ${it.phase}`, 2);
-  let t = null;
-  if (it.thread) {
-    try {
-      t = threadOf(await session.call("t3_thread_read", { threadId: it.thread, limit: 1, runLimit: 1 }));
-    } catch (err) {
-      if (!isNotFound(err)) throw err;
-    }
-  }
-  if (it.phase === "archived") {
-    if (t && (t.decisionOf ?? null) !== null && !isArchived(t)) {
-      await archiveThread(session, it.thread, ARCHIVE_TIMEOUT_MS);
-      result.changed.push("archive");
-    }
-    result.thread = null;
-    return result;
-  }
-  // A thread that is gone, or no longer a decision of this FirstMate thread,
-  // is replaced: the old one (when it is a decision) is archived, and the new
-  // one gets the next generation's request id, since T3 would answer the old
-  // id with the thread it already made.
-  if (t && (t.decisionOf ?? null) !== parent.threadId) {
-    if ((t.decisionOf ?? null) !== null && !isArchived(t)) {
-      await archiveThread(session, it.thread, ARCHIVE_TIMEOUT_MS);
-      result.changed.push("archive-moved");
-    }
-    t = null;
-  }
-  let apply = it.apply === true;
-  if (!t) {
-    if (it.phase === "closed") {
-      result.thread = null;
-      return result;
-    }
-    if (it.thread) result.generation += 1;
-    const out = await session.call("t3_thread_launch", {
-      projectId: parent.projectId,
-      title: it.title,
-      decisionOf: parent.threadId,
-      decision: it.decision,
-      clientRequestId: `${it.requestId}:${result.generation}`,
-    });
-    if (!out?.threadId) throw new Refusal("launch_unconfirmed", "t3_thread_launch returned no threadId; the next pass retries with the same request id", 1);
-    result.thread = out.threadId;
-    result.created = true;
-    result.changed.push("create");
-    t = threadOf(await session.call("t3_thread_read", { threadId: out.threadId, limit: 1, runLimit: 1 }));
-    if ((t.decisionOf ?? null) !== parent.threadId || (t.decision?.revision ?? null) !== it.decision.revision
-      || (t.latestRunId ?? null) !== null || (t.activeRunId ?? null) !== null) {
-      const archived = await archiveThread(session, out.threadId, ARCHIVE_TIMEOUT_MS).then((r) => r.archived === true, () => false);
-      // Never reused: the next try makes a new thread under the next id.
-      result.thread = null;
-      result.generation += 1;
-      throw new Refusal("decision_unproven", `T3 made thread ${out.threadId} but it does not read back as an agent-less decision of ${parent.threadId}; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`, 1, { threadId: out.threadId });
-    }
-    apply = true;
-  } else if (apply || (t.decision?.revision ?? null) !== it.decision.revision) {
-    const out = await session.call("t3_thread_update", { threadId: it.thread, action: "set_decision", decision: it.decision });
-    const stored = out?.decisionRevision ?? out?.decision?.revision ?? null;
-    if (stored !== it.decision.revision) {
-      throw new Refusal("decision_unproven", `T3 accepted the decision of ${it.thread} but answered with revision ${stored}`, 1, { threadId: it.thread });
-    }
-    result.changed.push("set_decision");
-  }
-  if (!apply) return result;
-  const id = result.thread;
-  if (isArchived(t)) result.changed.push(await organize(session, id, "unarchive"));
-  if (it.phase === "active" || it.phase === "snoozed") {
-    if (t.settled === true) result.changed.push(await organize(session, id, "unsettle"));
-  }
-  if (it.phase === "active" && t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
-  if (it.phase === "snoozed" && !(t.snoozed === true && sameInstant(t.snoozedUntil, it.snoozedUntil))) {
-    result.changed.push(await organize(session, id, "snooze", it.snoozedUntil ? { snoozedUntil: it.snoozedUntil } : {}));
-  }
-  if (it.phase === "parked" || it.phase === "closed") {
-    if (t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
-    if (t.settled !== true) result.changed.push(await organize(session, id, "settle"));
-  }
-  if (result.changed.length) {
-    const back = threadOf(await session.call("t3_thread_read", { threadId: id, limit: 1, runLimit: 1 }));
-    const problem = decisionShapeProblem(back, it.phase, it.snoozedUntil);
-    if (problem) throw new Refusal("decision_unproven", `decision thread ${id} reads back ${problem}, not ${it.phase}`, 1, { threadId: id });
-  }
-  return result;
-}
-
+// One pass: one t3_decisions_set call carrying every decision the Bridge
+// shows, proven by T3's answer.
 async function decisions(flags) {
   let input;
   try {
@@ -2181,30 +1982,35 @@ async function decisions(flags) {
   } catch (err) {
     usage(`--file is not readable JSON: ${err.message}`);
   }
-  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root)
-    || !Array.isArray(input.items) || !Array.isArray(input.list) || !Array.isArray(input.recorded)) {
-    usage("--file needs root (an absolute path), list[], recorded[], and items[]");
+  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root) || !Array.isArray(input.list)) {
+    usage("--file needs root (an absolute path) and list[]");
   }
   const { session } = await verifiedSession(flags);
-  if (session.toolSchemas.has("t3_decisions_set")) return decisionList(session, input);
-  if (!toolOffers(session, "t3_thread_launch", "decisionOf") || !toolOffers(session, "t3_thread_update", "decision")) {
-    throw new Refusal("decisions_unsupported", "this T3 has neither a decision list nor decision threads", 4);
-  }
+  if (!session.toolSchemas.has("t3_decisions_set")) throw new Refusal("decisions_unsupported", "this T3 has no t3_decisions_set", 4);
   const parent = await decisionParent(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, mode: "threads", parent: null, projectId: null, items: [] };
-  const items = [];
-  for (const it of input.items) {
-    // Shared with decisionItem, so a failure still reports a thread it made.
-    const result = { taskId: it.taskId, ok: true, thread: it.thread ?? null, generation: it.generation ?? 0, created: false, changed: [] };
-    try {
-      items.push(await decisionItem(session, parent, it, result));
-    } catch (err) {
-      if (err instanceof Refusal && err.exit === 2) throw err;
-      const r = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
-      items.push({ ...result, ok: false, error: { code: r.code, message: r.message, ...r.extra } });
+  if (!parent) return { ok: true, parent: null, projectId: null, decisions: [], rejected: [] };
+  const rejected = [];
+  const sent = [];
+  const seen = new Set();
+  for (const d of input.list) {
+    let problem = bridgeDecisionProblem(d);
+    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
+    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
+    if (problem) {
+      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
+      continue;
     }
+    seen.add(d.id);
+    sent.push(d);
   }
-  return { ok: true, mode: "threads", parent: parent.threadId, projectId: parent.projectId, items };
+  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
+  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
+  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
+  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
+  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
+    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
+  }
+  return { ok: true, parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected };
 }
 
 // --- objectives (docs/t3code-backend.md "Objectives") ---------------------

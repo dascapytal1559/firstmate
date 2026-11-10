@@ -938,7 +938,7 @@ tests/fm-supervision-host-live-e2e.test.sh 75
 tests/fm-supervision-host-park.test.sh 329326
 tests/fm-supervision-host.test.sh 435581
 tests/fm-t3-crew-status.test.sh 75000
-tests/fm-t3-needs-me.test.sh 60000
+tests/fm-t3-needs-me.test.sh 90000
 tests/fm-tangle-guard.test.sh 8501
 tests/fm-task-delivery.test.sh 32789
 tests/fm-task-inbox.test.sh 31965

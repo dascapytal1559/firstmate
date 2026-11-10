@@ -271,10 +271,7 @@ What FirstMate sends and relies on:
 
 `bin/fm-t3-mcp.mjs` `decisions` owns the exact call and its proof.
 
-A T3 without `t3_decisions_set` keeps the earlier decision threads instead: one agent-less thread per call under the FirstMate card, active while listed, snoozed until a deferred date, settled while blocked, and settled, then archived a day later, once answered or released.
-The same script's header owns that path, which goes once no T3 lacks the list.
-The first list T3 accepts is the switch: every decision thread FirstMate has on record is archived and its record under `state/t3-needs-me/` deleted, and an archive that fails is tried again on the next pass.
-Update FirstMate before the T3 Code fork build that adds the list, because that build's Bridge shows only the list and stays empty until FirstMate sends one.
+A T3 without `t3_decisions_set` is not supported for decisions: it is skipped quietly, as a T3 without `t3_objectives_set` is, and its Bridge shows none.
 
 The Bridge is an additional track beside chat, never a replacement for it.
 Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision on the Bridge keeps its full context and every update since it was raised.

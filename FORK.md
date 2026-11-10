@@ -85,7 +85,7 @@ Upstream keeps decisions in chat alone; the fork adds the Bridge so each call ke
 A decision stays under Needs you until it is answered or closed, however long it waits; one deferred to a date waits under Scheduled until that date.
 FirstMate sends the whole list in the same step as it changes its own records, so an answered call leaves the Bridge at once, and replying hides it straight away.
 A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
-A T3 Code without the list keeps one thread per decision under FirstMate's card instead, and the first list it accepts archives those threads.
+A T3 Code without the list simply shows no decisions.
 Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
 ## The model routing table on T3 Code's Bridge
