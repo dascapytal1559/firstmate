@@ -290,9 +290,9 @@
 //   fm-t3-mcp.mjs routing-payload --file <json-file>
 //     Local, no T3 call: the Bridge's model routing table
 //     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
-//     config/crew-dispatch.json. A Markdown table with columns When, Harness,
-//     Model, Effort, Why: one row per profile of each rule in order, its When
-//     marked "(captain approves)" when the rule's approval is "captain", then
+//     config/crew-dispatch.json. A Markdown table with columns When, Model
+//     ("harness · model · effort", a missing part left out), Why: one row
+//     per profile of each rule in order, its When marked "(captain approves)" when the rule's approval is "captain", then
 //     one row per default profile, whose When is "Anything else". Past 8192
 //     characters every Why is cut to one shared length, ending in an
 //     ellipsis, then every When the same way; no row is dropped. A file
@@ -2351,14 +2351,14 @@ function routingRows(source) {
 export function routingPayload(source) {
   const rows = routingRows(source).map((r) => ({
     when: cell(r.when),
-    fixed: `| ${cell(r.harness)} | ${cell(r.model) || "-"} | ${cell(r.effort) || "-"} |`,
+    fixed: `| ${[r.harness, r.model, r.effort].map(cell).filter(Boolean).join(" · ")} |`,
     why: cell(r.why),
   }));
   if (rows.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
   // A cut never ends in a lone backslash, which would escape the cell's edge.
   const cut = (text, cap) => (text.length <= cap ? text : cutText(text, cap).replace(/\\+…$/, "…"));
   const render = (whenCap, whyCap) =>
-    ["| When | Harness | Model | Effort | Why |", "| --- | --- | --- | --- | --- |"]
+    ["| When | Model | Why |", "| --- | --- | --- |"]
       .concat(rows.map((r) => `| ${cut(r.when, whenCap)} ${r.fixed} ${cut(r.why, whyCap)} |`))
       .join("\n");
   // The longest shared length of one column that fits, the other held at <other>.

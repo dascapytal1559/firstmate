@@ -969,3 +969,12 @@ The choices made:
 
 The evidence is the needs-me regression suite against the stand-in T3: the table is sent on change, not resent unchanged, kept on a malformed file, cleared when the file goes away, and skipped quietly by a T3 without the tool.
 No screenshot yet: the running T3 did not offer the new tool when this was built.
+
+## 38. The routing table's model in one column (10 November 2026)
+
+> These three columns in the bridge should be one column
+
+The Bridge panel is narrow, and the Harness, Model and Effort columns took most of its width and wrapped.
+They are now one Model column reading `claude · claude-fable-5-2 · xhigh`, and a missing model or effort is left out rather than shown as `-`, so the default row reads `claude · claude-opus-5-5`.
+When and Why, and how a long table is fitted to T3's limit, are unchanged.
+The evidence is the needs-me regression suite's routing-table test, which pins the new layout.

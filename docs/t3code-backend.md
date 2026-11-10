@@ -295,7 +295,7 @@ A failed push is reported and retried on the next pass without holding back the 
 
 The Bridge also shows the home's model routing table, read-only, after the decisions.
 Its source is the home's `config/crew-dispatch.json` ([Crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson)), which this feature only reads.
-Each `bin/fm-t3-needs-me.sh sync` pass renders it as a Markdown table with the columns When, Harness, Model, Effort, and Why, one row per profile of each rule, a rule the captain approves marked so in its When, and the default last as "Anything else".
+Each `bin/fm-t3-needs-me.sh sync` pass renders it as a Markdown table with the columns When, Model, and Why (the Model cell reads harness · model · effort, leaving out a missing model or effort), one row per profile of each rule, a rule the captain approves marked so in its When, and the default last as "Anything else".
 It pushes the table with `t3_routing_set` only when it differs from the last table T3 accepted.
 A table past T3's 8192-character limit keeps every row and cuts each long Why to one shared length, then each long When, and the pass says so.
 A file that is absent or unreadable clears the table once, and only if one was sent before.

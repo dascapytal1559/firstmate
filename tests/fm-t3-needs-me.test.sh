@@ -904,12 +904,12 @@ test_routing_payload_shape() {
   write_routing "$f"
   out=$(routing_payload "$f") || fail "the table should build"
   want=$(printf '%s\n' \
-    '| When | Harness | Model | Effort | Why |' \
-    '| --- | --- | --- | --- | --- |' \
-    '| Hard design work. (captain approves) | claude | big-model | xhigh | Strongest reasoning. |' \
-    '| Hard design work. (captain approves) | codex | other\|model | - | Strongest reasoning. |' \
-    '| Small fixes. | claude | small-model | high |  |' \
-    '| Anything else | claude | - | - |  |')
+    '| When | Model | Why |' \
+    '| --- | --- | --- |' \
+    '| Hard design work. (captain approves) | claude · big-model · xhigh | Strongest reasoning. |' \
+    '| Hard design work. (captain approves) | codex · other\|model | Strongest reasoning. |' \
+    '| Small fixes. | claude · small-model · high |  |' \
+    '| Anything else | claude |  |')
   assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "one row per profile, the captain's approval marked, the default last"
   assert_equals "4 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "four rows, none shortened"
   printf '{"rules": []}\n' > "$f"
