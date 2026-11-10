@@ -88,6 +88,14 @@ A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3'
 A T3 Code without the list keeps one thread per decision under FirstMate's card instead, and the first list it accepts archives those threads.
 Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
+## The model routing table on T3 Code's Bridge
+
+T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, and why, as a read-only table after the decisions.
+FirstMate builds it from the home's `config/crew-dispatch.json`, one row per profile with the default last, and sends it again whenever the file changes.
+This is fork-only: upstream has no Bridge, and the dispatch file and how FirstMate chooses from it are unchanged.
+The table is only shown, never edited from T3 Code, and a T3 Code without it simply shows none.
+Details: [Model routing](docs/t3code-backend.md#model-routing).
+
 ## What the worker is waiting on, on its card
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)

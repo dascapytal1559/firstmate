@@ -14,8 +14,8 @@
 #   fm-t3-needs-me.sh sync
 #     bin/fm-captain-hold.sh runs this after every hold, answer, reconcile, and
 #     context, before it returns, and bin/fm-watch.sh about once a minute as
-#     the backstop. One pass, one T3 session, and one more when the objectives
-#     changed.
+#     the backstop. One pass, one T3 session, and one more each when the
+#     objectives or the routing table changed.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
 #     Prints the task id a captain reply from the Bridge names on its
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
@@ -70,15 +70,23 @@
 # times in a row, then every 15 minutes, and never holds the decisions back;
 # a T3 without objectives is retried the same way, quietly.
 #
+# The model routing table follows the same way (docs/t3code-backend.md "Model
+# routing"): the table bin/fm-t3-mcp.mjs routing-payload builds from
+# config/crew-dispatch.json is pushed with t3_routing_set when it differs from
+# the last proven push, whose hash state/t3-needs-me/.routing keeps, with the
+# same retries and back-off. An absent or unreadable file clears the table
+# once, and only if one was sent; a malformed one is reported every pass and
+# leaves the Bridge's table as it was.
+#
 # Only a main home with config/t3code-token takes part: a secondmate's calls
 # reach the captain through its parent. With no FirstMate thread in T3 (none
 # pinned as coordinator and none live), a pass changes no decision, since a
 # reply would have nowhere to go, and a T3 with neither the list nor decision
-# threads leaves the decisions alone; the objectives push still runs in both
-# cases.
+# threads leaves the decisions alone; the objectives and routing pushes still
+# run in both cases.
 #
 # Exit: 0, or 1 when the records could not be read, a decision could not be
-# brought in line, or the objectives could not be pushed (a line on stdout
+# brought in line, or the objectives or routing table could not be pushed (a line on stdout
 # says which; the next pass retries); usage
 # errors exit 2. Bash 3.2 compatible.
 set -u
@@ -92,6 +100,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONTEXTS="$DATA/needs-me"
 SYNCS="$STATE/t3-needs-me"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
+ROUTING_SYNC="$SYNCS/.routing"
 DECISIONS_SYNC="$SYNCS/.decisions"
 ALERT="$SYNCS/.alert"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
@@ -379,14 +388,55 @@ sync_decisions() {
   threads_result
 }
 
-# The Bridge's objectives follow the home's objectives file: built locally,
-# hashed, and pushed only when that hash differs from the last proven push in
-# $OBJECTIVES_SYNC ({hash, failures, failedAt, unsupported}). A failed push keeps the old
-# hash, so the next pass retries, three times in a row and then every
-# BACKOFF_SECONDS, like a decision; a T3 without objectives is retried the same
-# way, quietly.
+# bridge_record <sync-file>: the last proven push's record of one Bridge feed
+# ({hash, failures, failedAt, unsupported}), {} when there is none.
+bridge_record() {
+  local rec='{}'
+  [ ! -f "$1" ] || rec=$(jq -c 'select(type == "object")' "$1" 2>/dev/null) || rec='{}'
+  [ -n "$rec" ] || rec='{}'
+  printf '%s\n' "$rec"
+}
+
+# push_bridge_feed <name> <verb> <sync-file> <payload-file> [<note>]: one
+# Bridge feed (the objectives, the model routing table) follows its source:
+# <payload-file>'s {markdown} is hashed and sent with bin/fm-t3-mcp.mjs <verb>
+# only when that hash differs from the last proven push in <sync-file>. A
+# failed push keeps the old hash, so the next pass retries, three times in a
+# row and then every BACKOFF_SECONDS, like a decision; a T3 without the feed's
+# tool is retried the same way, quietly. <note>, when given, is printed after
+# a proven push.
+push_bridge_feed() {
+  local name=$1 verb=$2 sync=$3 payload=$4 note=${5:-} rec hash rc=0
+  hash=$(sha < "$payload")
+  rec=$(bridge_record "$sync")
+  [ "$(printf '%s' "$rec" | jq -r '.hash // ""')" != "$hash" ] || return 0
+  if ! printf '%s' "$rec" | jq -e --argjson now "$NOW" --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" \
+    '(.failures // 0) < $failures or ($now - (.failedAt // 0)) >= $backoff' >/dev/null; then
+    # Held back: not proven this pass, which is no failure on a T3 without it.
+    printf '%s' "$rec" | jq -e '.unsupported == true' >/dev/null
+    return
+  fi
+  fm_backend_t3code_mcp "$verb" --file "$payload" > "$WORK/$name-out.json" 2>"$WORK/$name-out.err" || rc=$?
+  if [ "$rc" = 0 ]; then
+    if ! { jq -n --arg hash "$hash" '{hash: $hash, failures: 0, failedAt: null, unsupported: false}' > "$sync.tmp" \
+      && mv -f "$sync.tmp" "$sync"; }; then
+      echo "t3-needs-me: $name: could not record the push"
+      return 1
+    fi
+    [ -z "$note" ] || echo "t3-needs-me: $name: $note"
+    return 0
+  fi
+  printf '%s' "$rec" | jq --argjson now "$NOW" --argjson unsupported "$([ "$rc" = 4 ] && echo true || echo false)" \
+    '. + {failures: ((.failures // 0) + 1), failedAt: $now, unsupported: $unsupported}' > "$sync.tmp" \
+    && mv -f "$sync.tmp" "$sync"
+  [ "$rc" != 4 ] || return 0
+  echo "t3-needs-me: $name: the push failed: $(head -n 1 "$WORK/$name-out.err"); the next pass retries"
+  return 1
+}
+
+# The Bridge's objectives follow the home's objectives file.
 sync_objectives() {
-  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs rec='{}' hash rc=0 shortened
+  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs shortened note=
   command -v node >/dev/null 2>&1 || { echo "t3-needs-me: objectives: node is required"; return 1; }
   FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-objectives.sh" > "$WORK/objectives-source.json" 2>"$WORK/objectives.err" \
     || { echo "t3-needs-me: objectives: the objectives file could not be read: $(head -n 1 "$WORK/objectives.err"); the next pass retries"; return 1; }
@@ -394,33 +444,33 @@ sync_objectives() {
     || { echo "t3-needs-me: objectives: the payload could not be built: $(head -n 1 "$WORK/objectives.err")"; return 1; }
   jq -c '{markdown}' "$WORK/objectives.json" > "$WORK/objectives-payload.json" \
     || { echo "t3-needs-me: objectives: the payload could not be built"; return 1; }
-  hash=$(sha < "$WORK/objectives-payload.json")
-  [ ! -f "$OBJECTIVES_SYNC" ] || rec=$(jq -c 'select(type == "object")' "$OBJECTIVES_SYNC" 2>/dev/null) || rec='{}'
-  [ -n "$rec" ] || rec='{}'
-  [ "$(printf '%s' "$rec" | jq -r '.hash // ""')" != "$hash" ] || return 0
-  if ! printf '%s' "$rec" | jq -e --argjson now "$NOW" --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" \
-    '(.failures // 0) < $failures or ($now - (.failedAt // 0)) >= $backoff' >/dev/null; then
-    # Held back: not proven this pass, which is no failure on a T3 without them.
-    printf '%s' "$rec" | jq -e '.unsupported == true' >/dev/null
-    return
+  shortened=$(jq -r '.shortened' "$WORK/objectives.json")
+  [ "$shortened" = 0 ] || note="$shortened of $(jq -r '.objectives' "$WORK/objectives.json") objectives were shortened to fit T3's 8192 characters"
+  push_bridge_feed objectives objectives "$OBJECTIVES_SYNC" "$WORK/objectives-payload.json" "$note"
+}
+
+# The Bridge's model routing table follows config/crew-dispatch.json. A file
+# that is absent or unreadable clears the table, but only once one was sent;
+# a malformed one is reported every pass and changes nothing on the Bridge.
+sync_routing() {
+  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs file=$CONFIG/crew-dispatch.json shortened note=
+  command -v node >/dev/null 2>&1 || { echo "t3-needs-me: routing: node is required"; return 1; }
+  if [ -f "$file" ] && [ -r "$file" ]; then
+    node "$helper" routing-payload --file "$file" > "$WORK/routing.json" 2>"$WORK/routing.err" \
+      || { echo "t3-needs-me: routing: the table could not be built: $(head -n 1 "$WORK/routing.err" | sed 's/^fm-t3-mcp: //'); the next pass retries"; return 1; }
+  else
+    printf '{"markdown":null,"rows":0,"shortened":0}\n' > "$WORK/routing.json"
   fi
-  fm_backend_t3code_mcp objectives --file "$WORK/objectives-payload.json" > "$WORK/objectives-out.json" 2>"$WORK/objectives-out.err" || rc=$?
-  if [ "$rc" = 0 ]; then
-    if ! { jq -n --arg hash "$hash" '{hash: $hash, failures: 0, failedAt: null, unsupported: false}' > "$OBJECTIVES_SYNC.tmp" \
-      && mv -f "$OBJECTIVES_SYNC.tmp" "$OBJECTIVES_SYNC"; }; then
-      echo "t3-needs-me: objectives: could not record the push"
-      return 1
-    fi
-    shortened=$(jq -r '.shortened' "$WORK/objectives.json")
-    [ "$shortened" = 0 ] || echo "t3-needs-me: objectives: $shortened of $(jq -r '.objectives' "$WORK/objectives.json") objectives were shortened to fit T3's 8192 characters"
+  jq -c '{markdown}' "$WORK/routing.json" > "$WORK/routing-payload.json" \
+    || { echo "t3-needs-me: routing: the table could not be built"; return 1; }
+  # Nothing to clear when no table was ever sent.
+  if jq -e '.markdown == null' "$WORK/routing.json" >/dev/null \
+    && ! bridge_record "$ROUTING_SYNC" | jq -e 'has("hash")' >/dev/null; then
     return 0
   fi
-  printf '%s' "$rec" | jq --argjson now "$NOW" --argjson unsupported "$([ "$rc" = 4 ] && echo true || echo false)" \
-    '. + {failures: ((.failures // 0) + 1), failedAt: $now, unsupported: $unsupported}' > "$OBJECTIVES_SYNC.tmp" \
-    && mv -f "$OBJECTIVES_SYNC.tmp" "$OBJECTIVES_SYNC"
-  [ "$rc" != 4 ] || return 0
-  echo "t3-needs-me: objectives: T3 could not take them: $(head -n 1 "$WORK/objectives-out.err"); the next pass retries"
-  return 1
+  shortened=$(jq -r '.shortened' "$WORK/routing.json")
+  [ "$shortened" = 0 ] || note="$shortened cells of the $(jq -r '.rows' "$WORK/routing.json")-row table were shortened to fit T3's 8192 characters"
+  push_bridge_feed routing routing "$ROUTING_SYNC" "$WORK/routing-payload.json" "$note"
 }
 
 # shellcheck source=bin/fm-backend.sh
@@ -430,5 +480,7 @@ decisions_rc=0
 sync_decisions || decisions_rc=$?
 objectives_rc=0
 sync_objectives || objectives_rc=$?
-[ "$decisions_rc" = 0 ] && [ "$objectives_rc" = 0 ] || exit 1
+routing_rc=0
+sync_routing || routing_rc=$?
+[ "$decisions_rc" = 0 ] && [ "$objectives_rc" = 0 ] && [ "$routing_rc" = 0 ] || exit 1
 exit 0

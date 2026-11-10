@@ -85,6 +85,9 @@
 //     offers t3_objectives_set, which replaces world objectives with
 //     {markdown} (markdown null clears) within the fork's bounds and answers
 //     {objectives} (world objectivesAnswer answers another value instead).
+//   - a T3 with the Bridge's model routing table (world routingTool, the T3
+//     Code fork) offers t3_routing_set, which does the same with world
+//     modelRouting and answers {modelRouting} (world routingAnswer instead).
 //   - a T3 with the Bridge decision list (world decisionsTool, the T3 Code
 //     fork) offers t3_decisions_set {replyTo, decisions}, which replaces world
 //     decisionList {replyTo, decisions} within the fork's bounds: replyTo an
@@ -150,7 +153,7 @@ const ALL_TOOLS = [
   "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
   w.restartStatus ? ["t3_restart_status"] : []);
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
@@ -399,14 +402,16 @@ async function callTool(w, name, a) {
   const projects = (w.projects = w.projects ?? []);
   const t = a.threadId !== undefined ? threads[a.threadId] : undefined;
   switch (name) {
-    case "t3_objectives_set": {
+    case "t3_objectives_set":
+    case "t3_routing_set": {
       // The fork's bounds: markdown null, or trimmed non-empty text of at
       // most 8192 characters, and nothing else.
       const md = a.markdown;
       if (md !== null && (typeof md !== "string" || !md || md !== md.trim() || md.length > 8192)) return [err("invalid_params", "markdown out of bounds"), false];
       if (Object.keys(a).some((k) => k !== "markdown")) return [err("invalid_params", "unknown argument"), false];
-      w.objectives = md === null ? null : { markdown: md };
-      return [ok({ objectives: w.objectivesAnswer ?? w.objectives }), true];
+      const [field, answer] = name === "t3_routing_set" ? ["modelRouting", "routingAnswer"] : ["objectives", "objectivesAnswer"];
+      w[field] = md === null ? null : { markdown: md };
+      return [ok({ [field]: w[answer] ?? w[field] }), true];
     }
     case "t3_decisions_set": {
       if (Object.keys(a).some((k) => k !== "replyTo" && k !== "decisions")) return [err("invalid_params", "unknown argument"), false];

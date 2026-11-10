@@ -287,6 +287,24 @@
 //     t3_objectives_set (markdown null clears them). T3 must answer with
 //     exactly that markdown, else exit 1 (objectives_unproven). Exit 4
 //     (objectives_unsupported) when this T3 has no t3_objectives_set.
+//   fm-t3-mcp.mjs routing-payload --file <json-file>
+//     Local, no T3 call: the Bridge's model routing table
+//     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
+//     config/crew-dispatch.json. A Markdown table with columns When, Harness,
+//     Model, Effort, Why: one row per profile of each rule in order, its When
+//     marked "(captain approves)" when the rule's approval is "captain", then
+//     one row per default profile, whose When is "Anything else". Past 8192
+//     characters every Why is cut to one shared length, ending in an
+//     ellipsis, then every When the same way; no row is dropped. A file
+//     without the fields the table needs (a rule's when and use, each
+//     profile's harness, string model and effort) exits 1 (routing_malformed)
+//     naming the first fault. Prints {markdown, rows, shortened (how many
+//     cells were cut)}; no rows give markdown null.
+//   fm-t3-mcp.mjs routing --file <json-file>
+//     Replaces the Bridge's model routing table with <json-file>'s {markdown}
+//     through t3_routing_set (markdown null clears it). T3 must answer with
+//     exactly that markdown, else exit 1 (routing_unproven). Exit 4
+//     (routing_unsupported) when this T3 has no t3_routing_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
@@ -2286,6 +2304,118 @@ async function objectives(flags) {
   return { ok: true, objectives: got };
 }
 
+// --- model routing (docs/t3code-backend.md "Model routing") ---------------
+
+export const ROUTING_MAX = 8192;
+
+// One table cell: a single line, its pipes escaped.
+const cell = (text) => String(text).replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
+
+// The routing rows of a config/crew-dispatch.json value, or a Refusal naming
+// the first field the table needs that is missing or of the wrong type.
+function routingRows(source) {
+  const bad = (what) => {
+    throw new Refusal("routing_malformed", `config/crew-dispatch.json: ${what}`, 1);
+  };
+  if (source === null || typeof source !== "object" || Array.isArray(source)) bad("the top-level value must be an object");
+  const profiles = (value, where) => {
+    const list = Array.isArray(value) ? value : value !== null && typeof value === "object" ? [value] : null;
+    if (!list || list.length === 0) bad(`${where} needs a profile object or a non-empty profile array`);
+    return list.map((p, i) => {
+      const at = list.length > 1 || Array.isArray(value) ? `${where}[${i}]` : where;
+      if (p === null || typeof p !== "object" || Array.isArray(p)) bad(`${at} must be an object`);
+      if (typeof p.harness !== "string" || !p.harness.trim()) bad(`${at} needs harness`);
+      for (const k of ["model", "effort"]) {
+        if (p[k] !== undefined && (typeof p[k] !== "string" || !p[k].trim())) bad(`${at}.${k} must be non-empty text`);
+      }
+      return { harness: p.harness, model: p.model ?? "", effort: p.effort ?? "" };
+    });
+  };
+  const rules = source.rules ?? [];
+  if (!Array.isArray(rules)) bad("rules must be an array");
+  const rows = [];
+  rules.forEach((r, i) => {
+    if (r === null || typeof r !== "object" || Array.isArray(r)) bad(`rules[${i}] must be an object`);
+    if (typeof r.when !== "string" || !r.when.trim()) bad(`rules[${i}] needs when`);
+    if (r.why !== undefined && typeof r.why !== "string") bad(`rules[${i}].why must be text`);
+    const when = r.approval === "captain" ? `${r.when.trim()} (captain approves)` : r.when;
+    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when, ...p, why: r.why ?? "" });
+  });
+  if (source.default !== undefined) {
+    for (const p of profiles(source.default, "default")) rows.push({ when: "Anything else", ...p, why: "" });
+  }
+  return rows;
+}
+
+// The Bridge's routing table from a config/crew-dispatch.json value.
+export function routingPayload(source) {
+  const rows = routingRows(source).map((r) => ({
+    when: cell(r.when),
+    fixed: `| ${cell(r.harness)} | ${cell(r.model) || "-"} | ${cell(r.effort) || "-"} |`,
+    why: cell(r.why),
+  }));
+  if (rows.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
+  // A cut never ends in a lone backslash, which would escape the cell's edge.
+  const cut = (text, cap) => (text.length <= cap ? text : cutText(text, cap).replace(/\\+…$/, "…"));
+  const render = (whenCap, whyCap) =>
+    ["| When | Harness | Model | Effort | Why |", "| --- | --- | --- | --- | --- |"]
+      .concat(rows.map((r) => `| ${cut(r.when, whenCap)} ${r.fixed} ${cut(r.why, whyCap)} |`))
+      .join("\n");
+  // The longest shared length of one column that fits, the other held at <other>.
+  const fit = (longest, draw) => {
+    let lo = 0;
+    let hi = longest;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (draw(mid).length <= ROUTING_MAX) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  const longestWhen = Math.max(...rows.map((r) => r.when.length));
+  const longestWhy = Math.max(...rows.map((r) => r.why.length));
+  let whenCap = longestWhen;
+  let whyCap = longestWhy;
+  if (render(whenCap, whyCap).length > ROUTING_MAX) whyCap = fit(longestWhy, (c) => render(whenCap, c));
+  if (render(whenCap, whyCap).length > ROUTING_MAX) whenCap = fit(longestWhen, (c) => render(c, whyCap));
+  const markdown = render(whenCap, whyCap);
+  if (markdown.length > ROUTING_MAX) {
+    throw new Refusal("routing_too_long", `the routing table needs ${markdown.length} characters even with every When and Why cut, past T3's ${ROUTING_MAX}`, 1);
+  }
+  const shortened = rows.filter((r) => r.why.length > whyCap).length + rows.filter((r) => r.when.length > whenCap).length;
+  return { ok: true, markdown, rows: rows.length, shortened };
+}
+
+async function routingPayloadVerb(flags) {
+  let source;
+  try {
+    source = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    throw new Refusal("routing_malformed", `config/crew-dispatch.json is not readable JSON: ${err.message}`, 1);
+  }
+  return routingPayload(source);
+}
+
+async function routing(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  const markdown = input?.markdown ?? null;
+  if (markdown !== null && (typeof markdown !== "string" || !markdown.trim() || markdown !== markdown.trim() || markdown.length > ROUTING_MAX)) {
+    usage(`--file markdown must be null or trimmed, non-empty text of at most ${ROUTING_MAX} characters`);
+  }
+  const { session } = await verifiedSession(flags);
+  if (!session.toolSchemas.has("t3_routing_set")) throw new Refusal("routing_unsupported", "this T3 has no Bridge model routing", 4);
+  const out = await session.call("t3_routing_set", { markdown });
+  const got = out?.modelRouting ?? null;
+  const same = markdown === null ? got === null : got !== null && got.markdown === markdown;
+  if (!same) throw new Refusal("routing_unproven", "T3 accepted the routing table but answered with a different one", 1);
+  return { ok: true, modelRouting: got };
+}
+
 const VERBS = {
   login,
   status,
@@ -2312,6 +2442,8 @@ const VERBS = {
   decisions,
   "objectives-payload": objectivesPayloadVerb,
   objectives,
+  "routing-payload": routingPayloadVerb,
+  routing,
 };
 
 async function main(argv) {

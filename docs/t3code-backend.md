@@ -291,6 +291,18 @@ An absent file, or one with no bullets, clears the objectives once.
 A failed push is reported and retried on the next pass without holding back the decisions, and a T3 without `t3_objectives_set` is skipped quietly.
 `bin/fm-t3-mcp.mjs` (`objectives-payload` and `objectives`) owns the exact payload rules, and the T3 Code fork's `fork/README.md` owns the tool's contract; like `t3_environment_preferences_update`, it needs the full-access sign-in Firstmate already uses.
 
+### Model routing
+
+The Bridge also shows the home's model routing table, read-only, after the decisions.
+Its source is the home's `config/crew-dispatch.json` ([Crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson)), which this feature only reads.
+Each `bin/fm-t3-needs-me.sh sync` pass renders it as a Markdown table with the columns When, Harness, Model, Effort, and Why, one row per profile of each rule, a rule the captain approves marked so in its When, and the default last as "Anything else".
+It pushes the table with `t3_routing_set` only when it differs from the last table T3 accepted.
+A table past T3's 8192-character limit keeps every row and cuts each long Why to one shared length, then each long When, and the pass says so.
+A file that is absent or unreadable clears the table once, and only if one was sent before.
+A file without the fields the table needs is reported on every pass and leaves the Bridge's table as it was; `bin/fm-bootstrap.sh` still owns validating the file for dispatch.
+Failures, retries, and a T3 without `t3_routing_set` are handled exactly as for the objectives.
+`bin/fm-t3-mcp.mjs` (`routing-payload` and `routing`) owns the exact table rules, and the T3 Code fork's `fork/README.md` owns the tool's contract.
+
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.

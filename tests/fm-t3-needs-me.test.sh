@@ -874,8 +874,127 @@ test_objectives_clear_once_and_back_off() {
   pass "fm-t3-needs-me.sh sync: a missing file clears them once; failures back off; an older T3 is quiet"
 }
 
+# --- model routing -----------------------------------------------------------
+
+# write_routing <file>: a made-up config/crew-dispatch.json.
+write_routing() {
+  cat > "$1" <<'EOF'
+{
+  "rules": [
+    { "when": "Hard design work.", "approval": "captain",
+      "use": [{ "harness": "claude", "model": "big-model", "effort": "xhigh" }, { "harness": "codex", "model": "other|model" }],
+      "why": "Strongest reasoning." },
+    { "when": "Small fixes.", "use": { "harness": "claude", "model": "small-model", "effort": "high" } }
+  ],
+  "default": { "harness": "claude" }
+}
+EOF
+}
+
+routing_payload() {
+  node "$ROOT/bin/fm-t3-mcp.mjs" routing-payload --file "$1"
+}
+
+routing_calls() {
+  t3_fake_calls t3_routing_set | grep -c . || true
+}
+
+test_routing_payload_shape() {
+  local f="$TMP_ROOT/routing.json" out want long
+  write_routing "$f"
+  out=$(routing_payload "$f") || fail "the table should build"
+  want=$(printf '%s\n' \
+    '| When | Harness | Model | Effort | Why |' \
+    '| --- | --- | --- | --- | --- |' \
+    '| Hard design work. (captain approves) | claude | big-model | xhigh | Strongest reasoning. |' \
+    '| Hard design work. (captain approves) | codex | other\|model | - | Strongest reasoning. |' \
+    '| Small fixes. | claude | small-model | high |  |' \
+    '| Anything else | claude | - | - |  |')
+  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "one row per profile, the captain's approval marked, the default last"
+  assert_equals "4 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "four rows, none shortened"
+  printf '{"rules": []}\n' > "$f"
+  assert_equals "null" "$(routing_payload "$f" | jq -r '.markdown')" "no rules and no default give no table"
+  long=$(head -c 3000 /dev/zero | tr '\0' 'x')
+  jq -n --arg why "$long" '{rules: [range(6) | {when: "Rule \(.)", use: {harness: "claude"}, why: $why}], default: {harness: "codex"}}' > "$f"
+  out=$(routing_payload "$f") || fail "a long table should build"
+  [ "$(printf '%s' "$out" | jq -r '.markdown | length')" -le 8192 ] || fail "the table fits T3's limit"
+  assert_equals "7" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^| Rule \|^| Anything else')" "no row is dropped"
+  assert_equals "6" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '… |$')" "each long Why is cut, with an ellipsis"
+  assert_equals "6" "$(printf '%s' "$out" | jq -r '.shortened')" "and the count says so"
+  printf '{"rules": [{"when": "x", "use": {"model": "m"}}]}\n' > "$f"
+  out=$(routing_payload "$f" 2>/dev/null)
+  expect_code 1 "$?" "a profile without a harness is malformed"
+  assert_equals "routing_malformed" "$(printf '%s' "$out" | jq -r '.error.code')" "and named so"
+  assert_contains "$(printf '%s' "$out" | jq -r '.error.message')" "rules[0].use needs harness" "with the field"
+  pass "fm-t3-mcp.mjs routing-payload: one row per profile, fits the limit, refuses a malformed file"
+}
+
+test_routing_push_only_when_changed() {
+  make_home routing 'w.routingTool = true'
+  local out rc
+  write_routing "$HOME_DIR/config/crew-dispatch.json"
+  : > "$T3_FAKE_LOG"
+  out=$(sync_now)
+  expect_code 0 "$?" "the first pass pushes the table: $out"
+  assert_equals "1" "$(routing_calls)" "one push"
+  assert_equals "$(routing_payload "$HOME_DIR/config/crew-dispatch.json" | jq -r '.markdown')" \
+    "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "of the built table"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "an unchanged pass should succeed"
+  assert_equals "0" "$(routing_calls)" "an unchanged table is not pushed again"
+  jq '.rules[1].use.model = "newer-model"' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/next.json"
+  mv "$HOME_DIR/config/next.json" "$HOME_DIR/config/crew-dispatch.json"
+  t3_fake_set 'w.failTools = { t3_routing_set: { code: "unavailable", message: "settings are busy" } }'
+  out=$(sync_now)
+  rc=$?
+  expect_code 1 "$rc" "a failed push is reported: $out"
+  assert_contains "$out" "routing" "the line names the routing table"
+  t3_fake_set 'delete w.failTools'
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "the retry should succeed"
+  assert_equals "1" "$(routing_calls)" "the next pass retries"
+  assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "newer-model" "with the new model"
+  printf '{"rules": "oops"}\n' > "$HOME_DIR/config/crew-dispatch.json"
+  : > "$T3_FAKE_LOG"
+  out=$(sync_now)
+  expect_code 1 "$?" "a malformed file is reported: $out"
+  assert_contains "$out" "rules must be an array" "naming the fault"
+  assert_equals "0" "$(routing_calls)" "and nothing is sent"
+  assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "newer-model" "so the Bridge keeps the last table"
+  rm -f "$HOME_DIR/config/crew-dispatch.json"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a pass without the file should succeed"
+  assert_equals '{"markdown":null}' "$(t3_fake_calls t3_routing_set)" "a removed file clears the table"
+  assert_equals "null" "$(jq -c '.modelRouting' "$T3_FAKE_WORLD")" "and T3 holds none"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "the pass should succeed"
+  assert_equals "0" "$(routing_calls)" "only once"
+  pass "fm-t3-needs-me.sh sync: the routing table is pushed when it changes, retried, kept on a malformed file, cleared once"
+}
+
+test_routing_absent_or_unsupported() {
+  make_home routing-none 'w.routingTool = true'
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a home without a dispatch file should succeed"
+  assert_equals "0" "$(routing_calls)" "never sent, so nothing is cleared"
+  local out n
+  make_home routing-old-t3
+  write_routing "$HOME_DIR/config/crew-dispatch.json"
+  out=$(sync_now)
+  expect_code 0 "$?" "a T3 without the routing table is not a failure: $out"
+  assert_equals "" "$out" "and says nothing"
+  for n in 1 2 3 4; do sync_now >/dev/null || fail "a T3 without the routing table stays quiet once held back"; done
+  t3_fake_set 'w.routingTool = true'
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 900 )) needs_me sync >/dev/null || fail "the retry should succeed"
+  assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "big-model" "and a T3 that gains it gets the table"
+  pass "fm-t3-needs-me.sh sync: no dispatch file sends no routing table; an older T3 is quiet and retried"
+}
+
 test_objectives_payload_shape
 test_objectives_payload_fits_the_limit
+test_routing_payload_shape
+test_routing_push_only_when_changed
+test_routing_absent_or_unsupported
 test_objectives_push_only_when_changed
 test_objectives_clear_once_and_back_off
 test_context_raise_update_and_guards

@@ -942,3 +942,30 @@ The choices made:
 - **The status line's own time decides "since the restart".** Nothing watched the status files at the moment of the restart, so the line's `[at=]` stamp is the only witness; it must be later than the restart's whole second and not in the future, and it only ever spares a line from distrust, never makes an older line current.
 - **No fallback to process ids.** A T3 without the restart time reads as unknown, as a remote server always did, since FirstMate needs the paired T3 Code fork anyway.
 - **A new record name.** The handled restart is now recorded as a time rather than a process id, under a new name, so the first session start after this lands records it quietly instead of reading a format change as a restart.
+
+## 37. The model routing table on the Bridge (10 November 2026)
+
+The ask:
+
+> I want to create a model routing table in the bridge tab of T three code.
+
+T3's half added a read-only Model routing section to the Bridge and a tool to fill it.
+FirstMate's half sends its routing table there, the same way it already sends the high level objectives.
+
+What it looks like, with made-up rules:
+
+| When | Harness | Model | Effort | Why |
+| --- | --- | --- | --- | --- |
+| Hard design work. (captain approves) | claude | big-model | xhigh | Strongest reasoning. |
+| Small fixes. | claude | small-model | high |  |
+| Anything else | claude | - | - |  |
+
+The choices made:
+
+- **The dispatch file is the only source.** Each sync pass builds the table from `config/crew-dispatch.json`, one row per model the rule can use, with the default last, and sends it only when it changed.
+- **Rows are never dropped.** Past T3's 8,192-character limit each long reason is cut to one shared length first, then each long condition, and the pass says how many cells it cut.
+- **A broken file is reported, not guessed around.** A file missing what the table needs is named on every pass, and the Bridge keeps its last good table; a deleted file clears it once, and only if one was ever sent.
+- **One shared push for both feeds.** The objectives and the routing table now go through the same send-on-change, retry, and back-off step, so they cannot drift apart.
+
+The evidence is the needs-me regression suite against the stand-in T3: the table is sent on change, not resent unchanged, kept on a malformed file, cleared when the file goes away, and skipped quietly by a T3 without the tool.
+No screenshot yet: the running T3 did not offer the new tool when this was built.
