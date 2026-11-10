@@ -90,8 +90,8 @@ Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3
 
 ## The model routing table on T3 Code's Bridge
 
-T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, and why, as a read-only table after the decisions.
-FirstMate builds it from the home's `config/crew-dispatch.json`, one row per profile with the default last, and sends it again whenever the file changes.
+T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, read-only, after the decisions: each entry shows the model highlighted with the kind of task beneath it.
+FirstMate builds it from the home's `config/crew-dispatch.json`, one entry per profile with the default last, and sends it again whenever the file changes.
 This is fork-only: upstream has no Bridge, and the dispatch file and how FirstMate chooses from it are unchanged.
 The table is only shown, never edited from T3 Code, and a T3 Code without it simply shows none.
 Details: [Model routing](docs/t3code-backend.md#model-routing).

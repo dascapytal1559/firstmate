@@ -260,16 +260,18 @@
 //   fm-t3-mcp.mjs routing-payload --file <json-file>
 //     Local, no T3 call: the Bridge's model routing table
 //     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
-//     config/crew-dispatch.json. A Markdown table with columns When, Model
-//     ("harness · model · effort", a missing part left out), Why: one row
-//     per profile of each rule in order, its When marked "(captain approves)" when the rule's approval is "captain", then
-//     one row per default profile, whose When is "Anything else". Past 8192
-//     characters every Why is cut to one shared length, ending in an
-//     ellipsis, then every When the same way; no row is dropped. A file
-//     without the fields the table needs (a rule's when and use, each
-//     profile's harness, string model and effort) exits 1 (routing_malformed)
-//     naming the first fault. Prints {markdown, rows, shortened (how many
-//     cells were cut)}; no rows give markdown null.
+//     config/crew-dispatch.json. A Markdown bullet list, one item per profile
+//     of each rule in order, then one per default profile: the model
+//     ("harness · model · effort", a missing part left out) as inline code,
+//     a hard line break, then the When as plain text, marked
+//     "(captain approves)" when the rule's approval is "captain" and
+//     "Anything else" for a default profile. A rule's why is checked but not
+//     shown. Past 8192 characters every When is cut to one shared length,
+//     ending in an ellipsis; no item is dropped. A file without the fields
+//     the list needs (a rule's when and use, each profile's harness, string
+//     model and effort, a string why) exits 1 (routing_malformed) naming the
+//     first fault. Prints {markdown, rows, shortened (how many Whens were
+//     cut)}; no rows give markdown null.
 //   fm-t3-mcp.mjs routing --file <json-file>
 //     Replaces the Bridge's model routing table with <json-file>'s {markdown}
 //     through t3_routing_set (markdown null clears it). T3 must answer with
@@ -2132,8 +2134,19 @@ async function objectives(flags) {
 
 export const ROUTING_MAX = 8192;
 
-// One table cell: a single line, its pipes escaped.
-const cell = (text) => String(text).replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
+// One line of text, its runs of whitespace collapsed.
+const oneLine = (text) => String(text).replace(/\s+/g, " ").trim();
+
+// <text> as an inline code span, its fence longer than any backtick run inside.
+function inlineCode(text) {
+  const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+// <text> as a list item's continuation line that cannot open a heading, list,
+// quote or rule of its own.
+const plainLine = (text) => text.replace(/^([#>+*=-])/, "\\$1").replace(/^(\d+)([.)])/, "$1\\$2");
 
 // The routing rows of a config/crew-dispatch.json value, or a Refusal naming
 // the first field the table needs that is missing or of the wrong type.
@@ -2163,50 +2176,43 @@ function routingRows(source) {
     if (typeof r.when !== "string" || !r.when.trim()) bad(`rules[${i}] needs when`);
     if (r.why !== undefined && typeof r.why !== "string") bad(`rules[${i}].why must be text`);
     const when = r.approval === "captain" ? `${r.when.trim()} (captain approves)` : r.when;
-    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when, ...p, why: r.why ?? "" });
+    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when, ...p });
   });
   if (source.default !== undefined) {
-    for (const p of profiles(source.default, "default")) rows.push({ when: "Anything else", ...p, why: "" });
+    for (const p of profiles(source.default, "default")) rows.push({ when: "Anything else", ...p });
   }
   return rows;
 }
 
-// The Bridge's routing table from a config/crew-dispatch.json value.
+// The Bridge's routing list from a config/crew-dispatch.json value: one list
+// item per row, its model as inline code, then a hard line break and its When
+// as plain text. A row's Why is validated but not shown.
 export function routingPayload(source) {
   const rows = routingRows(source).map((r) => ({
-    when: cell(r.when),
-    fixed: `| ${[r.harness, r.model, r.effort].map(cell).filter(Boolean).join(" · ")} |`,
-    why: cell(r.why),
+    model: inlineCode([r.harness, r.model, r.effort].map(oneLine).filter(Boolean).join(" · ")),
+    when: oneLine(r.when),
   }));
   if (rows.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
-  // A cut never ends in a lone backslash, which would escape the cell's edge.
+  // A cut never ends in a lone backslash, which would escape the ellipsis.
   const cut = (text, cap) => (text.length <= cap ? text : cutText(text, cap).replace(/\\+…$/, "…"));
-  const render = (whenCap, whyCap) =>
-    ["| When | Model | Why |", "| --- | --- | --- |"]
-      .concat(rows.map((r) => `| ${cut(r.when, whenCap)} ${r.fixed} ${cut(r.why, whyCap)} |`))
-      .join("\n");
-  // The longest shared length of one column that fits, the other held at <other>.
-  const fit = (longest, draw) => {
-    let lo = 0;
-    let hi = longest;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (draw(mid).length <= ROUTING_MAX) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
+  const item = (r, cap) => {
+    const when = cut(r.when, cap);
+    return when ? `- ${r.model}\\\n  ${plainLine(when)}` : `- ${r.model}`;
   };
-  const longestWhen = Math.max(...rows.map((r) => r.when.length));
-  const longestWhy = Math.max(...rows.map((r) => r.why.length));
-  let whenCap = longestWhen;
-  let whyCap = longestWhy;
-  if (render(whenCap, whyCap).length > ROUTING_MAX) whyCap = fit(longestWhy, (c) => render(whenCap, c));
-  if (render(whenCap, whyCap).length > ROUTING_MAX) whenCap = fit(longestWhen, (c) => render(c, whyCap));
-  const markdown = render(whenCap, whyCap);
-  if (markdown.length > ROUTING_MAX) {
-    throw new Refusal("routing_too_long", `the routing table needs ${markdown.length} characters even with every When and Why cut, past T3's ${ROUTING_MAX}`, 1);
+  const render = (cap) => rows.map((r) => item(r, cap)).join("\n");
+  // The longest shared When length that fits.
+  let lo = 0;
+  let hi = Math.max(...rows.map((r) => r.when.length));
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (render(mid).length <= ROUTING_MAX) lo = mid;
+    else hi = mid - 1;
   }
-  const shortened = rows.filter((r) => r.why.length > whyCap).length + rows.filter((r) => r.when.length > whenCap).length;
+  const markdown = render(lo);
+  if (markdown.length > ROUTING_MAX) {
+    throw new Refusal("routing_too_long", `the routing list needs ${markdown.length} characters even with every When cut, past T3's ${ROUTING_MAX}`, 1);
+  }
+  const shortened = rows.filter((r) => r.when.length > lo).length;
   return { ok: true, markdown, rows: rows.length, shortened };
 }
 

@@ -676,31 +676,46 @@ routing_calls() {
 test_routing_payload_shape() {
   local f="$TMP_ROOT/routing.json" out want long
   write_routing "$f"
-  out=$(routing_payload "$f") || fail "the table should build"
-  want=$(printf '%s\n' \
-    '| When | Model | Why |' \
-    '| --- | --- | --- |' \
-    '| Hard design work. (captain approves) | claude · big-model · xhigh | Strongest reasoning. |' \
-    '| Hard design work. (captain approves) | codex · other\|model | Strongest reasoning. |' \
-    '| Small fixes. | claude · small-model · high |  |' \
-    '| Anything else | claude |  |')
-  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "one row per profile, the captain's approval marked, the default last"
+  out=$(routing_payload "$f") || fail "the list should build"
+  want=$(cat <<'EOF'
+- `claude · big-model · xhigh`\
+  Hard design work. (captain approves)
+- `codex · other|model`\
+  Hard design work. (captain approves)
+- `claude · small-model · high`\
+  Small fixes.
+- `claude`\
+  Anything else
+EOF
+)
+  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "one item per profile, its model as code above its When, the default last"
   assert_equals "4 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "four rows, none shortened"
+  assert_not_contains "$(printf '%s' "$out" | jq -r '.markdown')" "Strongest reasoning" "the Why is not shown"
+  jq -n '{rules: [{when: "- not a list", use: {harness: "a`b"}}, {when: "2. not a list", use: {harness: "c"}}]}' > "$f"
+  want=$(cat <<'EOF'
+- ``a`b``\
+  \- not a list
+- `c`\
+  2\. not a list
+EOF
+)
+  assert_equals "$want" "$(routing_payload "$f" | jq -r '.markdown')" "a backtick in the model and a block marker in the When stay text"
   printf '{"rules": []}\n' > "$f"
-  assert_equals "null" "$(routing_payload "$f" | jq -r '.markdown')" "no rules and no default give no table"
+  assert_equals "null" "$(routing_payload "$f" | jq -r '.markdown')" "no rules and no default give no list"
   long=$(head -c 3000 /dev/zero | tr '\0' 'x')
-  jq -n --arg why "$long" '{rules: [range(6) | {when: "Rule \(.)", use: {harness: "claude"}, why: $why}], default: {harness: "codex"}}' > "$f"
-  out=$(routing_payload "$f") || fail "a long table should build"
-  [ "$(printf '%s' "$out" | jq -r '.markdown | length')" -le 8192 ] || fail "the table fits T3's limit"
-  assert_equals "7" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^| Rule \|^| Anything else')" "no row is dropped"
-  assert_equals "6" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '… |$')" "each long Why is cut, with an ellipsis"
+  jq -n --arg when "$long" '{rules: [range(6) | {when: "Rule \(.) \($when)", use: {harness: "claude"}, why: $when}], default: {harness: "codex"}}' > "$f"
+  out=$(routing_payload "$f") || fail "a long list should build"
+  [ "$(printf '%s' "$out" | jq -r '.markdown | length')" -le 8192 ] || fail "the list fits T3's limit"
+  assert_equals "7" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^- `')" "no row is dropped"
+  assert_equals "6" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^  Rule [0-5] x*…$')" "each long When is cut, with an ellipsis"
+  assert_contains "$(printf '%s' "$out" | jq -r '.markdown')" '  Anything else' "a short When is kept whole"
   assert_equals "6" "$(printf '%s' "$out" | jq -r '.shortened')" "and the count says so"
   printf '{"rules": [{"when": "x", "use": {"model": "m"}}]}\n' > "$f"
   out=$(routing_payload "$f" 2>/dev/null)
   expect_code 1 "$?" "a profile without a harness is malformed"
   assert_equals "routing_malformed" "$(printf '%s' "$out" | jq -r '.error.code')" "and named so"
   assert_contains "$(printf '%s' "$out" | jq -r '.error.message')" "rules[0].use needs harness" "with the field"
-  pass "fm-t3-mcp.mjs routing-payload: one row per profile, fits the limit, refuses a malformed file"
+  pass "fm-t3-mcp.mjs routing-payload: one item per profile, fits the limit, refuses a malformed file"
 }
 
 test_routing_push_only_when_changed() {

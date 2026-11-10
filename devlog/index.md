@@ -997,3 +997,25 @@ The choices made:
 
 The evidence is the needs-me regression suite against the stand-in T3 (the list is sent on change, proven by its ids, retried, kept on a malformed inventory, cleared once) and the new rules suite for the answers.
 No screenshot yet: T3's section is being built alongside.
+
+## 40. Model routing as model and description (10 November 2026)
+
+> Let's make model routing get the format of the model In highlights and then the description in normal text color and then remove the actual description use our current titles as description
+
+The routing table had three columns, and the long Why paragraphs made it the tallest thing on the Bridge.
+Each route is now one list entry: the model highlighted as inline code, and beneath it, in normal text, the old When text as its description.
+The Why is no longer sent; the dispatch file still carries and checks it.
+
+- **A list entry with a hard line break.** T3 renders the Bridge with its ordinary chat Markdown, without its option that turns every newline into a line break, so a plain newline would have run the description onto the model's line. A backslash at the end of the model line is the standard Markdown hard break and puts the description on its own line, while the list keeps each route visibly one item.
+- **Only the description is cut.** Past T3's 8192-character limit every long description is cut to one shared length with an ellipsis; no route is dropped.
+
+A route now reads like this (made-up entries from the regression test):
+
+```markdown
+- `claude · big-model · xhigh`\
+  Hard design work. (captain approves)
+- `claude`\
+  Anything else
+```
+
+The evidence is the needs-me regression suite's routing test, which pins this shape, the cut, and that a stray backtick or list marker in a rule stays text.

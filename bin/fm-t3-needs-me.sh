@@ -356,7 +356,7 @@ sync_routing() {
     return 0
   fi
   shortened=$(jq -r '.shortened' "$WORK/routing.json")
-  [ "$shortened" = 0 ] || note="$shortened cells of the $(jq -r '.rows' "$WORK/routing.json")-row table were shortened to fit T3's 8192 characters"
+  [ "$shortened" = 0 ] || note="$shortened of the $(jq -r '.rows' "$WORK/routing.json") routes had their description shortened to fit T3's 8192 characters"
   push_bridge_feed routing routing "$ROUTING_SYNC" "$WORK/routing-payload.json" "$note"
 }
 
