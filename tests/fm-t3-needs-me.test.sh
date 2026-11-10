@@ -104,13 +104,12 @@ test_context_raise_update_and_guards() {
   printf 'plan\n' > "$HOME_DIR/data/camera/report.md"
   printf 'Camera: three choices.\n\nA, B or C?\n' > "$HOME_DIR/raised.txt"
   captain context w2 --text-file "$HOME_DIR/raised.txt" --question "Which camera budget?" \
-    --option "A: one camera" --detail "About A\$150" --option "B: two cameras" \
+    --option "A: one camera" --option "B: two cameras" \
     --attach report=data/camera/report.md --label "sections 5-7" >/dev/null 2>&1 || fail "the raise should succeed"
   assert_equals "1" "$(jq -r '.revision' "$rec")" "the raise is revision 1"
   assert_equals "raised" "$(jq -r '.entries[0].kind' "$rec")" "the first entry is the raise"
   assert_equals "$(printf 'Camera: three choices.\n\nA, B or C?')" "$(jq -r '.entries[0].text' "$rec")" "the text is kept as sent"
-  assert_equals "About A\$150" "$(jq -r '.options[0].detail' "$rec")" "a detail belongs to the option before it"
-  assert_equals "null" "$(jq -r '.options[1].detail' "$rec")" "an option needs no detail"
+  assert_equals '[{"label":"A: one camera"},{"label":"B: two cameras"}]' "$(jq -c '.options' "$rec")" "an option is its label alone"
   assert_equals "sections 5-7" "$(jq -r '.entries[0].attachments[0].label' "$rec")" "an attachment keeps its label"
   assert_equals "$(captain open w2 --identity | cut -d'#' -f1)" "$(jq -r '.holdSet' "$rec")" "the record belongs to this hold"
   captain context w2 --text-file "$HOME_DIR/raised.txt" --question "Which camera budget?" >/dev/null 2>&1 \
@@ -311,11 +310,11 @@ test_list_carries_the_context_payload() {
   make_home list-payload
   captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
   captain context w2 --text-file "$(say 'Camera: A, B or C?')" --question "Which camera?" \
-    --option "A" --detail "About 150 dollars" --option "B" --attach link=https://example.com/cx810 >/dev/null 2>&1 || fail "raise should succeed"
+    --option "A" --option "B" --attach link=https://example.com/cx810 >/dev/null 2>&1 || fail "raise should succeed"
   assert_equals '2' "$(entry w2 .revision)" "the raise reaches the Bridge"
   assert_equals '"Camera: A, B or C?"' "$(entry w2 '.entries[0].text')" "with the words as sent"
   assert_equals '"raised"' "$(entry w2 '.entries[0].kind')" "as the raise"
-  assert_equals '[{"label":"A","detail":"About 150 dollars"},{"label":"B"}]' "$(entry w2 .options)" "and the options"
+  assert_equals '[{"label":"A"},{"label":"B"}]' "$(entry w2 .options)" "and the options"
   assert_equals '"https://example.com/cx810"' "$(entry w2 '.entries[0].attachments[0].path')" "a link travels as given"
   captain context w2 --changed "Only the purchase is left" --text-file "$(say 'Buy one?')" \
     --attach picture=config/t3code-token >/dev/null 2>&1 || fail "update should succeed"
@@ -324,6 +323,26 @@ test_list_carries_the_context_payload() {
   assert_equals "\"$(cd "$HOME_DIR" && pwd -P)/config/t3code-token\"" "$(entry w2 '.entries[1].attachments[0].path')" \
     "a picture travels as an absolute path"
   pass "fm-t3-needs-me.sh: the raise and each update reach the Bridge with their words, options, and attachments"
+}
+
+test_list_drops_an_option_detail_from_an_older_record() {
+  make_home list-old-detail
+  local rec="$HOME_DIR/data/needs-me/w2.json" out rc
+  captain hold w2 --reason "Give the word to buy the camera" >/dev/null 2>&1 || fail "hold should succeed"
+  printf 'Camera: A or B?\n' > "$HOME_DIR/raised.txt"
+  captain context w2 --text-file "$HOME_DIR/raised.txt" --question "Which camera?" \
+    --option "A" --option "B" >/dev/null 2>&1 || fail "raise should succeed"
+  # A record written before options lost their detail still carries one.
+  jq '.options = [{label:"A", detail:"About 150 dollars"}, {label:"B", detail:null}]' "$rec" > "$rec.new" && mv "$rec.new" "$rec"
+  sync_now >/dev/null || fail "sync over the older record should succeed"
+  assert_equals '[{"label":"A"},{"label":"B"}]' "$(entry w2 .options)" "the older record syncs with its labels alone"
+  captain context w2 --text-file "$HOME_DIR/raised.txt" --question "Which camera?" \
+    --option "A" --option "B" >/dev/null 2>&1 || fail "an exact retry over the older record should succeed"
+  assert_equals 'About 150 dollars' "$(jq -r '.options[0].detail' "$rec")" "an exact retry leaves the older record as it was"
+  out=$(captain context w2 --changed "New prices" --text-file "$(say 'Still A or B?')" --option "A" --detail "x" 2>&1)
+  rc=$?
+  expect_code 2 "$rc" "an option takes no detail any more: $out"
+  pass "fm-t3-needs-me.sh: an older record's option detail is dropped on the way to the Bridge"
 }
 
 test_list_dated_hold_waits_until_its_date() {
@@ -883,6 +902,7 @@ test_list_carries_every_open_call
 test_list_with_only_blocked_calls_is_sent_once
 test_list_resend_keeps_the_captains_answer
 test_list_carries_the_context_payload
+test_list_drops_an_option_detail_from_an_older_record
 test_list_dated_hold_waits_until_its_date
 test_list_keeps_an_open_call_however_long_it_waits
 test_list_restores_what_t3_lost

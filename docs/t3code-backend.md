@@ -265,7 +265,7 @@ What FirstMate sends and relies on:
   T3 must answer with the same `replyTo` and exactly the ids and revisions sent.
 - Decision: `id` (the task id), `title`, `projectName`, `since`, `question`, `options`, `entries`, `revision`, and `wakeAt` for a deferred call.
   FirstMate always sends its own `revision`: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision.
-  `detail`, `changed`, and `label` are left out when absent, and an attachment's path is absolute, or a URL for a link.
+  An option is its `label` alone; `changed` and an attachment's `label` are left out when absent, and an attachment's path is absolute, or a URL for a link.
   Entries are oldest first, at most 12, each text at most 8192 bytes; `bin/fm-captain-hold.sh context` checks every other field against the fork's bounds when it records it.
 - Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
 

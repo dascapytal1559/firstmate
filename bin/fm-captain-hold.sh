@@ -23,7 +23,7 @@
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
 #   fm-captain-hold.sh context <task-id> --text-file <path> [--changed <one line>] \
-#     [--question <text>] [--option <label> [--detail <text>]]... \
+#     [--question <text>] [--option <label>]... \
 #     [--attach report|picture|link|file=<path-or-url> [--label <text>]]...
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -68,7 +68,7 @@
 # in data/needs-me/<task-id>.json, the only writer of that record (schema
 # fm-needs-me-context.v1). Without --changed it is the raise: the message
 # section exactly as sent (--text-file, at most 8192 bytes), the question, and
-# its options, each with an optional --detail. With --changed it appends an
+# its option labels. With --changed it appends an
 # update entry carrying that one-line "what changed" and the new message text,
 # and a --question or any --option given replaces the current one. Every write
 # bumps `revision`; an exact retry of the raise or of the newest update changes
@@ -80,8 +80,8 @@
 # up). The record keeps the raise and the newest updates, at most
 # NEEDS_ME_ENTRY_MAX entries. Only an open captain call takes a context. Every
 # field must fit T3's decision bounds, so a record never fails at its thread:
-# a question of at most 4000 characters, at most 12 options (label 200,
-# detail 2000), a what-changed line of 500, and at most 12 attachments
+# a question of at most 4000 characters, at most 12 options (label 200), a
+# what-changed line of 500, and at most 12 attachments
 # (path 2048, label 200).
 #
 # `answer` records the captain's exact words and resolves the call in the same
@@ -2349,14 +2349,8 @@ command_context() {  # <task-id> --text-file <path> [...]
       --option)
         shift
         validate_one_line option "${1:-}"; context_fits option "$1" 200
-        options=$(jq -c --arg l "$1" '. + [{label:$l, detail:null}]' <<< "$options")
+        options=$(jq -c --arg l "$1" '. + [{label:$l}]' <<< "$options")
         last_kind=option
-        ;;
-      --detail)
-        shift
-        [ "$last_kind" = option ] || fail "--detail follows the --option it describes"
-        validate_one_line detail "${1:-}"; context_fits detail "$1" 2000
-        options=$(jq -c --arg d "$1" '.[-1].detail = $d' <<< "$options")
         ;;
       --attach)
         shift
@@ -2424,7 +2418,7 @@ command_context() {  # <task-id> --text-file <path> [...]
         if $cur != null and any($cur.entries[]; .kind == "raised") then
           (first($cur.entries[] | select(.kind == "raised"))) as $raised
           | if $raised.text == $text and $cur.question == (if $haveQuestion == 1 then $question else $cur.question end)
-               and ($options == [] or $cur.options == $options)
+               and ($options == [] or ($cur.options | map({label})) == $options)
             then {unchanged:true, record:$cur}
             else error("already raised; record what changed with --changed")
             end

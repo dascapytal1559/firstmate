@@ -180,7 +180,7 @@ plan() {
           + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
           + (if ($r.hold_set // "") != "" then {since: ($r.hold_set | iso)} else {} end)
           + {question: ((($c.question // null) // $r.hold_reason)[:4000]),
-             options: [($c.options // [])[] | {label} + (if .detail then {detail} else {} end)],
+             options: [($c.options // [])[] | {label}],
              entries: [$entries[] | entry],
              revision: (($c.revision // 0) + 1)}
           + (if $r.hold_bucket == "dated" and $r.hold_until != null then {wakeAt: ($r.hold_until | iso)} else {} end)

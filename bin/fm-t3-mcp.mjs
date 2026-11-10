@@ -1943,7 +1943,7 @@ export function bridgeDecisionProblem(d) {
   if (d.wakeAt !== undefined && !time(d.wakeAt)) return `wakeAt ${d.wakeAt} is not a date`;
   if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
   if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o?.label, 200) || !optionalText(o?.detail, 2000)) return "an option needs a label of at most 200 characters and a detail of at most 2000";
+  for (const o of d.options) if (!text(o?.label, 200)) return "an option needs a label of at most 200 characters";
   if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
   for (const e of d.entries) {
     if (!time(e?.at)) return `entry time ${e?.at} is not a date`;

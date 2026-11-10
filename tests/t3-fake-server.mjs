@@ -339,7 +339,7 @@ function listDecisionProblem(d) {
   if ((d.since !== undefined && !time(d.since)) || (d.wakeAt !== undefined && !time(d.wakeAt))) return "since and wakeAt must be dates";
   if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
   if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o.label, 200) || !optionalText(o.detail, 2000)) return "an option needs a bounded label and detail";
+  for (const o of d.options) if (!text(o.label, 200)) return "an option needs a bounded label";
   if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
   for (const e of d.entries) {
     if (!time(e.at)) return `entry time ${e.at} is not a date`;
