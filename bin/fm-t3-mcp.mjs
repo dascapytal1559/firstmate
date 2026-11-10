@@ -23,9 +23,10 @@
 //     Credential expiry, the capability gate, whether a loopback server's
 //     own process runs with telemetry off (telemetry: off|on|unknown; the T3
 //     fork defaults it off, so only an explicit enable or an unreadable
-//     listener reads otherwise, and anything but off adds a stderr warning), and that process's identity
-//     (serverStart: "<pid>@<kernel start time>", null for a remote origin or
-//     an unreadable listener), which changes on every server restart, and
+//     listener reads otherwise, and anything but off adds a stderr warning),
+//     T3's restart identity (serverStartedAt from t3_restart_status, set once
+//     per server process; null where T3 offers no such tool or the read
+//     fails), and
 //     pendingRequestPush: whether t3_thread_wait declares
 //     settleOnPendingRequest (false adds a stderr warning, since watch then
 //     sees a new question or approval only at its next call). Changes
@@ -202,66 +203,45 @@
 //     by the thread reading back coordinator:true, else exit 1
 //     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
 //     harmless.
-//   fm-t3-mcp.mjs status-label --thread <id> [--label <text>]
-//     Makes the thread's crew card status read <text>, or carry none without
-//     --label, through t3_thread_update only when that changes it, so a repeat
-//     is harmless and a retry after a lost reply lands on the same label. A
-//     label is display only, never identity. T3's reply must name the new
-//     label, else exit 1 (status_label_unproven). A thread the verified server
-//     no longer has reads exists:false. An archived thread has no card, so it
-//     reads archived:true and always loses the label. A T3 whose
-//     t3_thread_update does not declare statusLabel has no label to clear, so
-//     only setting one refuses there: exit 4 (status_label_unsupported). That
-//     is checked here rather than in REQUIRED_TOOLS, so such a T3 costs only
-//     the label.
+//   fm-t3-mcp.mjs crew-status --file <json-file>
+//     One pass of bin/fm-t3-crew-status.sh over the crew cards, in one
+//     session. <json-file> is {cards: [{thread, between, working}]}: the
+//     status label a card should carry while its worker is between turns and
+//     while it works, "" for none, or null to leave the card as it is; other
+//     fields are ignored. Each thread is read once. It is working while T3 is
+//     preparing, queueing, starting, or running a turn with no pending
+//     request, and between turns when idle, completed, interrupted,
+//     cancelled, rolled back, or holding a pending request (the busy and idle
+//     split of fm_backend_t3code_state_row); a failed or unrecognized status
+//     leaves the card when the two labels differ. The label changes through
+//     t3_thread_update only when that changes it, so a repeat is harmless,
+//     T3 keeps the label's start time, and a retry after a lost reply lands on
+//     the same label; T3's reply must name the new label. A label is display
+//     only, never identity. An archived thread has no card and always loses
+//     its label. Answers {cards: [{thread, outcome, label}]} in input order,
+//     outcome one of set, cleared, unchanged, left, gone (a thread T3 no
+//     longer has), unsupported (a T3 whose t3_thread_update does not declare
+//     statusLabel, which therefore has no label to clear), or failed with its
+//     error; one card's failure never stops the others. The label is checked
+//     here rather than in REQUIRED_TOOLS, so such a T3 costs only the label.
 //   fm-t3-mcp.mjs decisions --file <json-file>
 //     One pass of bin/fm-t3-needs-me.sh sync over the captain's decisions
 //     (docs/t3code-backend.md "Bridge decisions"), in one session.
-//     <json-file> is {root, parent, list[], recorded[], items[]}: root is the
-//     home's absolute path; parent the FirstMate thread id the last pass
-//     found, or null. The FirstMate thread is the cached parent while it is
-//     still a live, worktree-less thread of the project rooted at root, else
-//     that project's one pinned coordinator, else thread-for-root's; with
-//     none the pass changes nothing and answers parent:null.
-//     Where tools/list offers t3_decisions_set, the pass is mode "list":
-//     list[] is every decision the Bridge shows, each {id, title,
-//     projectName?, since?, question, options[], entries[], revision,
-//     wakeAt?}, and it replaces T3's whole list in one t3_decisions_set call
-//     with replyTo the FirstMate thread. A decision outside T3's bounds is
-//     left out and named in rejected[] {id, problem}, so it never blocks the
-//     rest. T3 must answer with that replyTo and exactly the ids and
-//     revisions sent, else exit 1 (decisions_unproven). Only after that
-//     answer, each recorded[] {taskId, thread} (the decision threads an
-//     earlier pass made) is retired: its thread archived when it is still an
-//     unarchived decision thread, nothing when it is gone, archived, or none.
-//     Prints {mode, parent, projectId, decisions (T3's answer, each {id,
-//     revision, answered}), rejected[], migrated[] (each {taskId, ok} or ok
-//     false with its error)}.
-//     Otherwise the pass is mode "threads", the decision threads a T3
-//     without the list keeps (removed once no T3 lacks t3_decisions_set):
-//     each item {taskId, title, phase (active|snoozed|parked|closed|archived),
-//     snoozedUntil, decision (the payload), thread (its last known id, or
-//     null), generation, requestId, apply}. An item with no thread, or
-//     whose thread is gone or belongs to another FirstMate thread, gets a
-//     new agent-less thread
-//     (t3_thread_launch with decisionOf and decision, no message) under
-//     clientRequestId <requestId>:<generation>, the generation moving on
-//     only when a thread it had is replaced, so a retry after a lost reply
-//     lands on the thread T3 already made; it must read back as that
-//     parent's decision with the payload's revision and no run, else it is
-//     archived and the item fails. A closed item with no thread stays
-//     without one, and an archived item's thread is archived. With apply (or
-//     on a new thread) the payload is set (t3_thread_update set_decision) and
-//     the thread is unarchived, unsettled, unsnoozed, snoozed until
-//     snoozedUntil (with no date when it is null), or settled to match the
-//     phase, and read back to prove it.
-//     Without apply only a payload whose revision differs is set again, so a
-//     settle, snooze, or archive the captain made himself stands. Prints
-//     {mode, parent, projectId, items[]}, each item {taskId, ok, thread, generation, created, changed[]} or ok
-//     false with its error, still naming any thread it made. Exit 4
-//     (decisions_unsupported) when this T3 has neither t3_decisions_set nor
-//     decision threads (t3_thread_launch declaring decisionOf and
-//     t3_thread_update declaring decision).
+//     <json-file> is {root, parent, list[]}: root is the home's absolute
+//     path; parent the FirstMate thread id the last pass found, or null; and
+//     list[] every decision the Bridge shows, each {id, title, projectName?,
+//     since?, question, options[], entries[], revision, wakeAt?}. The
+//     FirstMate thread is the cached parent while it is still a live,
+//     worktree-less thread of the project rooted at root, else that
+//     project's one pinned coordinator, else thread-for-root's; with none the
+//     pass changes nothing and answers parent:null. Otherwise the list
+//     replaces T3's whole list in one t3_decisions_set call with replyTo the
+//     FirstMate thread. A decision outside T3's bounds is left out and named
+//     in rejected[] {id, problem}, so it never blocks the rest. T3 must
+//     answer with that replyTo and exactly the ids and revisions sent, else
+//     exit 1 (decisions_unproven). Prints {parent, projectId, decisions (T3's
+//     answer, each {id, revision, answered}), rejected[]}. Exit 4
+//     (decisions_unsupported) when this T3 has no t3_decisions_set.
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
 //     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
@@ -277,14 +257,52 @@
 //     t3_objectives_set (markdown null clears them). T3 must answer with
 //     exactly that markdown, else exit 1 (objectives_unproven). Exit 4
 //     (objectives_unsupported) when this T3 has no t3_objectives_set.
+//   fm-t3-mcp.mjs routing-payload --file <json-file>
+//     Local, no T3 call: the Bridge's model routing table
+//     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
+//     config/crew-dispatch.json. A Markdown bullet list, one item per profile
+//     of each rule in order, then one per default profile: the model
+//     ("harness · model · effort", a missing part left out) as inline code,
+//     a hard line break, then the When as plain text, marked
+//     "(captain approves)" when the rule's approval is "captain" and
+//     "Anything else" for a default profile. A rule's why is checked but not
+//     shown. Past 8192 characters every When is cut to one shared length,
+//     ending in an ellipsis; no item is dropped. A file without the fields
+//     the list needs (a rule's when and use, each profile's harness, string
+//     model and effort, a string why) exits 1 (routing_malformed) naming the
+//     first fault. Prints {markdown, rows, shortened (how many Whens were
+//     cut)}; no rows give markdown null.
+//   fm-t3-mcp.mjs routing --file <json-file>
+//     Replaces the Bridge's model routing table with <json-file>'s {markdown}
+//     through t3_routing_set (markdown null clears it). T3 must answer with
+//     exactly that markdown, else exit 1 (routing_unproven). Exit 4
+//     (routing_unsupported) when this T3 has no t3_routing_set.
+//   fm-t3-mcp.mjs rules-payload --file <json-file>
+//     Local, no T3 call: the Bridge's rules section (docs/t3code-backend.md
+//     "Rules"), from <json-file>, the home's data/rules/inventory.json
+//     ({rules[], pendingEdits[]?}). Every rule must hold to the T3 fork's
+//     t3_rules_set contract: exactly the fields id, group, source?, text,
+//     status ("approved" or "pending"), approvedOn? (YYYY-MM-DD, approved
+//     only) and recommendation (pending only, and required there: choice one
+//     of keep, keep-narrower, make-rule, fact, drop, a label, note?,
+//     proposedText?); ids distinct and made of [A-Za-z0-9._-] (the ids
+//     bin/fm-rules.sh records); at most 400 rules; text, note and
+//     proposedText at most 2000 characters. Anything else exits 1
+//     (rules_malformed) naming the first fault; nothing is cut. Prints
+//     {rules (the contract fields only, in file order), count, pending}.
+//   fm-t3-mcp.mjs rules --file <json-file>
+//     Replaces the Bridge's rules with <json-file>'s {rules} through
+//     t3_rules_set (an empty list clears them). T3 answers with counts
+//     {rules, pending, sent}; rules must be the number of rules sent and
+//     pending the number of those pending, else exit 1 (rules_unproven).
+//     Exit 4 (rules_unsupported) when this T3 has no t3_rules_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
 // with FM_HOME defaulting to this repository.
 //
 // The capability gate (every verb, login included) runs tools/list and refuses
-// unless all of REQUIRED_TOOLS and t3_environment_read are present and each
-// TOOL_FAMILIES capability is met by its current or earlier tools, then reads
+// unless all of REQUIRED_TOOLS and t3_environment_read are present, then reads
 // t3_environment_read and refuses unless its environmentId equals the one
 // recorded at sign-in, so a different T3 on the same origin is never driven
 // with this credential.
@@ -326,27 +344,13 @@ export const REQUIRED_TOOLS = [
   "t3_thread_list",
   "t3_project_list",
   "t3_project_create",
+  // Called with only threadId, the read of a thread's binding (this helper
+  // never sends modelSelection).
+  "t3_thread_configure",
+  // action list|read|respond.
+  "t3_pending_request",
   "orchestrator_capabilities",
 ];
-// T3 0.1.3 merged two tool families. Each capability below is met by one
-// complete family, tried in `prefer` order, so one helper drives T3 before
-// and after the merge. The gate records the family it found on the session,
-// and the call sites go through threadConfiguration and pendingRequest.
-//   configuration: earlier T3 reads a thread's binding with
-//     t3_thread_configuration and also lists t3_thread_configure, which there
-//     requires modelSelection and only writes, so the dedicated read wins
-//     whenever T3 lists it. From 0.1.3, t3_thread_configure called with only
-//     threadId is the read (this helper never sends modelSelection).
-//   pendingRequests: t3_pending_request with action list|read|respond;
-//     earlier T3 served t3_pending_request_list|read|respond.
-export const TOOL_FAMILIES = {
-  configuration: { prefer: ["earlier", "current"], current: ["t3_thread_configure"], earlier: ["t3_thread_configuration"] },
-  pendingRequests: {
-    prefer: ["current", "earlier"],
-    current: ["t3_pending_request"],
-    earlier: ["t3_pending_request_list", "t3_pending_request_read", "t3_pending_request_respond"],
-  },
-};
 const ENVIRONMENT_TOOL = "t3_environment_read";
 const EXPIRY_WARN_DAYS = 5;
 const DAY_MS = 86_400_000;
@@ -383,6 +387,9 @@ const APPROVAL_FEATURE = "approvalResponses";
 // t3_thread_configure coordinator and sends every pinned coordinator one
 // restart note after each server start (the T3 Code fork).
 const COORDINATOR_FEATURE = "coordinatorRestartNote";
+// The T3 Code fork's restart registry read, whose serverStartedAt is set once
+// per server process.
+const RESTART_STATUS_TOOL = "t3_restart_status";
 // The pairing code must cover every scope T3 grants a full-access mcp-client:
 // T3 0.1.0 adds settings:write and source-control:write to the read and
 // operate scopes of the 0.0.46 nightlies, and refuses a code that lacks one.
@@ -705,12 +712,6 @@ export async function gate(session, cred) {
   const names = new Set((listed?.tools ?? []).map((t) => t.name));
   const version = server?.serverInfo?.version ?? null;
   const missing = REQUIRED_TOOLS.filter((t) => !names.has(t));
-  const families = {};
-  for (const [capability, family] of Object.entries(TOOL_FAMILIES)) {
-    const found = family.prefer.find((generation) => family[generation].every((t) => names.has(t)));
-    if (found) families[capability] = found;
-    else missing.push(`${family.current.join(", ")} (or ${family.earlier.join(", ")})`);
-  }
   if (missing.length) {
     throw new Refusal(
       "capability_gate",
@@ -733,9 +734,8 @@ export async function gate(session, cred) {
       { environmentId, expected: cred.environment_id },
     );
   }
-  session.toolFamilies = families;
   session.toolSchemas = new Map((listed?.tools ?? []).map((t) => [t.name, t.inputSchema ?? {}]));
-  return { serverVersion: version, environmentId, serverVersionReported: envRead?.serverVersion ?? null, tools: [...names].sort(), toolFamilies: families };
+  return { serverVersion: version, environmentId, serverVersionReported: envRead?.serverVersion ?? null, tools: [...names].sort() };
 }
 
 // Whether the server's tools/list schema for <tool> declares <property>: T3
@@ -746,18 +746,8 @@ function toolOffers(session, tool, property) {
   return Boolean(props && typeof props === "object" && Object.hasOwn(props, property));
 }
 
-// A thread's recorded binding (modelSelection, runtimeMode, and on a server
-// with per-thread facts environment, instructions, effectiveRuntimeMode), read
-// through the configuration family the gate found.
-function threadConfiguration(session, threadId) {
-  if (session.toolFamilies?.configuration === "earlier") return session.call("t3_thread_configuration", { threadId });
-  return session.call("t3_thread_configure", { threadId });
-}
-
-// One pending-request action (list, read, or respond), through the family
-// the gate found.
+// One pending-request action: list, read, or respond.
 function pendingRequest(session, action, args, opts) {
-  if (session.toolFamilies?.pendingRequests === "earlier") return session.call(`t3_pending_request_${action}`, args, opts);
   return session.call("t3_pending_request", { action, ...args }, opts);
 }
 
@@ -787,39 +777,29 @@ function isNotFound(err) {
 // reads on. Only a loopback server's own process environment can show that,
 // read from the listening process on this machine; anything else reads
 // `unknown`.
-export function telemetryState(listener) {
-  if (listener === null) return "unknown";
-  const m = listener.env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
-  if (!m) return "off";
-  return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
-}
-
-// The one process listening on a loopback origin's port on this machine: its
-// pid, its kernel start time, and its environment. `serverStart` joins the
-// first two, so a restarted server always reads a new value
-// (bin/fm-t3-restart.sh compares it); a remote origin, no single listener, or
-// an unreadable process reads null.
-export function loopbackListener(origin, probe = probeListener) {
+export function telemetryState(origin, probe = probeListenerEnv) {
   let url;
   try {
     url = new URL(origin);
   } catch {
-    return null;
+    return "unknown";
   }
-  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return null;
-  return probe(url.port || (url.protocol === "https:" ? "443" : "80"));
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return "unknown";
+  const env = probe(url.port || (url.protocol === "https:" ? "443" : "80"));
+  if (env === null) return "unknown";
+  const m = env.match(/(?:^|\s|\0)T3CODE_TELEMETRY_ENABLED=([^\s\0]*)/);
+  if (!m) return "off";
+  return /^(false|0|no|off)$/i.test(m[1]) ? "off" : "on";
 }
 
-function probeListener(port) {
-  const run = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+function probeListenerEnv(port) {
   try {
-    const pids = run("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]).split("\n").filter(Boolean);
+    const pids = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n")
+      .filter(Boolean);
     if (pids.length !== 1) return null;
-    const pid = pids[0];
-    const startedAt = run("ps", ["-o", "lstart=", "-p", pid]).trim().replace(/\s+/g, " ");
-    if (!startedAt) return null;
-    const env = process.platform === "linux" ? readFileSync(`/proc/${pid}/environ`, "utf8") : run("ps", ["eww", "-o", "command=", "-p", pid]);
-    return { pid: Number(pid), startedAt, env };
+    if (process.platform === "linux") return readFileSync(`/proc/${pids[0]}/environ`, "utf8");
+    return execFileSync("ps", ["eww", "-o", "command=", "-p", pids[0]], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   } catch {
     return null;
   }
@@ -911,10 +891,15 @@ async function status(flags) {
   if (!pendingRequestPush) {
     process.stderr.write(`warning: T3 at ${cred.origin} lacks t3_thread_wait ${PENDING_PUSH_FLAG}, so a worker's new question or approval reaches Firstmate only at the next poll; install the current T3 Code fork (docs/t3code-backend.md)\n`);
   }
-  const listener = loopbackListener(cred.origin);
-  const telemetry = telemetryState(listener);
+  const telemetry = telemetryState(cred.origin);
   if (telemetry !== "off") {
     process.stderr.write(`warning: T3 telemetry at ${cred.origin} is ${telemetry === "on" ? "on" : "not confirmed off"}; run the server that hosts Firstmate workers with T3CODE_TELEMETRY_ENABLED=false (docs/t3code-backend.md)\n`);
+  }
+  // T3's restart identity, which bin/fm-t3-restart.sh compares.
+  let serverStartedAt = null;
+  if (g.tools.includes(RESTART_STATUS_TOOL)) {
+    const s = await session.call(RESTART_STATUS_TOOL, {}).catch(() => null);
+    if (typeof s?.serverStartedAt === "string" && s.serverStartedAt) serverStartedAt = s.serverStartedAt;
   }
   return {
     ok: true,
@@ -926,7 +911,7 @@ async function status(flags) {
     serverVersion: g.serverVersion,
     recordedServerVersion: cred.server_version ?? null,
     telemetry,
-    serverStart: listener ? `${listener.pid}@${listener.startedAt}` : null,
+    serverStartedAt,
     pendingRequestPush,
     ...(cred.warning ? { credentialWarning: cred.warning } : {}),
   };
@@ -1293,7 +1278,7 @@ async function launch(flags) {
   let config;
   try {
     t = threadOf(await session.call("t3_thread_read", { threadId: out.threadId, limit: 1, runLimit: 1 }));
-    config = await threadConfiguration(session, out.threadId);
+    config = await session.call("t3_thread_configure", { threadId: out.threadId });
   } catch (e) {
     const archived = await archiveLaunched();
     throw new Refusal(
@@ -1881,25 +1866,65 @@ async function pinCoordinator(flags) {
   return { ok: true, pinned: true, threadId };
 }
 
-async function statusLabel(flags) {
-  const threadId = need(flags, "thread");
-  const { session } = await verifiedSession(flags);
+const CREW_WORKING = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+const CREW_BETWEEN = new Set(["idle", "completed", "interrupted", "cancelled", "rolled_back"]);
+
+// The label <card> wants on thread <t>: a string, null for none, or
+// undefined to leave the card as it is.
+function crewCardLabel(t, card) {
+  if (t.archived === true || Boolean(t.archivedAt)) return null;
+  let want;
+  if (card.between === card.working) want = card.between;
+  else if ((t.pendingRequestCount ?? 0) > 0 || CREW_BETWEEN.has(t.status)) want = card.between;
+  else if (CREW_WORKING.has(t.status)) want = card.working;
+  if (want === null || want === undefined) return undefined;
+  return want === "" ? null : want;
+}
+
+async function crewCard(session, card) {
+  const threadId = card.thread;
   let t;
   try {
     t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
   } catch (err) {
-    if (isNotFound(err)) return { ok: true, threadId, exists: false, changed: false };
+    if (isNotFound(err)) return { thread: threadId, outcome: "gone" };
     throw err;
   }
-  const archived = t.archived === true || Boolean(t.archivedAt);
-  const label = archived ? null : flags.label ?? null;
-  if (label === (t.statusLabel ?? null)) return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: false };
-  if (!toolOffers(session, "t3_thread_update", "statusLabel")) throw new Refusal("status_label_unsupported", "this T3 has no crew card status label", 4, { threadId });
+  const current = t.statusLabel ?? null;
+  const label = crewCardLabel(t, card);
+  if (label === undefined) return { thread: threadId, outcome: "left", label: current };
+  if (label === current) return { thread: threadId, outcome: "unchanged", label };
+  if (!toolOffers(session, "t3_thread_update", "statusLabel")) return { thread: threadId, outcome: "unsupported", label: current };
   const out = await session.call("t3_thread_update", label === null
     ? { threadId, action: "clear_status_label" }
     : { threadId, action: "set_status_label", statusLabel: label });
-  if ((out?.statusLabel ?? null) !== label) throw new Refusal("status_label_unproven", `T3 accepted the status label of ${threadId} but answered with a different one`, 1, { threadId });
-  return { ok: true, threadId, exists: true, archived, statusLabel: label, changed: true };
+  if ((out?.statusLabel ?? null) !== label) throw new Refusal("status_label_unproven", `T3 accepted the status label of ${threadId} but answered with a different one`, 1);
+  return { thread: threadId, outcome: label === null ? "cleared" : "set", label };
+}
+
+async function crewStatus(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  const labelOk = (v) => v === null || typeof v === "string";
+  if (!Array.isArray(input?.cards) || !input.cards.every((c) => typeof c?.thread === "string" && labelOk(c.between) && labelOk(c.working))) {
+    usage("--file needs cards[], each {thread, between, working} with a label, \"\", or null");
+  }
+  const { session } = await verifiedSession(flags);
+  const cards = [];
+  for (const card of input.cards) {
+    try {
+      cards.push(await crewCard(session, card));
+    } catch (err) {
+      if (err instanceof Refusal && err.exit === 2) throw err;
+      const r = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
+      cards.push({ thread: card.thread, outcome: "failed", error: { code: r.code, message: r.message } });
+    }
+  }
+  return { ok: true, cards };
 }
 
 // --- Bridge decisions (docs/t3code-backend.md "Bridge decisions") ---------
@@ -1921,7 +1946,7 @@ export function bridgeDecisionProblem(d) {
   if (d.wakeAt !== undefined && !time(d.wakeAt)) return `wakeAt ${d.wakeAt} is not a date`;
   if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
   if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o?.label, 200) || !optionalText(o?.detail, 2000)) return "an option needs a label of at most 200 characters and a detail of at most 2000";
+  for (const o of d.options) if (!text(o?.label, 200)) return "an option needs a label of at most 200 characters";
   if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
   for (const e of d.entries) {
     if (!time(e?.at)) return `entry time ${e?.at} is not a date`;
@@ -1933,80 +1958,7 @@ export function bridgeDecisionProblem(d) {
   return null;
 }
 
-// Retire one decision thread an earlier pass made: archived when it is still
-// an unarchived decision thread; a thread that is gone, already archived, or
-// not a decision thread is left as it is.
-async function retireDecisionThread(session, threadId) {
-  if (!threadId) return { thread: null, archived: false };
-  let t;
-  try {
-    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
-  } catch (err) {
-    if (isNotFound(err)) return { thread: threadId, archived: false, missing: true };
-    throw err;
-  }
-  if ((t.decisionOf ?? null) === null || isArchived(t)) return { thread: threadId, archived: false };
-  await archiveThread(session, threadId, ARCHIVE_TIMEOUT_MS);
-  return { thread: threadId, archived: true };
-}
-
-// The list pass: one t3_decisions_set call carrying every decision the Bridge
-// shows, proven by T3's answer, then the one-time retirement of the decision
-// threads still on record.
-async function decisionList(session, input) {
-  const parent = await decisionParent(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, mode: "list", parent: null, projectId: null, decisions: [], rejected: [], migrated: [] };
-  const rejected = [];
-  const sent = [];
-  const seen = new Set();
-  for (const d of input.list) {
-    let problem = bridgeDecisionProblem(d);
-    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
-    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
-    if (problem) {
-      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
-      continue;
-    }
-    seen.add(d.id);
-    sent.push(d);
-  }
-  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
-  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
-  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
-  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
-  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
-    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
-  }
-  const migrated = [];
-  for (const r of input.recorded) {
-    try {
-      migrated.push({ taskId: r.taskId, ok: true, ...(await retireDecisionThread(session, r.thread ?? null)) });
-    } catch (err) {
-      const e = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
-      migrated.push({ taskId: r.taskId, ok: false, thread: r.thread ?? null, error: { code: e.code, message: e.message } });
-    }
-  }
-  return { ok: true, mode: "list", parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected, migrated };
-}
-
-// --- decision threads, for a T3 without t3_decisions_set -------------------
-// Removed once no T3 lacks the list (the T3 Code fork's build 2 drops them).
-
-// Where each phase leaves a decision thread: active needs the captain (top
-// level), snoozed waits for its date, parked and closed sit in Settled.
-const DECISION_PHASES = new Set(["active", "snoozed", "parked", "closed", "archived"]);
 const isArchived = (t) => t.archived === true || Boolean(t.archivedAt);
-const sameInstant = (a, b) => (a ?? null) === (b ?? null) || (a != null && b != null && Date.parse(a) === Date.parse(b));
-
-function decisionShapeProblem(t, phase, snoozedUntil) {
-  const settled = t.settled === true;
-  const snoozed = t.snoozed === true;
-  if (isArchived(t)) return "archived";
-  if (phase === "active" && (settled || snoozed)) return settled ? "settled" : "snoozed";
-  if (phase === "snoozed" && (settled || !snoozed || !sameInstant(t.snoozedUntil, snoozedUntil))) return `snoozed=${snoozed} until ${t.snoozedUntil ?? null}`;
-  if ((phase === "parked" || phase === "closed") && (!settled || snoozed)) return `settled=${settled} snoozed=${snoozed}`;
-  return null;
-}
 
 // The FirstMate thread decisions belong to: the cached id while it is still a
 // live, worktree-less thread of the project rooted at <root>; else that
@@ -2016,7 +1968,7 @@ async function decisionParent(session, rootPath, cached) {
   const project = await projectForRoot(session, rootPath);
   if (!project) return null;
   const usable = (t) => t.projectId === project.id && !isArchived(t) && (t.worktreePath ?? null) === null
-    && (t.relationshipToParent ?? null) === null && (t.decisionOf ?? null) === null;
+    && (t.relationshipToParent ?? null) === null;
   if (cached) {
     try {
       const t = threadOf(await session.call("t3_thread_read", { threadId: cached, limit: 1, runLimit: 1 }));
@@ -2042,104 +1994,8 @@ async function decisionParent(session, rootPath, cached) {
   }
 }
 
-async function organize(session, threadId, action, extra = {}) {
-  await session.call("t3_thread_organize", { threadId, action, ...extra });
-  return action;
-}
-
-// One decision item: create its thread when it has none, then, when the item
-// says apply (its wanted state changed since the last proven pass) or the
-// thread is new, bring the payload and the thread's place in line with the
-// phase and prove it by a read-back. Without apply only a lost payload is
-// restored, so the captain's own settle, snooze, or archive stands until
-// Firstmate's records change.
-async function decisionItem(session, parent, it, result) {
-  if (!DECISION_PHASES.has(it.phase)) throw new Refusal("usage", `item ${it.taskId} has unknown phase ${it.phase}`, 2);
-  let t = null;
-  if (it.thread) {
-    try {
-      t = threadOf(await session.call("t3_thread_read", { threadId: it.thread, limit: 1, runLimit: 1 }));
-    } catch (err) {
-      if (!isNotFound(err)) throw err;
-    }
-  }
-  if (it.phase === "archived") {
-    if (t && (t.decisionOf ?? null) !== null && !isArchived(t)) {
-      await archiveThread(session, it.thread, ARCHIVE_TIMEOUT_MS);
-      result.changed.push("archive");
-    }
-    result.thread = null;
-    return result;
-  }
-  // A thread that is gone, or no longer a decision of this FirstMate thread,
-  // is replaced: the old one (when it is a decision) is archived, and the new
-  // one gets the next generation's request id, since T3 would answer the old
-  // id with the thread it already made.
-  if (t && (t.decisionOf ?? null) !== parent.threadId) {
-    if ((t.decisionOf ?? null) !== null && !isArchived(t)) {
-      await archiveThread(session, it.thread, ARCHIVE_TIMEOUT_MS);
-      result.changed.push("archive-moved");
-    }
-    t = null;
-  }
-  let apply = it.apply === true;
-  if (!t) {
-    if (it.phase === "closed") {
-      result.thread = null;
-      return result;
-    }
-    if (it.thread) result.generation += 1;
-    const out = await session.call("t3_thread_launch", {
-      projectId: parent.projectId,
-      title: it.title,
-      decisionOf: parent.threadId,
-      decision: it.decision,
-      clientRequestId: `${it.requestId}:${result.generation}`,
-    });
-    if (!out?.threadId) throw new Refusal("launch_unconfirmed", "t3_thread_launch returned no threadId; the next pass retries with the same request id", 1);
-    result.thread = out.threadId;
-    result.created = true;
-    result.changed.push("create");
-    t = threadOf(await session.call("t3_thread_read", { threadId: out.threadId, limit: 1, runLimit: 1 }));
-    if ((t.decisionOf ?? null) !== parent.threadId || (t.decision?.revision ?? null) !== it.decision.revision
-      || (t.latestRunId ?? null) !== null || (t.activeRunId ?? null) !== null) {
-      const archived = await archiveThread(session, out.threadId, ARCHIVE_TIMEOUT_MS).then((r) => r.archived === true, () => false);
-      // Never reused: the next try makes a new thread under the next id.
-      result.thread = null;
-      result.generation += 1;
-      throw new Refusal("decision_unproven", `T3 made thread ${out.threadId} but it does not read back as an agent-less decision of ${parent.threadId}; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`, 1, { threadId: out.threadId });
-    }
-    apply = true;
-  } else if (apply || (t.decision?.revision ?? null) !== it.decision.revision) {
-    const out = await session.call("t3_thread_update", { threadId: it.thread, action: "set_decision", decision: it.decision });
-    const stored = out?.decisionRevision ?? out?.decision?.revision ?? null;
-    if (stored !== it.decision.revision) {
-      throw new Refusal("decision_unproven", `T3 accepted the decision of ${it.thread} but answered with revision ${stored}`, 1, { threadId: it.thread });
-    }
-    result.changed.push("set_decision");
-  }
-  if (!apply) return result;
-  const id = result.thread;
-  if (isArchived(t)) result.changed.push(await organize(session, id, "unarchive"));
-  if (it.phase === "active" || it.phase === "snoozed") {
-    if (t.settled === true) result.changed.push(await organize(session, id, "unsettle"));
-  }
-  if (it.phase === "active" && t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
-  if (it.phase === "snoozed" && !(t.snoozed === true && sameInstant(t.snoozedUntil, it.snoozedUntil))) {
-    result.changed.push(await organize(session, id, "snooze", it.snoozedUntil ? { snoozedUntil: it.snoozedUntil } : {}));
-  }
-  if (it.phase === "parked" || it.phase === "closed") {
-    if (t.snoozed === true) result.changed.push(await organize(session, id, "unsnooze"));
-    if (t.settled !== true) result.changed.push(await organize(session, id, "settle"));
-  }
-  if (result.changed.length) {
-    const back = threadOf(await session.call("t3_thread_read", { threadId: id, limit: 1, runLimit: 1 }));
-    const problem = decisionShapeProblem(back, it.phase, it.snoozedUntil);
-    if (problem) throw new Refusal("decision_unproven", `decision thread ${id} reads back ${problem}, not ${it.phase}`, 1, { threadId: id });
-  }
-  return result;
-}
-
+// One pass: one t3_decisions_set call carrying every decision the Bridge
+// shows, proven by T3's answer.
 async function decisions(flags) {
   let input;
   try {
@@ -2147,30 +2003,35 @@ async function decisions(flags) {
   } catch (err) {
     usage(`--file is not readable JSON: ${err.message}`);
   }
-  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root)
-    || !Array.isArray(input.items) || !Array.isArray(input.list) || !Array.isArray(input.recorded)) {
-    usage("--file needs root (an absolute path), list[], recorded[], and items[]");
+  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root) || !Array.isArray(input.list)) {
+    usage("--file needs root (an absolute path) and list[]");
   }
   const { session } = await verifiedSession(flags);
-  if (session.toolSchemas.has("t3_decisions_set")) return decisionList(session, input);
-  if (!toolOffers(session, "t3_thread_launch", "decisionOf") || !toolOffers(session, "t3_thread_update", "decision")) {
-    throw new Refusal("decisions_unsupported", "this T3 has neither a decision list nor decision threads", 4);
-  }
+  if (!session.toolSchemas.has("t3_decisions_set")) throw new Refusal("decisions_unsupported", "this T3 has no t3_decisions_set", 4);
   const parent = await decisionParent(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, mode: "threads", parent: null, projectId: null, items: [] };
-  const items = [];
-  for (const it of input.items) {
-    // Shared with decisionItem, so a failure still reports a thread it made.
-    const result = { taskId: it.taskId, ok: true, thread: it.thread ?? null, generation: it.generation ?? 0, created: false, changed: [] };
-    try {
-      items.push(await decisionItem(session, parent, it, result));
-    } catch (err) {
-      if (err instanceof Refusal && err.exit === 2) throw err;
-      const r = err instanceof Refusal ? err : new Refusal("unexpected", err?.message ?? String(err), 1);
-      items.push({ ...result, ok: false, error: { code: r.code, message: r.message, ...r.extra } });
+  if (!parent) return { ok: true, parent: null, projectId: null, decisions: [], rejected: [] };
+  const rejected = [];
+  const sent = [];
+  const seen = new Set();
+  for (const d of input.list) {
+    let problem = bridgeDecisionProblem(d);
+    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
+    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
+    if (problem) {
+      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
+      continue;
     }
+    seen.add(d.id);
+    sent.push(d);
   }
-  return { ok: true, mode: "threads", parent: parent.threadId, projectId: parent.projectId, items };
+  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
+  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
+  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
+  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
+  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
+    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
+  }
+  return { ok: true, parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected };
 }
 
 // --- objectives (docs/t3code-backend.md "Objectives") ---------------------
@@ -2270,6 +2131,225 @@ async function objectives(flags) {
   return { ok: true, objectives: got };
 }
 
+// --- model routing (docs/t3code-backend.md "Model routing") ---------------
+
+export const ROUTING_MAX = 8192;
+
+// One line of text, its runs of whitespace collapsed.
+const oneLine = (text) => String(text).replace(/\s+/g, " ").trim();
+
+// <text> as an inline code span, its fence longer than any backtick run inside.
+function inlineCode(text) {
+  const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+// <text> as a list item's continuation line that cannot open a heading, list,
+// quote or rule of its own.
+const plainLine = (text) => text.replace(/^([#>+*=-])/, "\\$1").replace(/^(\d+)([.)])/, "$1\\$2");
+
+// The routing rows of a config/crew-dispatch.json value, or a Refusal naming
+// the first field the table needs that is missing or of the wrong type.
+function routingRows(source) {
+  const bad = (what) => {
+    throw new Refusal("routing_malformed", `config/crew-dispatch.json: ${what}`, 1);
+  };
+  if (source === null || typeof source !== "object" || Array.isArray(source)) bad("the top-level value must be an object");
+  const profiles = (value, where) => {
+    const list = Array.isArray(value) ? value : value !== null && typeof value === "object" ? [value] : null;
+    if (!list || list.length === 0) bad(`${where} needs a profile object or a non-empty profile array`);
+    return list.map((p, i) => {
+      const at = list.length > 1 || Array.isArray(value) ? `${where}[${i}]` : where;
+      if (p === null || typeof p !== "object" || Array.isArray(p)) bad(`${at} must be an object`);
+      if (typeof p.harness !== "string" || !p.harness.trim()) bad(`${at} needs harness`);
+      for (const k of ["model", "effort"]) {
+        if (p[k] !== undefined && (typeof p[k] !== "string" || !p[k].trim())) bad(`${at}.${k} must be non-empty text`);
+      }
+      return { harness: p.harness, model: p.model ?? "", effort: p.effort ?? "" };
+    });
+  };
+  const rules = source.rules ?? [];
+  if (!Array.isArray(rules)) bad("rules must be an array");
+  const rows = [];
+  rules.forEach((r, i) => {
+    if (r === null || typeof r !== "object" || Array.isArray(r)) bad(`rules[${i}] must be an object`);
+    if (typeof r.when !== "string" || !r.when.trim()) bad(`rules[${i}] needs when`);
+    if (r.why !== undefined && typeof r.why !== "string") bad(`rules[${i}].why must be text`);
+    const when = r.approval === "captain" ? `${r.when.trim()} (captain approves)` : r.when;
+    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when, ...p });
+  });
+  if (source.default !== undefined) {
+    for (const p of profiles(source.default, "default")) rows.push({ when: "Anything else", ...p });
+  }
+  return rows;
+}
+
+// The Bridge's routing list from a config/crew-dispatch.json value: one list
+// item per row, its model as inline code, then a hard line break and its When
+// as plain text. A row's Why is validated but not shown.
+export function routingPayload(source) {
+  const rows = routingRows(source).map((r) => ({
+    model: inlineCode([r.harness, r.model, r.effort].map(oneLine).filter(Boolean).join(" · ")),
+    when: oneLine(r.when),
+  }));
+  if (rows.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
+  // A cut never ends in a lone backslash, which would escape the ellipsis.
+  const cut = (text, cap) => (text.length <= cap ? text : cutText(text, cap).replace(/\\+…$/, "…"));
+  const item = (r, cap) => {
+    const when = cut(r.when, cap);
+    return when ? `- ${r.model}\\\n  ${plainLine(when)}` : `- ${r.model}`;
+  };
+  const render = (cap) => rows.map((r) => item(r, cap)).join("\n");
+  // The longest shared When length that fits.
+  let lo = 0;
+  let hi = Math.max(...rows.map((r) => r.when.length));
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (render(mid).length <= ROUTING_MAX) lo = mid;
+    else hi = mid - 1;
+  }
+  const markdown = render(lo);
+  if (markdown.length > ROUTING_MAX) {
+    throw new Refusal("routing_too_long", `the routing list needs ${markdown.length} characters even with every When cut, past T3's ${ROUTING_MAX}`, 1);
+  }
+  const shortened = rows.filter((r) => r.when.length > lo).length;
+  return { ok: true, markdown, rows: rows.length, shortened };
+}
+
+async function routingPayloadVerb(flags) {
+  let source;
+  try {
+    source = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    throw new Refusal("routing_malformed", `config/crew-dispatch.json is not readable JSON: ${err.message}`, 1);
+  }
+  return routingPayload(source);
+}
+
+async function routing(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  const markdown = input?.markdown ?? null;
+  if (markdown !== null && (typeof markdown !== "string" || !markdown.trim() || markdown !== markdown.trim() || markdown.length > ROUTING_MAX)) {
+    usage(`--file markdown must be null or trimmed, non-empty text of at most ${ROUTING_MAX} characters`);
+  }
+  const { session } = await verifiedSession(flags);
+  if (!session.toolSchemas.has("t3_routing_set")) throw new Refusal("routing_unsupported", "this T3 has no Bridge model routing", 4);
+  const out = await session.call("t3_routing_set", { markdown });
+  const got = out?.modelRouting ?? null;
+  const same = markdown === null ? got === null : got !== null && got.markdown === markdown;
+  if (!same) throw new Refusal("routing_unproven", "T3 accepted the routing table but answered with a different one", 1);
+  return { ok: true, modelRouting: got };
+}
+
+// --- rules (docs/t3code-backend.md "Rules") --------------------------------
+
+export const RULES_MAX = 400;
+export const RULE_TEXT_MAX = 2000;
+const RULE_FIELDS = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
+const RECOMMENDATION_FIELDS = new Set(["choice", "label", "note", "proposedText"]);
+export const RULE_CHOICES = ["keep", "keep-narrower", "make-rule", "fact", "drop"];
+const RULE_ID = /^[A-Za-z0-9._-]+$/;
+
+// The t3_rules_set list from a data/rules/inventory.json value, or a Refusal
+// naming the first fault. Nothing is cut: a rule out of bounds is refused.
+export function rulesPayload(source) {
+  const bad = (what) => {
+    throw new Refusal("rules_malformed", `data/rules/inventory.json: ${what}`, 1);
+  };
+  const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const text = (v) => typeof v === "string" && v.trim() !== "";
+  if (!isObject(source)) bad("the top-level value must be an object");
+  const extra = Object.keys(source).find((k) => k !== "rules" && k !== "pendingEdits");
+  if (extra !== undefined) bad(`unknown top-level field ${extra}`);
+  if (!Array.isArray(source.rules)) bad("rules must be an array");
+  if (source.pendingEdits !== undefined && !Array.isArray(source.pendingEdits)) bad("pendingEdits must be an array");
+  if (source.rules.length > RULES_MAX) bad(`${source.rules.length} rules, past the ${RULES_MAX} the Bridge takes`);
+  const seen = new Set();
+  const rules = source.rules.map((r, i) => {
+    const at = `rules[${i}]${isObject(r) && text(r.id) ? ` (${r.id})` : ""}`;
+    if (!isObject(r)) bad(`${at} must be an object`);
+    const unknown = Object.keys(r).find((k) => !RULE_FIELDS.has(k));
+    if (unknown !== undefined) bad(`${at} has unknown field ${unknown}`);
+    if (typeof r.id !== "string" || !RULE_ID.test(r.id)) bad(`${at}.id must be letters, digits, dots, underscores or hyphens`);
+    if (seen.has(r.id)) bad(`${at} repeats id ${r.id}`);
+    seen.add(r.id);
+    if (!text(r.group)) bad(`${at} needs group`);
+    if (r.source !== undefined && !text(r.source)) bad(`${at}.source must be non-empty text`);
+    if (!text(r.text)) bad(`${at} needs text`);
+    if (r.text.length > RULE_TEXT_MAX) bad(`${at}.text is ${r.text.length} characters, past ${RULE_TEXT_MAX}`);
+    if (r.status !== "approved" && r.status !== "pending") bad(`${at}.status must be "approved" or "pending"`);
+    const out = { id: r.id, group: r.group };
+    if (r.source !== undefined) out.source = r.source;
+    out.text = r.text;
+    out.status = r.status;
+    if (r.status === "approved") {
+      if (r.recommendation !== undefined) bad(`${at} is approved, so it takes no recommendation`);
+      if (r.approvedOn !== undefined) {
+        const m = typeof r.approvedOn === "string" && /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.approvedOn);
+        const day = m && new Date(`${r.approvedOn}T00:00:00Z`);
+        if (!m || Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== r.approvedOn) bad(`${at}.approvedOn must be a YYYY-MM-DD date`);
+        out.approvedOn = r.approvedOn;
+      }
+      return out;
+    }
+    if (r.approvedOn !== undefined) bad(`${at} is pending, so it takes no approvedOn`);
+    const rec = r.recommendation;
+    if (!isObject(rec)) bad(`${at} is pending, so it needs a recommendation`);
+    const unknownRec = Object.keys(rec).find((k) => !RECOMMENDATION_FIELDS.has(k));
+    if (unknownRec !== undefined) bad(`${at}.recommendation has unknown field ${unknownRec}`);
+    if (!RULE_CHOICES.includes(rec.choice)) bad(`${at}.recommendation.choice must be one of ${RULE_CHOICES.join(", ")}`);
+    if (!text(rec.label)) bad(`${at}.recommendation needs label`);
+    out.recommendation = { choice: rec.choice, label: rec.label };
+    for (const k of ["note", "proposedText"]) {
+      if (rec[k] === undefined) continue;
+      if (!text(rec[k])) bad(`${at}.recommendation.${k} must be non-empty text`);
+      if (rec[k].length > RULE_TEXT_MAX) bad(`${at}.recommendation.${k} is ${rec[k].length} characters, past ${RULE_TEXT_MAX}`);
+      out.recommendation[k] = rec[k];
+    }
+    return out;
+  });
+  return { ok: true, rules, count: rules.length, pending: rules.filter((r) => r.status === "pending").length };
+}
+
+async function rulesPayloadVerb(flags) {
+  let source;
+  try {
+    source = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    throw new Refusal("rules_malformed", `data/rules/inventory.json is not readable JSON: ${err.message}`, 1);
+  }
+  return rulesPayload(source);
+}
+
+async function rulesVerb(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  let rules;
+  try {
+    ({ rules } = rulesPayload({ rules: input?.rules }));
+  } catch (err) {
+    usage(`--file rules are outside the contract: ${err.message}`);
+  }
+  const { session } = await verifiedSession(flags);
+  if (!session.toolSchemas.has("t3_rules_set")) throw new Refusal("rules_unsupported", "this T3 has no Bridge rules", 4);
+  const out = await session.call("t3_rules_set", { rules });
+  const pending = rules.filter((r) => r.status === "pending").length;
+  if (out?.rules !== rules.length || out?.pending !== pending) {
+    throw new Refusal("rules_unproven", `T3 accepted the rules but counted ${out?.rules} rules and ${out?.pending} pending, not ${rules.length} and ${pending}`, 1);
+  }
+  return { ok: true, rules: out.rules, pending: out.pending };
+}
+
 const VERBS = {
   login,
   status,
@@ -2292,10 +2372,14 @@ const VERBS = {
   close,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
-  "status-label": statusLabel,
+  "crew-status": crewStatus,
   decisions,
   "objectives-payload": objectivesPayloadVerb,
   objectives,
+  "routing-payload": routingPayloadVerb,
+  routing,
+  "rules-payload": rulesPayloadVerb,
+  rules: rulesVerb,
 };
 
 async function main(argv) {

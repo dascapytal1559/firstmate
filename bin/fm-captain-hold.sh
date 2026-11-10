@@ -23,7 +23,7 @@
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
 #   fm-captain-hold.sh context <task-id> --text-file <path> [--changed <one line>] \
-#     [--question <text>] [--option <label> [--detail <text>]]... \
+#     [--question <text>] [--option <label>]... \
 #     [--attach report|picture|link|file=<path-or-url> [--label <text>]]...
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -58,7 +58,7 @@
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
 # `--until` records the captain's own deferral date through `tasks-axi hold
 # --until`, so a "revisit later" answer is stored as a date instead of a live
-# card. A live T3 worker's card shows the hold (bin/fm-t3-captain-label.sh),
+# card. A live T3 worker's card shows the hold (bin/fm-t3-crew-status.sh),
 # and every hold, answer, and reconcile close brings that card up to date.
 # The same commands, and `context`, also run bin/fm-t3-needs-me.sh sync before
 # they return, which brings the decisions on the captain's T3 Bridge in line
@@ -68,7 +68,7 @@
 # in data/needs-me/<task-id>.json, the only writer of that record (schema
 # fm-needs-me-context.v1). Without --changed it is the raise: the message
 # section exactly as sent (--text-file, at most 8192 bytes), the question, and
-# its options, each with an optional --detail. With --changed it appends an
+# its option labels. With --changed it appends an
 # update entry carrying that one-line "what changed" and the new message text,
 # and a --question or any --option given replaces the current one. Every write
 # bumps `revision`; an exact retry of the raise or of the newest update changes
@@ -80,8 +80,8 @@
 # up). The record keeps the raise and the newest updates, at most
 # NEEDS_ME_ENTRY_MAX entries. Only an open captain call takes a context. Every
 # field must fit T3's decision bounds, so a record never fails at its thread:
-# a question of at most 4000 characters, at most 12 options (label 200,
-# detail 2000), a what-changed line of 500, and at most 12 attachments
+# a question of at most 4000 characters, at most 12 options (label 200), a
+# what-changed line of 500, and at most 12 attachments
 # (path 2048, label 200).
 #
 # `answer` records the captain's exact words and resolves the call in the same
@@ -245,7 +245,12 @@
 # <n> is the count of resolution records the body already carries plus one, so
 # a released and re-held task opens and closes a distinct parent decision with
 # no new persisted state, and an exact retry republishes the same line, which
-# the channel deduplicates. A main home has no channel and publishes nothing.
+# the channel deduplicates against that key's latest line, so a hold re-dated
+# back to an earlier `--until` is still delivered. A `hold --until` adds the
+# structured `[until=YYYY-MM-DD]` field to that line, which the parent watcher's
+# open-decision reminders read to keep the relayed key quiet until that date
+# (bin/fm-watch.sh open_decision_reminder_tick). A main home has no channel and
+# publishes nothing.
 # The hold or answer is already durable in the backlog, so a channel that
 # cannot be written is reported as `actionable:` on stderr rather than undoing
 # the record; bin/fm-inactive-reconcile.sh's diagnostics name a broken binding.
@@ -280,18 +285,21 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-afk-contract.sh"
 
 PARENT_HOLD_PUBLISHED=0
-publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
-  local id=$1 occurrence=$2 verb=$3 note=$4 rc=0
+publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
+  local id=$1 occurrence=$2 verb=$3 note=$4 until=${5:-} head rc=0
   PARENT_HOLD_PUBLISHED=0
+  head="$verb [key=captain-hold-$id-$occurrence]"
+  [ -z "$until" ] || head="$head [until=$until]"
   fm_parent_channel_report "$FM_HOME" "$STATE" \
-    "$verb [key=captain-hold-$id-$occurrence]: captain hold $id: $(fm_parent_channel_clean_note "$note")" || rc=$?
+    "$head: captain hold $id: $(fm_parent_channel_clean_note "$note")" \
+    "captain-hold-$id-$occurrence" || rc=$?
   case "$rc" in
     0|1) PARENT_HOLD_PUBLISHED=1 ;;
     *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
   esac
 }
 
-CAPTAIN_LABEL_SYNC=0
+CREW_CARD_SYNC=0
 NEEDS_ME_SYNC=0
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
@@ -310,8 +318,8 @@ captain_hold_cleanup() {
   # After the locks, before returning: a T3 crew card and the captain's Bridge
   # decisions follow the hold (each script's header owns how), and a slow or
   # failed sync never changes this command's result; its report goes to stderr.
-  [ "$CAPTAIN_LABEL_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-captain-label.sh" sync >&2 || true
-  [ "$CAPTAIN_LABEL_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
+  [ "$CREW_CARD_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-crew-status.sh" sync >&2 || true
+  [ "$CREW_CARD_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
 }
 trap captain_hold_cleanup EXIT
 
@@ -1224,12 +1232,11 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
-  publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  publish_parent_hold "$id" "$occurrence" needs-decision "$reason" "$until"
   if [ -n "$origin" ]; then
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
-  "$SCRIPT_DIR/fm-t3-captain-label.sh" note "$id" ${origin:+"$origin"} >&2 || true
-  CAPTAIN_LABEL_SYNC=1
+  CREW_CARD_SYNC=1
   printf '%s\n' "$id"
 }
 
@@ -1867,7 +1874,7 @@ reconcile_close() {
     shift
   done
   validate_slug task-id "$id"
-  CAPTAIN_LABEL_SYNC=1
+  CREW_CARD_SYNC=1
   [ -n "$evidence_file" ] || fail "--evidence-file is required; a moot call closes on evidence, never on assertion"
   load_decision "$evidence_file"
   acquire_task_control_lock "$id"
@@ -2342,14 +2349,8 @@ command_context() {  # <task-id> --text-file <path> [...]
       --option)
         shift
         validate_one_line option "${1:-}"; context_fits option "$1" 200
-        options=$(jq -c --arg l "$1" '. + [{label:$l, detail:null}]' <<< "$options")
+        options=$(jq -c --arg l "$1" '. + [{label:$l}]' <<< "$options")
         last_kind=option
-        ;;
-      --detail)
-        shift
-        [ "$last_kind" = option ] || fail "--detail follows the --option it describes"
-        validate_one_line detail "${1:-}"; context_fits detail "$1" 2000
-        options=$(jq -c --arg d "$1" '.[-1].detail = $d' <<< "$options")
         ;;
       --attach)
         shift
@@ -2417,7 +2418,7 @@ command_context() {  # <task-id> --text-file <path> [...]
         if $cur != null and any($cur.entries[]; .kind == "raised") then
           (first($cur.entries[] | select(.kind == "raised"))) as $raised
           | if $raised.text == $text and $cur.question == (if $haveQuestion == 1 then $question else $cur.question end)
-               and ($options == [] or $cur.options == $options)
+               and ($options == [] or ($cur.options | map({label})) == $options)
             then {unchanged:true, record:$cur}
             else error("already raised; record what changed with --changed")
             end
@@ -2463,7 +2464,7 @@ command_context() {  # <task-id> --text-file <path> [...]
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
   context) shift; command_context "$@" ;;
-  answer) shift; CAPTAIN_LABEL_SYNC=1; command_answer "$@" ;;
+  answer) shift; CREW_CARD_SYNC=1; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;

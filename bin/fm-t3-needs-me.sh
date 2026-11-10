@@ -8,14 +8,14 @@
 # wanted state comes from structured records only: the backlog's captain holds
 # and their hold_bucket (bin/fm-fleet-snapshot.sh), the call's context record
 # (data/needs-me/<task-id>.json, written only by bin/fm-captain-hold.sh
-# context), and this script's own sync records. No prose is read.
+# context). No prose is read.
 #
 # Usage:
 #   fm-t3-needs-me.sh sync
 #     bin/fm-captain-hold.sh runs this after every hold, answer, reconcile, and
 #     context, before it returns, and bin/fm-watch.sh about once a minute as
-#     the backstop. One pass, one T3 session, and one more when the objectives
-#     changed.
+#     the backstop. One pass, one T3 session, and one more each when the
+#     objectives, the routing table or the rules changed.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
 #     Prints the task id a captain reply from the Bridge names on its
 #     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
@@ -30,14 +30,10 @@
 # record's plus one (1 with no record), always positive as T3 requires, so
 # every raise and update reaches T3 as a new revision.
 #
-# Where T3 offers t3_decisions_set, a pass sends the whole list in that one
-# call (bin/fm-t3-mcp.mjs decisions owns the call and its proof), so the
-# Bridge changes in the same step as Firstmate's records. Only a list that is
-# empty and was empty on the last accepted pass makes no call. The first
-# accepted list is also the switch from decision threads: every decision
-# thread on record is archived and its record under state/t3-needs-me/ is
-# deleted; one whose archive fails keeps its record and is tried again on the
-# next pass, and with none on record there is nothing to switch.
+# A pass sends the whole list in one t3_decisions_set call (bin/fm-t3-mcp.mjs
+# decisions owns the call and its proof), so the Bridge changes in the same
+# step as Firstmate's records. Only a list that is empty and was empty on the
+# last accepted pass makes no call.
 #
 # A pass T3 does not take is reported on stdout and sent again on the next
 # pass. The third such pass in a row also leaves its exact error, as a
@@ -45,21 +41,6 @@
 # turns into a `check: t3-decisions` wake for firstmate. It is written once
 # per run of failures, which state/t3-needs-me/.decisions counts, and the
 # next accepted pass deletes it.
-#
-# A T3 without t3_decisions_set keeps decision threads instead, until no T3
-# lacks the list: each call is one agent-less thread under FirstMate's own,
-# active while listed, snoozed until a dated hold's date, settled while
-# blocked, and settled, then archived a day later, once answered or released.
-# A pass compares each task's wanted state, hashed, with the hash its last
-# proven pass stored under state/t3-needs-me/<task-id>.json, and reads every
-# recorded thread back. A changed hash applies the whole state; an equal one
-# only restores a lost payload, so a thread the captain settled (as his reply
-# does), snoozed, or archived himself stays so until Firstmate's records
-# change. A failed call keeps the old hash, and the next pass applies it
-# again; thread creation is retried under the same request id, so it lands on
-# the thread T3 already made. An item that failed three times in a row is
-# retried every 15 minutes rather than every pass. A pass never marks a thread
-# unread: T3 refuses that on a thread with no completed run.
 #
 # Each sync pass also pushes the captain's high level objectives, as
 # bin/fm-objectives.sh reads them, to the top of T3's Bridge tab
@@ -70,17 +51,34 @@
 # times in a row, then every 15 minutes, and never holds the decisions back;
 # a T3 without objectives is retried the same way, quietly.
 #
+# The model routing table follows the same way (docs/t3code-backend.md "Model
+# routing"): the table bin/fm-t3-mcp.mjs routing-payload builds from
+# config/crew-dispatch.json is pushed with t3_routing_set when it differs from
+# the last proven push, whose hash state/t3-needs-me/.routing keeps, with the
+# same retries and back-off. An absent or unreadable file clears the table
+# once, and only if one was sent; a malformed one is reported every pass and
+# leaves the Bridge's table as it was.
+#
+# The captain's rules follow the same way (docs/t3code-backend.md "Rules"):
+# the list bin/fm-t3-mcp.mjs rules-payload validates from
+# data/rules/inventory.json is pushed with t3_rules_set when it differs from
+# the last proven push, whose hash state/t3-needs-me/.rules keeps. An absent
+# or unreadable file clears the list once, and only if one was sent; a
+# malformed one is reported every pass and leaves the Bridge's rules as they
+# were.
+#
 # Only a main home with config/t3code-token takes part: a secondmate's calls
 # reach the captain through its parent. With no FirstMate thread in T3 (none
 # pinned as coordinator and none live), a pass changes no decision, since a
-# reply would have nowhere to go, and a T3 with neither the list nor decision
-# threads leaves the decisions alone; the objectives push still runs in both
-# cases.
+# reply would have nowhere to go, and a T3 without t3_decisions_set is not
+# supported, so its pass leaves the decisions alone and reports nothing, as an
+# unsupported objectives, routing or rules push does; those pushes still run
+# in both cases.
 #
 # Exit: 0, or 1 when the records could not be read, a decision could not be
-# brought in line, or the objectives could not be pushed (a line on stdout
-# says which; the next pass retries); usage
-# errors exit 2. Bash 3.2 compatible.
+# brought in line, or the objectives, routing table or rules could not be pushed (a
+# line on stdout says which; the next pass retries); usage errors exit 2.
+# Bash 3.2 compatible.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,10 +90,12 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONTEXTS="$DATA/needs-me"
 SYNCS="$STATE/t3-needs-me"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
+ROUTING_SYNC="$SYNCS/.routing"
+RULES_SYNC="$SYNCS/.rules"
+RULES_INVENTORY="$DATA/rules/inventory.json"
 DECISIONS_SYNC="$SYNCS/.decisions"
 ALERT="$SYNCS/.alert"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
-ARCHIVE_AFTER=86400
 BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
 ALERT_AFTER=3
@@ -157,55 +157,35 @@ slurp_dir() {  # <dir>
   done | jq -s '.'
 }
 
-# The wanted state, one item per task, into $WORK/plan.json, and each item's
-# hash beside it in $WORK/hashes.tsv (task id, hash).
+# The wanted list, one decision per open captain call the captain can answer,
+# into $WORK/list.json.
 plan() {
   "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
     || { echo "t3-needs-me: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err")"; return 1; }
   slurp_dir "$CONTEXTS" > "$WORK/contexts.json" || return 1
-  slurp_dir "$SYNCS" > "$WORK/locals.json" || return 1
-  jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" \
-    --slurpfile loc "$WORK/locals.json" --arg home "$FM_HOME" --argjson now "$NOW" --argjson archiveAfter "$ARCHIVE_AFTER" '
+  jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" --arg home "$FM_HOME" '
     def iso: if . == null then null elif test("T") then . else . + "T00:00:00Z" end;
     def abs: if .kind == "link" or (.path | startswith("/")) then . else .path = ($home + "/" + .path) end;
     def entry: {at, kind} + (if .changed then {changed} else {} end) + {text}
       + {attachments: [(.attachments // [])[] | abs | {kind, path} + (if .label then {label} else {} end)]};
-    ([$snap[0].backlog.records[]? | select(.structured and .hold_kind == "captain" and .state != "done")]) as $held
-    | ($ctx[0] | map({key: .taskId, value: .}) | from_entries) as $ctxs
-    | ($loc[0] | map(select(.taskId != null)) | map({key: .taskId, value: .}) | from_entries) as $locs
-    | ([$held[] | .id]) as $heldIds
-    | [ ($held[]
-         | . as $r
-         | ($ctxs[$r.id] | if . != null and .holdSet == ($r.hold_set // "") then . else null end) as $c
-         | ($locs[$r.id]) as $l
-         | (if $c != null and ($c.entries | length) > 0 then $c.entries else
-              [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
-         | (if $r.hold_bucket == "live" or $r.hold_bucket == "aged" then "active" elif $r.hold_bucket == "dated" then "snoozed" else "parked" end) as $phase
-         | {taskId: $r.id, title: ($r.title[:200]), phase: $phase,
-            snoozedUntil: (if $phase == "snoozed" then ($r.hold_until | iso) else null end),
-            holdSet: ($r.hold_set // ""),
-            decision: ({taskId: $r.id, title: ($r.title[:200])}
-              + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
-              + (if ($r.hold_set // "") != "" then {since: ($r.hold_set | iso)} else {} end)
-              + {question: ((($c.question // null) // $r.hold_reason)[:4000]),
-              options: [($c.options // [])[] | {label} + (if .detail then {detail} else {} end)],
-              entries: [$entries[] | entry],
-              revision: (($c.revision // 0) + 1)}),
-            local: $l}),
-        ($locs | to_entries[] | select(.key | IN($heldIds[]) | not) | .value
-         | . as $l
-         | {taskId: $l.taskId, title: ($l.title // $l.taskId),
-            phase: (if $l.closedAt != null and ($now - $l.closedAt) >= $archiveAfter then "archived" else "closed" end),
-            snoozedUntil: null, holdSet: ($l.holdSet // ""), decision: $l.decision,
-            local: $l})
+    ($ctx[0] | map({key: .taskId, value: .}) | from_entries) as $ctxs
+    | [ $snap[0].backlog.records[]?
+        | select(.structured and .hold_kind == "captain" and .state != "done")
+        | select(.hold_bucket == "live" or .hold_bucket == "aged" or .hold_bucket == "dated")
+        | . as $r
+        | ($ctxs[$r.id] | if . != null and .holdSet == ($r.hold_set // "") then . else null end) as $c
+        | (if $c != null and ($c.entries | length) > 0 then $c.entries else
+             [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
+        | {id: $r.id, title: ($r.title[:200])}
+          + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
+          + (if ($r.hold_set // "") != "" then {since: ($r.hold_set | iso)} else {} end)
+          + {question: ((($c.question // null) // $r.hold_reason)[:4000]),
+             options: [($c.options // [])[] | {label}],
+             entries: [$entries[] | entry],
+             revision: (($c.revision // 0) + 1)}
+          + (if $r.hold_bucket == "dated" and $r.hold_until != null then {wakeAt: ($r.hold_until | iso)} else {} end)
       ]
-  ' > "$WORK/plan.json" || { echo "t3-needs-me: the wanted state could not be built"; return 1; }
-  : > "$WORK/hashes.tsv"
-  local id wanted
-  while IFS=$'\t' read -r id wanted; do
-    [ -n "$id" ] || continue
-    printf '%s\t%s\n' "$id" "$(printf '%s' "$wanted" | sha)" >> "$WORK/hashes.tsv"
-  done <<< "$(jq -r '.[] | [.taskId, ({phase, snoozedUntil, decision} | tojson)] | @tsv' "$WORK/plan.json")"
+  ' > "$WORK/list.json" || { echo "t3-needs-me: the wanted state could not be built"; return 1; }
 }
 
 # --- sync ------------------------------------------------------------------
@@ -217,7 +197,7 @@ mkdir -p "$SYNCS" || { echo "t3-needs-me: could not create $SYNCS"; exit 1; }
 fm_lock_acquire_wait_max "$SYNCS/.lock" 30 || { echo "t3-needs-me: another pass holds the lock; the next pass catches up"; exit 0; }
 LOCK_HELD=1
 
-# The record of the last decisions passes, {mode, empty, failures, failedAt,
+# The record of the last decisions passes, {empty, failures, failedAt,
 # error}: empty says the last accepted pass had nothing to show, and failures
 # counts the passes T3 has not taken since. {} when absent or unreadable.
 decisions_record() {
@@ -232,9 +212,9 @@ write_decisions_record() {  # <json>
 }
 
 # T3 took the pass: the run of failures ends and any unread alert goes with it.
-pass_taken() {  # <mode> <empty: true|false>
-  write_decisions_record "$(jq -cn --arg mode "$1" --argjson empty "$2" \
-    '{mode: $mode, empty: $empty, failures: 0, failedAt: null, error: null}')" \
+pass_taken() {  # <empty: true|false>
+  write_decisions_record "$(jq -cn --argjson empty "$1" \
+    '{empty: $empty, failures: 0, failedAt: null, error: null}')" \
     || echo "t3-needs-me: could not record the pass"
   rm -f -- "$ALERT"
 }
@@ -254,103 +234,21 @@ pass_refused() {  # <error>
     || echo "t3-needs-me: could not leave the alert for firstmate"
 }
 
-# The list pass's result: rejected decisions reported, and each retired
-# decision thread's record deleted. 0, or 1 when something is left over.
-list_result() {
-  local failed=0 id ok message
-  while IFS=$'\t' read -r id message; do
-    [ -n "$id$message" ] || continue
-    echo "t3-needs-me: decision $id was left off the Bridge: $message"
-    failed=1
-  done <<< "$(jq -r '.rejected[]? | [(.id // "?"), .problem] | @tsv' "$WORK/out.json")"
-  while IFS=$'\t' read -r id ok message; do
-    [ -n "$id" ] || continue
-    if [ "$ok" = true ]; then
-      ! slug_ok "$id" || rm -f -- "$SYNCS/$id.json"
-    else
-      echo "t3-needs-me: the old decision thread of $id was not archived: $message; the next pass retries"
-      failed=1
-    fi
-  done <<< "$(jq -r '.migrated[]? | [.taskId, .ok, (.error.message // "")] | @tsv' "$WORK/out.json")"
-  return "$failed"
-}
-
-# The decision threads pass's result, per item; 0, or 1 when one was not
-# brought in line.
-threads_result() {
-  local failed=0 id hash
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    hash=$(awk -F '\t' -v id="$id" '$1 == id {print $2}' "$WORK/hashes.tsv")
-    jq --arg id "$id" --arg hash "$hash" --argjson now "$NOW" --slurpfile plan "$WORK/plan.json" '
-      (.items[] | select(.taskId == $id)) as $r
-      | ($plan[0][] | select(.taskId == $id)) as $p
-      | ($p.local // {}) as $l
-      | if $r.ok then
-          if $p.phase == "archived" or ($p.phase == "closed" and $r.thread == null) then {drop: true}
-          else {record: {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation, hash: $hash,
-                 phase: $p.phase, revision: ($p.decision.revision // 0), holdSet: $p.holdSet, decision: $p.decision,
-                 closedAt: (if $p.phase == "closed" then ($l.closedAt // $now) else null end),
-                 failures: 0, failedAt: null}}
-          end
-        else {failed: $r.error.message,
-              record: ($l + {taskId: $id, title: $p.title, thread: $r.thread, generation: $r.generation,
-                           decision: ($l.decision // $p.decision),
-                             failures: (($l.failures // 0) + 1), failedAt: $now})}
-        end
-    ' "$WORK/out.json" > "$WORK/result.json" || { echo "t3-needs-me: the result for $id could not be read"; failed=1; continue; }
-    if jq -e '.drop == true' "$WORK/result.json" >/dev/null; then
-      rm -f -- "$SYNCS/$id.json"
-      continue
-    fi
-    if ! { jq '.record' "$WORK/result.json" > "$SYNCS/.$id.tmp" && mv -f "$SYNCS/.$id.tmp" "$SYNCS/$id.json"; }; then
-      echo "t3-needs-me: could not record $id"
-      failed=1
-    fi
-    if jq -e '.failed != null' "$WORK/result.json" >/dev/null; then
-      echo "t3-needs-me: decision $id: $(jq -r '.failed' "$WORK/result.json"); the next pass retries"
-      failed=1
-    fi
-  done <<< "$(jq -r '.items[].taskId' "$WORK/out.json")"
-
-  # An item held back by the backoff is not proven this pass.
-  [ "$(jq '.items | length' "$WORK/input.json")" = "$(jq 'length' "$WORK/plan.json")" ] || failed=1
-  return "$failed"
-}
-
 # One pass over the decisions; 0, or 1 when one was not brought in line.
 sync_decisions() {
-  local home_key parent out_parent mode empty rc=0
+  local parent out_parent failed=0 id message rc=0
   plan || return 1
 
-  home_key=$(printf '%s' "$(cd "$FM_HOME" && pwd -P)" | sha | cut -c1-12)
   parent=''
   [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
-  jq -n --slurpfile plan "$WORK/plan.json" --rawfile hashes "$WORK/hashes.tsv" --arg root "$(cd "$FM_HOME" && pwd -P)" \
-    --arg parent "$parent" --arg key "$home_key" --argjson now "$NOW" \
-    --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" '
-    ($hashes | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $h
-    | {root: $root, parent: (if $parent == "" then null else $parent end),
-       list: [$plan[0][] | select(.phase == "active" or .phase == "snoozed")
-         | . as $p
-         | {id: $p.decision.taskId} + ($p.decision | del(.taskId))
-           + (if $p.phase == "snoozed" and $p.snoozedUntil != null then {wakeAt: $p.snoozedUntil} else {} end)],
-       recorded: [$plan[0][] | select(.local != null) | {taskId, thread: (.local.thread // null)}],
-       items: [$plan[0][]
-         | . as $p
-         | select(($p.local.failures // 0) < $failures or ($now - ($p.local.failedAt // 0)) >= $backoff)
-         | {taskId, title, phase, snoozedUntil, decision,
-            thread: ($p.local.thread // null), generation: ($p.local.generation // 0),
-            requestId: "fm-needs-me:\($key):\($p.taskId)",
-            apply: ($h[$p.taskId] != ($p.local.hash // null))}]}
-  ' > "$WORK/input.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
+  jq -n --slurpfile list "$WORK/list.json" --arg root "$(cd "$FM_HOME" && pwd -P)" --arg parent "$parent" \
+    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0]}' > "$WORK/input.json" \
+    || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
-  # Nothing to show, nothing recorded, and nothing shown since the last
-  # accepted pass: no T3 call at all. A list leaves blocked calls out; threads
-  # still settle theirs.
-  if decisions_record | jq -e --slurpfile input "$WORK/input.json" --slurpfile plan "$WORK/plan.json" '
-    .empty == true and (.failures // 0) == 0
-    and (if .mode == "list" then ($input[0].list + $input[0].recorded) == [] else $plan[0] == [] end)' >/dev/null; then
+  # Nothing to show, and nothing shown since the last accepted pass: no T3
+  # call at all.
+  if decisions_record | jq -e --slurpfile list "$WORK/list.json" \
+    '.empty == true and (.failures // 0) == 0 and $list[0] == []' >/dev/null; then
     return 0
   fi
 
@@ -360,33 +258,72 @@ sync_decisions() {
     4) return 0 ;;
     *) pass_refused "$(head -n 1 "$WORK/out.err" | grep . || echo "exit $rc")"; return 1 ;;
   esac
-  mode=$(jq -r '.mode // "threads"' "$WORK/out.json")
   out_parent=$(jq -r '.parent // ""' "$WORK/out.json")
   if [ -z "$out_parent" ]; then
     # No FirstMate thread: T3 took the pass, and nothing changed.
-    pass_taken "$mode" "$(decisions_record | jq '.empty == true')"
+    pass_taken "$(decisions_record | jq '.empty == true')"
     return 0
   fi
   printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"
+  pass_taken "$(jq 'length == 0' "$WORK/list.json")"
 
-  if [ "$mode" = list ]; then
-    empty=$(jq '.list | length == 0' "$WORK/input.json")
-    pass_taken list "$empty"
-    list_result
-    return
-  fi
-  pass_taken threads "$(jq 'length == 0' "$WORK/plan.json")"
-  threads_result
+  while IFS=$'\t' read -r id message; do
+    [ -n "$id$message" ] || continue
+    echo "t3-needs-me: decision $id was left off the Bridge: $message"
+    failed=1
+  done <<< "$(jq -r '.rejected[]? | [(.id // "?"), .problem] | @tsv' "$WORK/out.json")"
+  return "$failed"
 }
 
-# The Bridge's objectives follow the home's objectives file: built locally,
-# hashed, and pushed only when that hash differs from the last proven push in
-# $OBJECTIVES_SYNC ({hash, failures, failedAt, unsupported}). A failed push keeps the old
-# hash, so the next pass retries, three times in a row and then every
-# BACKOFF_SECONDS, like a decision; a T3 without objectives is retried the same
-# way, quietly.
+# bridge_record <sync-file>: the last proven push's record of one Bridge feed
+# ({hash, failures, failedAt, unsupported}), {} when there is none.
+bridge_record() {
+  local rec='{}'
+  [ ! -f "$1" ] || rec=$(jq -c 'select(type == "object")' "$1" 2>/dev/null) || rec='{}'
+  [ -n "$rec" ] || rec='{}'
+  printf '%s\n' "$rec"
+}
+
+# push_bridge_feed <name> <verb> <sync-file> <payload-file> [<note>]: one
+# Bridge feed (the objectives, the model routing table, the rules) follows its
+# source: <payload-file> is hashed and sent with bin/fm-t3-mcp.mjs <verb>
+# only when that hash differs from the last proven push in <sync-file>. A
+# failed push keeps the old hash, so the next pass retries, three times in a
+# row and then every BACKOFF_SECONDS, like a decision; a T3 without the feed's
+# tool is retried the same way, quietly. <note>, when given, is printed after
+# a proven push.
+push_bridge_feed() {
+  local name=$1 verb=$2 sync=$3 payload=$4 note=${5:-} rec hash rc=0
+  hash=$(sha < "$payload")
+  rec=$(bridge_record "$sync")
+  [ "$(printf '%s' "$rec" | jq -r '.hash // ""')" != "$hash" ] || return 0
+  if ! printf '%s' "$rec" | jq -e --argjson now "$NOW" --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" \
+    '(.failures // 0) < $failures or ($now - (.failedAt // 0)) >= $backoff' >/dev/null; then
+    # Held back: not proven this pass, which is no failure on a T3 without it.
+    printf '%s' "$rec" | jq -e '.unsupported == true' >/dev/null
+    return
+  fi
+  fm_backend_t3code_mcp "$verb" --file "$payload" > "$WORK/$name-out.json" 2>"$WORK/$name-out.err" || rc=$?
+  if [ "$rc" = 0 ]; then
+    if ! { jq -n --arg hash "$hash" '{hash: $hash, failures: 0, failedAt: null, unsupported: false}' > "$sync.tmp" \
+      && mv -f "$sync.tmp" "$sync"; }; then
+      echo "t3-needs-me: $name: could not record the push"
+      return 1
+    fi
+    [ -z "$note" ] || echo "t3-needs-me: $name: $note"
+    return 0
+  fi
+  printf '%s' "$rec" | jq --argjson now "$NOW" --argjson unsupported "$([ "$rc" = 4 ] && echo true || echo false)" \
+    '. + {failures: ((.failures // 0) + 1), failedAt: $now, unsupported: $unsupported}' > "$sync.tmp" \
+    && mv -f "$sync.tmp" "$sync"
+  [ "$rc" != 4 ] || return 0
+  echo "t3-needs-me: $name: the push failed: $(head -n 1 "$WORK/$name-out.err"); the next pass retries"
+  return 1
+}
+
+# The Bridge's objectives follow the home's objectives file.
 sync_objectives() {
-  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs rec='{}' hash rc=0 shortened
+  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs shortened note=
   command -v node >/dev/null 2>&1 || { echo "t3-needs-me: objectives: node is required"; return 1; }
   FM_HOME=$FM_HOME "$SCRIPT_DIR/fm-objectives.sh" > "$WORK/objectives-source.json" 2>"$WORK/objectives.err" \
     || { echo "t3-needs-me: objectives: the objectives file could not be read: $(head -n 1 "$WORK/objectives.err"); the next pass retries"; return 1; }
@@ -394,33 +331,55 @@ sync_objectives() {
     || { echo "t3-needs-me: objectives: the payload could not be built: $(head -n 1 "$WORK/objectives.err")"; return 1; }
   jq -c '{markdown}' "$WORK/objectives.json" > "$WORK/objectives-payload.json" \
     || { echo "t3-needs-me: objectives: the payload could not be built"; return 1; }
-  hash=$(sha < "$WORK/objectives-payload.json")
-  [ ! -f "$OBJECTIVES_SYNC" ] || rec=$(jq -c 'select(type == "object")' "$OBJECTIVES_SYNC" 2>/dev/null) || rec='{}'
-  [ -n "$rec" ] || rec='{}'
-  [ "$(printf '%s' "$rec" | jq -r '.hash // ""')" != "$hash" ] || return 0
-  if ! printf '%s' "$rec" | jq -e --argjson now "$NOW" --argjson failures "$BACKOFF_FAILURES" --argjson backoff "$BACKOFF_SECONDS" \
-    '(.failures // 0) < $failures or ($now - (.failedAt // 0)) >= $backoff' >/dev/null; then
-    # Held back: not proven this pass, which is no failure on a T3 without them.
-    printf '%s' "$rec" | jq -e '.unsupported == true' >/dev/null
-    return
+  shortened=$(jq -r '.shortened' "$WORK/objectives.json")
+  [ "$shortened" = 0 ] || note="$shortened of $(jq -r '.objectives' "$WORK/objectives.json") objectives were shortened to fit T3's 8192 characters"
+  push_bridge_feed objectives objectives "$OBJECTIVES_SYNC" "$WORK/objectives-payload.json" "$note"
+}
+
+# The Bridge's model routing table follows config/crew-dispatch.json. A file
+# that is absent or unreadable clears the table, but only once one was sent;
+# a malformed one is reported every pass and changes nothing on the Bridge.
+sync_routing() {
+  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs file=$CONFIG/crew-dispatch.json shortened note=
+  command -v node >/dev/null 2>&1 || { echo "t3-needs-me: routing: node is required"; return 1; }
+  if [ -f "$file" ] && [ -r "$file" ]; then
+    node "$helper" routing-payload --file "$file" > "$WORK/routing.json" 2>"$WORK/routing.err" \
+      || { echo "t3-needs-me: routing: the table could not be built: $(head -n 1 "$WORK/routing.err" | sed 's/^fm-t3-mcp: //'); the next pass retries"; return 1; }
+  else
+    printf '{"markdown":null,"rows":0,"shortened":0}\n' > "$WORK/routing.json"
   fi
-  fm_backend_t3code_mcp objectives --file "$WORK/objectives-payload.json" > "$WORK/objectives-out.json" 2>"$WORK/objectives-out.err" || rc=$?
-  if [ "$rc" = 0 ]; then
-    if ! { jq -n --arg hash "$hash" '{hash: $hash, failures: 0, failedAt: null, unsupported: false}' > "$OBJECTIVES_SYNC.tmp" \
-      && mv -f "$OBJECTIVES_SYNC.tmp" "$OBJECTIVES_SYNC"; }; then
-      echo "t3-needs-me: objectives: could not record the push"
-      return 1
-    fi
-    shortened=$(jq -r '.shortened' "$WORK/objectives.json")
-    [ "$shortened" = 0 ] || echo "t3-needs-me: objectives: $shortened of $(jq -r '.objectives' "$WORK/objectives.json") objectives were shortened to fit T3's 8192 characters"
+  jq -c '{markdown}' "$WORK/routing.json" > "$WORK/routing-payload.json" \
+    || { echo "t3-needs-me: routing: the table could not be built"; return 1; }
+  # Nothing to clear when no table was ever sent.
+  if jq -e '.markdown == null' "$WORK/routing.json" >/dev/null \
+    && ! bridge_record "$ROUTING_SYNC" | jq -e 'has("hash")' >/dev/null; then
     return 0
   fi
-  printf '%s' "$rec" | jq --argjson now "$NOW" --argjson unsupported "$([ "$rc" = 4 ] && echo true || echo false)" \
-    '. + {failures: ((.failures // 0) + 1), failedAt: $now, unsupported: $unsupported}' > "$OBJECTIVES_SYNC.tmp" \
-    && mv -f "$OBJECTIVES_SYNC.tmp" "$OBJECTIVES_SYNC"
-  [ "$rc" != 4 ] || return 0
-  echo "t3-needs-me: objectives: T3 could not take them: $(head -n 1 "$WORK/objectives-out.err"); the next pass retries"
-  return 1
+  shortened=$(jq -r '.shortened' "$WORK/routing.json")
+  [ "$shortened" = 0 ] || note="$shortened of the $(jq -r '.rows' "$WORK/routing.json") routes had their description shortened to fit T3's 8192 characters"
+  push_bridge_feed routing routing "$ROUTING_SYNC" "$WORK/routing-payload.json" "$note"
+}
+
+# The Bridge's rules section follows data/rules/inventory.json, the same way
+# as the routing table: absent or unreadable clears it once one was sent, and
+# malformed is reported every pass and changes nothing on the Bridge.
+sync_rules() {
+  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs file=$RULES_INVENTORY
+  command -v node >/dev/null 2>&1 || { echo "t3-needs-me: rules: node is required"; return 1; }
+  if [ -f "$file" ] && [ -r "$file" ]; then
+    node "$helper" rules-payload --file "$file" > "$WORK/rules.json" 2>"$WORK/rules.err" \
+      || { echo "t3-needs-me: rules: the list could not be built: $(head -n 1 "$WORK/rules.err" | sed 's/^fm-t3-mcp: //'); the next pass retries"; return 1; }
+  else
+    printf '{"rules":[]}\n' > "$WORK/rules.json"
+  fi
+  jq -c '{rules}' "$WORK/rules.json" > "$WORK/rules-payload.json" \
+    || { echo "t3-needs-me: rules: the list could not be built"; return 1; }
+  # Nothing to clear when no list was ever sent.
+  if jq -e '.rules == []' "$WORK/rules-payload.json" >/dev/null \
+    && ! bridge_record "$RULES_SYNC" | jq -e 'has("hash")' >/dev/null; then
+    return 0
+  fi
+  push_bridge_feed rules rules "$RULES_SYNC" "$WORK/rules-payload.json"
 }
 
 # shellcheck source=bin/fm-backend.sh
@@ -430,5 +389,9 @@ decisions_rc=0
 sync_decisions || decisions_rc=$?
 objectives_rc=0
 sync_objectives || objectives_rc=$?
-[ "$decisions_rc" = 0 ] && [ "$objectives_rc" = 0 ] || exit 1
+routing_rc=0
+sync_routing || routing_rc=$?
+rules_rc=0
+sync_rules || rules_rc=$?
+[ "$decisions_rc" = 0 ] && [ "$objectives_rc" = 0 ] && [ "$routing_rc" = 0 ] && [ "$rules_rc" = 0 ] || exit 1
 exit 0

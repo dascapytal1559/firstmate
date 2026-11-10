@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <title>Crew card status: before, a separate hold index fed by hooks; after, one pass working each label out from the records</title>
+  <rect width="920" height="400" fill="#ffffff"/>
+  <text x="20" y="32" font-size="17" font-weight="600" fill="#1f2328">Before</text>
+  <text x="480" y="32" font-size="17" font-weight="600" fill="#1f2328">After</text>
+  <line x1="460" y1="20" x2="460" y2="385" stroke="#d0d7de"/>
+
+  <g fill="#f6f8fa" stroke="#8c959f">
+    <rect x="20" y="55" width="150" height="34" rx="6"/>
+    <rect x="20" y="99" width="150" height="34" rx="6"/>
+    <rect x="20" y="143" width="150" height="34" rx="6"/>
+  </g>
+  <g fill="#1f2328">
+    <text x="32" y="77">hold: note the worker</text>
+    <text x="32" y="121">watcher: note runs</text>
+    <text x="32" y="165">cleanup: drop entry</text>
+  </g>
+  <rect x="215" y="85" width="210" height="64" rx="6" fill="#fff8c5" stroke="#9a6700"/>
+  <text x="228" y="110" fill="#1f2328" font-weight="600">Separate list of</text>
+  <text x="228" y="130" fill="#1f2328" font-weight="600">worker-to-hold links</text>
+  <g stroke="#57606a" stroke-width="1.5" fill="none" marker-end="url(#a)">
+    <path d="M170 72 L213 100"/>
+    <path d="M170 116 L213 116"/>
+    <path d="M170 160 L213 132"/>
+    <path d="M320 149 L320 195"/>
+  </g>
+  <rect x="215" y="197" width="210" height="80" rx="6" fill="#f6f8fa" stroke="#8c959f"/>
+  <text x="228" y="221" fill="#1f2328">per linked worker:</text>
+  <text x="228" y="241" fill="#1f2328">re-ask each hold, read run,</text>
+  <text x="228" y="261" fill="#1f2328">one T3 session per card</text>
+  <path d="M320 277 L320 318" stroke="#57606a" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="228" y="340" fill="#1f2328">Waiting for captain, Testing</text>
+
+  <g fill="#f6f8fa" stroke="#8c959f">
+    <rect x="480" y="55" width="190" height="34" rx="6"/>
+    <rect x="480" y="99" width="190" height="34" rx="6"/>
+    <rect x="480" y="143" width="190" height="34" rx="6"/>
+  </g>
+  <g fill="#1f2328">
+    <text x="492" y="77">backlog holds (one read)</text>
+    <text x="492" y="121">each worker's state</text>
+    <text x="492" y="165">inbox and live thread</text>
+  </g>
+  <rect x="705" y="85" width="195" height="64" rx="6" fill="#dafbe1" stroke="#1a7f37"/>
+  <text x="718" y="110" fill="#1f2328" font-weight="600">One pass works out</text>
+  <text x="718" y="130" fill="#1f2328" font-weight="600">every card's label</text>
+  <g stroke="#57606a" stroke-width="1.5" fill="none" marker-end="url(#a)">
+    <path d="M670 72 L703 100"/>
+    <path d="M670 116 L703 116"/>
+    <path d="M670 160 L703 132"/>
+    <path d="M802 149 L802 195"/>
+  </g>
+  <rect x="705" y="197" width="195" height="80" rx="6" fill="#f6f8fa" stroke="#8c959f"/>
+  <text x="718" y="221" fill="#1f2328">changes only cards whose</text>
+  <text x="718" y="241" fill="#1f2328">label differs, all in one</text>
+  <text x="718" y="261" fill="#1f2328">T3 session</text>
+  <path d="M802 277 L802 318" stroke="#57606a" stroke-width="1.5" fill="none" marker-end="url(#a)"/>
+  <text x="480" y="340" fill="#1f2328">Waiting for captain, Testing, Waiting, Ready, Failed</text>
+  <text x="480" y="365" fill="#57606a">no label while working: T3's own Working shows</text>
+
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+</svg>

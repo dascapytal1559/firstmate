@@ -85,21 +85,39 @@ Upstream keeps decisions in chat alone; the fork adds the Bridge so each call ke
 A decision stays under Needs you until it is answered or closed, however long it waits; one deferred to a date waits under Scheduled until that date.
 FirstMate sends the whole list in the same step as it changes its own records, so an answered call leaves the Bridge at once, and replying hides it straight away.
 A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
-A T3 Code without the list keeps one thread per decision under FirstMate's card instead, and the first list it accepts archives those threads.
+A T3 Code without the list simply shows no decisions.
 Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
 
-## Waiting for captain and Testing on the worker's card
+## The model routing table on T3 Code's Bridge
+
+T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, read-only, after the decisions: each entry shows the model highlighted with the kind of task beneath it.
+FirstMate builds it from the home's `config/crew-dispatch.json`, one entry per profile with the default last, and sends it again whenever the file changes.
+This is fork-only: upstream has no Bridge, and the dispatch file and how FirstMate chooses from it are unchanged.
+The table is only shown, never edited from T3 Code, and a T3 Code without it simply shows none.
+Details: [Model routing](docs/t3code-backend.md#model-routing).
+
+## Every standing rule on T3 Code's Bridge
+
+T3 Code's Bridge tab lists every standing rule the captain has given FirstMate, under headings by where it applies, each marked approved or carrying FirstMate's recommendation (keep, keep narrower, make it a rule, fact, or drop).
+Tapping a recommendation sends FirstMate one message saying he agrees, and FirstMate records it: the rule is approved or leaves the list, the rules history gets his words, and FirstMate makes any edit the answer needs in the rule's file.
+For anything else he copies the rule into chat with his own words.
+This is fork-only: upstream has no Bridge and no rule inventory, and FirstMate's approval process for rules is unchanged; the list only shows it.
+A T3 Code without the section simply shows none.
+Details: [Rules](docs/t3code-backend.md#rules) and [`fm-rules.sh`](bin/fm-rules.sh).
+
+## What the worker is waiting on, on its card
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-T3 Code knows when a worker's turn ended, but only FirstMate knows that a worker now needs the captain or sits in a no-mistakes run.
+T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
 When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
-A worker's own question does not set it, because FirstMate settles most of those itself.
 While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
-The words go when the wait or the run ends, and when the worker is cleaned up.
-Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows neither word and nothing else changes.
-A failed update is retried, so the card comes right within about a minute, and Testing can take that long to appear or go.
+Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
+While the worker works, the card shows T3 Code's own Working, except that Testing stays.
+The words change when the worker's state does and go when the worker is cleaned up.
+FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
+Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows none of these words and nothing else changes.
 Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
@@ -126,11 +144,11 @@ Details: [ideas](docs/configuration.md#ideas).
 ## Recovery after a T3 Code restart
 
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
-FirstMate notices the restart at its next start and nudges each interrupted worker to check what is still running and report again.
-Until such a worker reports, its last `working:` or `paused:` line no longer counts as current.
-The T3 Code fork tells a FirstMate running inside it that the server restarted, so FirstMate restarts its session once the server is back.
-FirstMate pins its own thread as its project's coordinator, so that note arrives after every restart, even one that cut no worker's run.
-If the restart cut FirstMate's own turn, its first tool call is refused once with a reminder to run session start.
+The T3 Code fork owns the restart: it resumes the runs it cut where it can, and tells FirstMate's thread, which FirstMate pins as its project's coordinator, that the server restarted and to run session start again.
+FirstMate reads the restart from T3's own start time, so it needs no hook of its own on its session, whatever agent runs it.
+Session start then reconciles what only FirstMate knows, each worker's last `working:` or `paused:` line.
+A worker that has reported since the restart is left alone, and every other working or waiting worker is nudged once to check what is still running and report again.
+Until such a worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
 ## Do it when no worker is running
@@ -161,9 +179,12 @@ Details: [`fm-t3-main-pretool-check.sh`](bin/fm-t3-main-pretool-check.sh).
 ## Current T3 Code releases
 
 T3 Code 0.1.3 renamed some of the tools FirstMate uses and changed how model options are listed.
-FirstMate accepts both the old and the new forms, so it works with 0.1.3 and later as well as earlier builds.
-That rests on two upstream fixes this fork carries ahead of their merge upstream: [#7851](https://github.com/kunchenguid/firstmate/pull/7851), which accepts 0.1.3's merged configuration and pending-request tools, and [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which accepts model options listed as a values array.
-The next upstream sync reconciles them once they merge or change.
+FirstMate uses only the 0.1.3 tool names, which the T3 Code fork serves, and refuses a T3 Code that offers only the earlier names before anything starts.
+Upstream still calls the earlier names, and its open fix [#7851](https://github.com/kunchenguid/firstmate/pull/7851) accepts both; the fork keeps only the new ones, because it ships with the T3 Code fork as one bundle and a second path would only add code and tests nobody here runs.
+If #7851 merges upstream, the next upstream sync keeps the fork's single set of names.
+Model options listed as a values array rest on [#7864](https://github.com/kunchenguid/firstmate/pull/7864), which this fork carries ahead of its merge upstream; the next upstream sync reconciles it once it merges or changes.
+For the same reason, a Claude worker is no longer told to avoid T3 Code's pull-request tools.
+Upstream keeps that warning for T3 builds before `0.0.46-nightly.20261010.2935`, on which those tools crashed a Claude session, and the T3 Code fork is far past that build.
 Details: [capability gate](docs/t3code-backend.md#capability-gate).
 
 ## Telemetry warning that fits the T3 Code fork

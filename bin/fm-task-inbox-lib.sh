@@ -87,9 +87,9 @@
 #
 # fm_task_inbox_ring requires bin/fm-backend.sh's dispatch (sourced below); the
 # other helpers are dependency-light. Sourced by bin/fm-send.sh, bin/fm-watch.sh,
-# bin/fm-t3-captain-label.sh, and tests. No side effects on source beyond its
+# bin/fm-t3-crew-status.sh, and tests. No side effects on source beyond its
 # sourced libraries. A ring delivered to a T3 worker also starts a detached
-# T3 card sync (fm_task_inbox_t3_label_sync).
+# T3 card sync (fm_task_inbox_t3_card_sync).
 #
 # Tunables (env):
 #   FM_TASK_INBOX_GRACE_SECS   default 90; delivery-attempt grace and spacing
@@ -419,19 +419,19 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   # The verdict is read only to report a failed keystroke; every other value
   # (empty, pending, unknown, ...) is deliberately ignored, never proof.
   [ "$verdict" != send-failed ] || return 2
-  [ "$backend" != t3code ] || fm_task_inbox_t3_label_sync "$rec"
+  [ "$backend" != t3code ] || fm_task_inbox_t3_card_sync "$rec"
   return 0
 }
 
-# A T3 worker's card stops saying "Waiting for captain" while the worker has a
-# message to work on (bin/fm-t3-captain-label.sh), so a delivered doorbell
+# A T3 worker's card drops its between-turns label while the worker has a
+# message to work on (bin/fm-t3-crew-status.sh), so a delivered doorbell
 # resyncs the cards at once rather than on the watcher's next pass. Detached
 # with its output dropped: the ring neither waits on it nor reports it.
-fm_task_inbox_t3_label_sync() {  # <record-path>
+fm_task_inbox_t3_card_sync() {  # <record-path>
   local state=${1%/*}
   state=${state%/*}
   FM_HOME="${FM_HOME:-${state%/*}}" FM_STATE_OVERRIDE="$state" \
-    "$_FM_TASK_INBOX_LIB_DIR/fm-t3-captain-label.sh" sync </dev/null >/dev/null 2>&1 &
+    "$_FM_TASK_INBOX_LIB_DIR/fm-t3-crew-status.sh" sync </dev/null >/dev/null 2>&1 &
 }
 
 # Whether the composer's content, ignoring line wrapping, is exactly <line>.

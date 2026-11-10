@@ -19,14 +19,10 @@
 //   - a send is committed before its reply, which dropReplyTools can lose;
 //   - pendingRequestCount counts every pending runtime request, while the
 //     pending-request tools see only user-input questions;
-//   - T3 0.1.3 merged t3_thread_configuration into t3_thread_configure (a
-//     read when called without modelSelection; earlier T3 also lists
-//     t3_thread_configure but refuses it without modelSelection) and
-//     t3_pending_request_list, _read, and _respond into t3_pending_request
-//     {action}. The fake serves both generations; tools/list offers the
-//     earlier one by default and CURRENT_TOOLS when the world sets toolset
-//     "current", and a tools/call for a tool tools/list does not offer is
-//     refused, as T3 refuses it;
+//   - the fake serves T3 0.1.3's tool names: t3_thread_configure called
+//     without modelSelection is the configuration read, and
+//     t3_pending_request takes action list|read|respond; a tools/call for a
+//     tool tools/list does not offer is refused, as T3 refuses it;
 //   - tools/list declares t3_thread_interrupt's `stop` and t3_thread_list's
 //     `allProjects` in their input schemas, and a peer from before `stop`
 //     (world noStop) drops it and interrupts the run alone; with stop, the
@@ -60,6 +56,10 @@
 //     t3_thread_configure takes coordinator true|false (true unpins any other
 //     thread in that project), and t3_thread_read and t3_thread_list report
 //     every thread's coordinator boolean; without it the argument is ignored.
+//   - a T3 with the restart registry (world restartStatus, the T3 Code fork)
+//     offers t3_restart_status, whose serverStartedAt is the time this
+//     process started (world serverStartedAt answers another value), so a
+//     restart behind the same origin reads a new one.
 //   - a T3 with pending-request push (world pendingPush, the T3 Code fork)
 //     declares t3_thread_wait's settleOnPendingRequest and knownRequestIds,
 //     and such a wait also ends on a question or approval outside the known
@@ -69,22 +69,21 @@
 //     title. A T3 with crew card status (world statusLabels, the T3 Code fork)
 //     declares statusLabel and also sets and clears a thread's label, stored and
 //     read back as statusLabel, answering with the label left (world
-//     statusLabelAnswers answers another one); without it those actions are
-//     unknown.
-//   - a T3 with decision threads (world decisions, the T3 Code fork) declares
-//     t3_thread_launch's decisionOf and decision and t3_thread_update's
-//     decision: a launch with decisionOf makes an idle, agent-less thread
-//     carrying both (refusing one without the other, a message, or a
-//     payload outside the fork's bounds, including a revision that is not a
-//     positive integer; an omitted revision is 1, or the stored one plus one),
-//     t3_thread_update set_decision and clear_decision replace or drop the
-//     payload, answering with decisionRevision, and t3_thread_read reports
-//     decisionOf, decision, and unread (a fake-only field tests read); world
-//     decisionStartsRun makes such a launch start a turn, as a broken peer.
+//     statusLabelAnswers answers another one), and stamps statusLabelSince
+//     when a new label lands; without it those actions are unknown.
 //   - a T3 with Bridge objectives (world objectivesTool, the T3 Code fork)
 //     offers t3_objectives_set, which replaces world objectives with
 //     {markdown} (markdown null clears) within the fork's bounds and answers
 //     {objectives} (world objectivesAnswer answers another value instead).
+//   - a T3 with the Bridge's model routing table (world routingTool, the T3
+//     Code fork) offers t3_routing_set, which does the same with world
+//     modelRouting and answers {modelRouting} (world routingAnswer instead).
+//   - a T3 with the Bridge's rules section (world rulesTool, the T3 Code
+//     fork) offers t3_rules_set {rules}, which replaces world rules with the
+//     list within the contract's bounds (at most 400 rules with distinct ids,
+//     each exactly the contract's fields) and answers with counts {rules,
+//     pending, sent} like the fork (world rulesAnswer answers another value
+//     instead).
 //   - a T3 with the Bridge decision list (world decisionsTool, the T3 Code
 //     fork) offers t3_decisions_set {replyTo, decisions}, which replaces world
 //     decisionList {replyTo, decisions} within the fork's bounds: replyTo an
@@ -94,12 +93,8 @@
 //     set it to stand for the captain's reply), a changed one loses it, and an
 //     identical list writes nothing. It answers {replyTo, decisions [{id,
 //     revision, answered}]} (world decisionsAnswer answers another value).
-//   - t3_thread_launch answers a repeated clientRequestId with the thread it
-//     already made; t3_thread_organize settle, unsettle, snooze (with
-//     snoozedUntil, or with no date), unsnooze, mark_unread (refused on a
-//     thread with no completed run, as T3 refuses it), mark_read, and
-//     unarchive change what t3_thread_read reports as settled, settledAt,
-//     snoozed, and snoozedUntil.
+//   - t3_thread_organize serves archive alone, the one action the helper
+//     sends, and refuses any other.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -109,13 +104,12 @@
 // one JSON line to <case-dir>/requests.jsonl, so a test can switch cases and
 // edit the world between calls. World keys (all optional):
 //   tokens (accepted bearers; sign-in appends), environmentId, serverVersion,
-//   tools (array of names; default all), toolset ("current": the T3 0.1.3
-//   tool names instead of the earlier default), revoked (every /mcp call is 401),
+//   tools (array of names; default all), revoked (every /mcp call is 401),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
 //   (override what a launch binds), threadFacts, crewLineage,
-//   coordinatorRestartNote, pendingPush, noStop,
+//   coordinatorRestartNote, restartStatus, serverStartedAt, pendingPush, noStop,
 //   archiveKeepsRun (archive never ends the run), interruptStuck or
 //   waitTimesOut (an interrupt never ends the run), queueAfterInterrupt
 //   (text a queued run starts with once an interrupt lands), failTools
@@ -148,14 +142,12 @@ for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].slice(2)] 
 
 const ALL_TOOLS = [
   "t3_thread_launch", "t3_thread_send", "t3_thread_read", "t3_thread_wait", "t3_thread_interrupt",
-  "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configuration", "t3_thread_configure", "t3_project_list", "t3_project_create",
-  "t3_pending_request_list", "t3_pending_request_read", "t3_pending_request_respond",
-  "orchestrator_capabilities", "t3_environment_read",
+  "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
+  "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const CURRENT_TOOLS = ALL_TOOLS.filter((n) => n !== "t3_thread_configuration" && !n.startsWith("t3_pending_request_"))
-  .concat(["t3_pending_request"]);
-const offeredTools = (w) => w.tools ?? (w.toolset === "current" ? CURRENT_TOOLS : ALL_TOOLS)
-  .concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : []);
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.rulesTool ? ["t3_rules_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
+  w.restartStatus ? ["t3_restart_status"] : []);
+const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const select = (id, values) => ({ id, label: id, type: "select", options: values.map((v) => ({ id: v, label: v })) });
@@ -164,8 +156,7 @@ const TOOL_SCHEMAS = {
   t3_thread_launch: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
-      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
-      ...(w.decisions ? ["decisionOf", "decision"] : [])].map((k) => [k, {}])),
+      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -183,7 +174,7 @@ const TOOL_SCHEMAS = {
   t3_thread_update: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []),
-      ...(w.decisions ? ["decision"] : []), "clientRequestId"].map((k) => [k, {}])),
+      "clientRequestId"].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -332,33 +323,13 @@ function settle(w) {
 
 const notFound = (id) => err("thread_not_found", `Thread ${id} is no longer available.`);
 
-// The fork's ThreadDecisionInput (packages/contracts/src/threadDecision.ts):
-// bounded, trimmed non-empty text, and a revision that is a positive integer
-// when given. Returns the first problem, or null.
-function decisionProblem(d) {
-  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.length <= max;
-  const optionalText = (v, max) => v === undefined || text(v, max);
-  if (!d || typeof d !== "object") return "decision must be an object";
-  if (!text(d.taskId, 200) || !text(d.title, 200) || !text(d.question, 4000)) return "taskId, title and question must be bounded non-empty text";
-  if (d.revision !== undefined && !(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
-  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o.label, 200) || !optionalText(o.detail, 2000)) return "an option needs a bounded label and detail";
-  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
-  for (const e of d.entries) {
-    if (!Number.isFinite(Date.parse(e.at))) return `entry time ${e.at} is not a date`;
-    if (!["raised", "update"].includes(e.kind) || !text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs a kind and bounded text";
-    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
-    for (const x of e.attachments ?? []) if (!text(x.kind, 32) || !text(x.path, 2048) || !optionalText(x.label, 200)) return "an attachment needs a bounded kind and path";
-  }
-  return null;
-}
-
 // The fork's Decision (packages/contracts/src/decisions.ts): exactly these
 // fields, trimmed text within its bounds, and a positive revision. Returns
 // the first problem, or null.
 const LIST_DECISION_FIELDS = new Set(["id", "title", "projectName", "since", "question", "options", "entries", "revision", "wakeAt"]);
 function listDecisionProblem(d) {
   const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
+  const optionalText = (v, max) => v === undefined || text(v, max);
   const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
   if (!d || typeof d !== "object") return "decision must be an object";
   const extra = Object.keys(d).find((k) => !LIST_DECISION_FIELDS.has(k));
@@ -367,8 +338,16 @@ function listDecisionProblem(d) {
   if (d.projectName !== undefined && !text(d.projectName, 200)) return "projectName must be bounded non-empty text";
   if ((d.since !== undefined && !time(d.since)) || (d.wakeAt !== undefined && !time(d.wakeAt))) return "since and wakeAt must be dates";
   if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
-  // Options and entries share the thread payload's bounds.
-  return decisionProblem({ ...d, taskId: d.id });
+  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
+  for (const o of d.options) if (!text(o.label, 200)) return "an option needs a bounded label";
+  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
+  for (const e of d.entries) {
+    if (!time(e.at)) return `entry time ${e.at} is not a date`;
+    if (!["raised", "update"].includes(e.kind) || !text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs a kind and bounded text";
+    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
+    for (const x of e.attachments ?? []) if (!text(x.kind, 32) || !text(x.path, 2048) || !optionalText(x.label, 200)) return "an attachment needs a bounded kind and path";
+  }
+  return null;
 }
 
 function listItem(x) {
@@ -402,14 +381,33 @@ async function callTool(w, name, a) {
   const projects = (w.projects = w.projects ?? []);
   const t = a.threadId !== undefined ? threads[a.threadId] : undefined;
   switch (name) {
-    case "t3_objectives_set": {
+    case "t3_objectives_set":
+    case "t3_routing_set": {
       // The fork's bounds: markdown null, or trimmed non-empty text of at
       // most 8192 characters, and nothing else.
       const md = a.markdown;
       if (md !== null && (typeof md !== "string" || !md || md !== md.trim() || md.length > 8192)) return [err("invalid_params", "markdown out of bounds"), false];
       if (Object.keys(a).some((k) => k !== "markdown")) return [err("invalid_params", "unknown argument"), false];
-      w.objectives = md === null ? null : { markdown: md };
-      return [ok({ objectives: w.objectivesAnswer ?? w.objectives }), true];
+      const [field, answer] = name === "t3_routing_set" ? ["modelRouting", "routingAnswer"] : ["objectives", "objectivesAnswer"];
+      w[field] = md === null ? null : { markdown: md };
+      return [ok({ [field]: w[answer] ?? w[field] }), true];
+    }
+    case "t3_rules_set": {
+      if (Object.keys(a).some((k) => k !== "rules")) return [err("invalid_params", "unknown argument"), false];
+      if (!Array.isArray(a.rules) || a.rules.length > 400) return [err("invalid_params", "at most 400 rules"), false];
+      if (new Set(a.rules.map((r) => r?.id)).size !== a.rules.length) return [err("invalid_params", "Each rule needs its own id."), false];
+      const allowed = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
+      for (const r of a.rules) {
+        if (Object.keys(r ?? {}).some((k) => !allowed.has(k))) return [err("invalid_params", "unknown rule field"), false];
+        if (r.status !== "approved" && r.status !== "pending") return [err("invalid_params", "status out of bounds"), false];
+        if ((r.status === "pending") !== (r.recommendation !== undefined)) return [err("invalid_params", "a pending rule needs a recommendation"), false];
+        if ([r.text, r.recommendation?.note, r.recommendation?.proposedText].some((s) => typeof s === "string" && s.length > 2000)) {
+          return [err("invalid_params", "text out of bounds"), false];
+        }
+      }
+      w.rules = a.rules;
+      const counts = { rules: w.rules.length, pending: w.rules.filter((r) => r.status === "pending").length, sent: [] };
+      return [ok(w.rulesAnswer ?? counts), true];
     }
     case "t3_decisions_set": {
       if (Object.keys(a).some((k) => k !== "replyTo" && k !== "decisions")) return [err("invalid_params", "unknown argument"), false];
@@ -435,6 +433,12 @@ async function callTool(w, name, a) {
     }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
+    case "t3_restart_status":
+      return [ok({
+        pending: false, reason: null, requestedAt: null, drained: false,
+        activeTurns: Object.values(threads).filter((x) => ACTIVE.has(x.status)).length,
+        serverStartedAt: w.serverStartedAt ?? STARTED_AT,
+      }), false];
     case "orchestrator_capabilities":
       return [ok({
         parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search),
@@ -453,28 +457,6 @@ async function callTool(w, name, a) {
       return [ok(p), true];
     }
     case "t3_thread_launch": {
-      w.launchRequests = w.launchRequests ?? {};
-      if (a.clientRequestId && w.launchRequests[a.clientRequestId]) return [ok(w.launchRequests[a.clientRequestId]), false];
-      if (w.decisions && (a.decisionOf !== undefined || a.decision !== undefined)) {
-        // The fork's agent-less decision thread: no session, no turn.
-        if (a.decisionOf === undefined || a.decision === undefined) return [err("invalid_request", "Pass decisionOf and decision together."), false];
-        if (a.message !== undefined || a.parentThreadId !== undefined || (a.workspaceStrategy && a.workspaceStrategy.type !== "root")) {
-          return [err("invalid_request", "A decision thread has no agent: omit message, attachments, scratch, parentThreadId and workspaceStrategy."), false];
-        }
-        const problem = decisionProblem(a.decision);
-        if (problem) return [err("invalid_params", problem), false];
-        if (!threads[a.decisionOf]) return [notFound(a.decisionOf), false];
-        const id = `mcp:${randomUUID()}`;
-        threads[id] = {
-          threadId: id, projectId: a.projectId, title: a.title, status: "idle", latestRunId: null, activeRunId: null,
-          parentThreadId: null, relationshipToParent: null, pendingRequestCount: 0, archived: false, items: [], runs: [],
-          decisionOf: a.decisionOf, decision: { ...a.decision, revision: a.decision.revision ?? 1 }, settled: false, settledAt: null, snoozed: false, snoozedUntil: null, unread: true,
-        };
-        if (w.decisionStartsRun) startRun(threads[id], a.title);
-        const out = { threadId: id, projectId: a.projectId, runId: threads[id].activeRunId, status: null };
-        if (a.clientRequestId) w.launchRequests[a.clientRequestId] = out;
-        return [ok(out), true];
-      }
       const parent = w.crewLineage ? a.parentThreadId : undefined;
       if (parent !== undefined && !threads[parent]) return [notFound(parent), false];
       const ws = a.workspaceStrategy ?? {};
@@ -528,7 +510,6 @@ async function callTool(w, name, a) {
       const items = matching.slice(0, a.limit ?? 50);
       const thread = {
         ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}),
-        settled: t.settled === true, settledAt: t.settledAt ?? null, snoozed: t.snoozed === true, snoozedUntil: t.snoozedUntil ?? null,
       };
       return [ok({ thread, recentRuns: byOrdinal(t).slice(0, a.runLimit ?? 5), items, nextPosition: items.at(-1)?.position ?? null, hasMore: matching.length > items.length }), false];
     }
@@ -543,19 +524,14 @@ async function callTool(w, name, a) {
       const nextCursor = cursor + page.length < list.length ? cursor + page.length : null;
       return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}) })), nextCursor, total: list.length }), false];
     }
-    case "t3_thread_configure":
+    case "t3_thread_configure": {
       if (w.coordinatorRestartNote && typeof a.coordinator === "boolean") {
         if (!t) return [notFound(a.threadId), false];
         if (a.coordinator) for (const x of Object.values(threads)) if (x.projectId === t.projectId) x.coordinator = false;
         t.coordinator = a.coordinator;
         return [ok({ threadId: t.threadId, coordinator: t.coordinator }), true];
       }
-      if (a.modelSelection === undefined && offeredTools(w).includes("t3_thread_configuration")) {
-        return [err("invalid_params", "Invalid parameters for tool 't3_thread_configure': Missing key at [\"modelSelection\"]"), false];
-      }
       if (a.modelSelection !== undefined) return [err("unsupported", "the fake serves only the configuration read"), false];
-    // falls through: from T3 0.1.3, without modelSelection it is the read
-    case "t3_thread_configuration": {
       if (!t) return [notFound(a.threadId), false];
       const modelSelection = t.modelSelection ?? { instanceId: t.providerInstanceId, model: t.model };
       const facts = w.threadFacts
@@ -598,69 +574,42 @@ async function callTool(w, name, a) {
     }
     case "t3_thread_organize": {
       if (!t) return [notFound(a.threadId), false];
-      const at = now();
-      switch (a.action) {
-        case "settle": t.settled = true; t.settledAt = at; t.snoozed = false; t.snoozedUntil = null; break;
-        case "unsettle": t.settled = false; t.settledAt = null; break;
-        case "snooze":
-          // The T3 fork allows a snooze with no date (it waits until woken by hand).
-          t.snoozed = true; t.snoozedUntil = a.snoozedUntil ?? null; t.settled = false; t.settledAt = null; break;
-        case "unsnooze": t.snoozed = false; t.snoozedUntil = null; break;
-        case "mark_unread":
-          // T3 refuses it on a thread with no completed run, so a decision thread never takes it.
-          if (!(t.runs ?? []).some((r) => r.completedAt)) return [err("thread_not_markable_unread", `Thread ${t.threadId} has no completed run to mark unread.`), false];
-          t.unread = true; break;
-        case "mark_read": t.unread = false; break;
-        case "unarchive": t.archived = false; break;
-        default: break;
-      }
-      if (a.action === "archive") {
-        t.archived = true;
-        const run = latestActiveRun(t);
-        if (run) run.stopRequested = "archive";
-        else if (t.activeRunId && !w.archiveKeepsRun) {
-          // A hand-written thread whose run list does not name its active run.
-          t.activeRunId = null;
-          t.status = "interrupted";
-        }
+      if (a.action !== "archive") return [err("invalid_action", `unknown action ${a.action}`), false];
+      t.archived = true;
+      const run = latestActiveRun(t);
+      if (run) run.stopRequested = "archive";
+      else if (t.activeRunId && !w.archiveKeepsRun) {
+        // A hand-written thread whose run list does not name its active run.
+        t.activeRunId = null;
+        t.status = "interrupted";
       }
       return [ok({ threadId: t.threadId, action: a.action }), true];
     }
     case "t3_thread_update": {
       if (!t) return [notFound(a.threadId), false];
       if (w.statusLabels && (a.action === "set_status_label" || a.action === "clear_status_label")) {
-        if (a.action === "set_status_label") t.statusLabel = a.statusLabel;
-        else delete t.statusLabel;
+        if (a.action === "set_status_label") {
+          // As the fork's orchestrator: only a new label restarts its clock.
+          if (a.statusLabel !== t.statusLabel || !t.statusLabelSince) t.statusLabelSince = now();
+          t.statusLabel = a.statusLabel;
+        } else {
+          delete t.statusLabel;
+          delete t.statusLabelSince;
+        }
         const label = w.statusLabelAnswers ?? t.statusLabel;
         return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(label === undefined ? {} : { statusLabel: label }) }), true];
-      }
-      if (w.decisions && (a.action === "set_decision" || a.action === "clear_decision")) {
-        if (t.decisionOf === undefined) return [err("invalid_request", "not a decision thread"), false];
-        if (a.action === "set_decision") {
-          if (!a.decision) return [err("invalid_request", "set_decision needs decision"), false];
-          const problem = decisionProblem(a.decision);
-          if (problem) return [err("invalid_params", problem), false];
-          t.decision = { ...a.decision, revision: a.decision.revision ?? (t.decision?.revision ?? 0) + 1 };
-          t.title = a.decision.title;
-        } else t.decision = null;
-        return [ok({ threadId: t.threadId, action: a.action, title: t.title, ...(t.decision ? { decisionRevision: t.decision.revision } : {}) }), true];
       }
       if (a.action !== "rename") return [err("invalid_action", `unknown action ${a.action}`), false];
       t.title = a.title;
       return [ok({ threadId: t.threadId, action: "rename", title: t.title }), true];
     }
-    case "t3_pending_request":
+    case "t3_pending_request": {
       if (!["list", "read", "respond"].includes(a.action)) return [err("invalid_action", `unknown action ${a.action}`), false];
-      return callTool(w, `t3_pending_request_${a.action}`, a);
-    case "t3_pending_request_list":
       if (!t) return [notFound(a.threadId), false];
-      return [ok(pendingList(w, t)), false];
-    case "t3_pending_request_read":
-    case "t3_pending_request_respond": {
-      if (!t) return [notFound(a.threadId), false];
+      if (a.action === "list") return [ok(pendingList(w, t)), false];
       const appr = w.approvalResponses && pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "approval");
       if (appr) {
-        if (name === "t3_pending_request_read") return [ok(approvalEntry(appr)), false];
+        if (a.action === "read") return [ok(approvalEntry(appr)), false];
         if (!["allow", "deny"].includes(a.decision)) return [err("invalid_request", "decision must be allow or deny"), false];
         appr.status = "resolved";
         appr.decision = a.decision;
@@ -670,7 +619,7 @@ async function callTool(w, name, a) {
       }
       const q = pendingRequests(t).find((r) => r.id === a.requestId && r.kind === "user_input");
       if (!q) return [err("request_not_found", `Request ${a.requestId} is not a pending question in thread ${a.threadId}.`), false];
-      if (name === "t3_pending_request_read") return [ok({ requestId: q.id, questions: q.questions ?? [] }), false];
+      if (a.action === "read") return [ok({ requestId: q.id, questions: q.questions ?? [] }), false];
       q.status = "resolved";
       q.answers = a.answers;
       return [ok({ sequence: 1 }), true];

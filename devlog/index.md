@@ -891,3 +891,131 @@ The choices made:
 
 The picture of the Bridge is the fork's own, from its build, with made-up data; the diagram is the scout's.
 The evidence is seven new cases in `tests/fm-t3-needs-me.test.sh` against the stand-in T3, which now offers the tool with the fork's bounds: the list's exact shape and contents through holds, deferrals, blocks, updates, and answers; a resent list leaving the captain's answer in place until the records change; the one-time switch, including a failed archive retried; three refusals waking FirstMate once per run; an out-of-bounds decision left off without blocking the rest; no list without FirstMate's thread; and the watcher turning the alert into one durable wake.
+
+## 35. The card's status is worked out, not remembered (10 November 2026)
+
+![Before: hooks in the hold command, the watcher, and cleanup fed a separate list of worker-to-hold links, and each sync re-asked every hold one by one; after: one pass reads the backlog's holds once and each worker's state, and changes only the cards whose label differs, in one T3 session](media/crew-card-projection.svg)
+
+A review of both public forks asked where an implementation still followed an older requirement:
+
+> I'm curious if there are other occurrences of this sort of like outdated or implementations based on outdated requirements and causing a lot of headaches and things to be non-elegant such that when you review the intention of that implementation again, you wouldn't arrive at the same approach. ... These are going to be forks that are public so I kind of appreciate some elegance to it.
+
+The card label was one: it says what FirstMate already knows, yet it kept its own list of which worker each hold was for, re-asked the backlog about every copied link, and was fed by hooks in seven places.
+The captain's answer to the review:
+
+> Okay, in terms of the both forks, go with the recommended and the optional.
+
+What was built:
+
+- **One pass, no list of its own.** Every update works out each live T3 worker's label from the backlog's holds, read once, and each worker's current state, then changes only the cards whose label differs, all in one T3 session.
+  A hold now names the worker it was raised for as a field of the fleet snapshot, so nothing re-reads the hold's text to find it.
+- **More of what only FirstMate knows.** Between turns, a worker waiting on an answer from FirstMate, a blocker, or its own declared pause reads Waiting; finished work reads Ready; a failure reads Failed.
+  Waiting for captain and Testing keep their meaning, and while the worker works the card shows T3's own Working, as before.
+- **The same triggers.** A hold, an answer, a message delivered to the worker, or a T3 run ending updates the card within seconds, and the watcher's minute pass is the backstop, which now also restores a label a T3 restart lost.
+
+The choices made:
+
+- **Measured before replacing the list.** With eight T3 workers and two open holds, the old per-hold sync took 1.7 to 5.4 seconds and its minute pass 9 to 14; the new pass, which does both jobs, took 1.5 to 4.2, on the same busy machine.
+- **The labels are complete enough for T3 to trust.** T3 Code's next change shows FirstMate's label in place of guessing "Waiting" from any process a worker leaves running, so every wait FirstMate knows of now has a word, and the docs say what T3 can rely on.
+
+The evidence is the moved suite, now `tests/fm-t3-crew-status.test.sh`: every earlier case passes on the new pass (origin holds, a pending steer, Testing and its start time, cleanup, a T3 that is down or has no labels), with new cases for Waiting, Ready, and Failed between turns, a restart that loses labels, and an unreadable backlog leaving every card alone.
+
+## 36. A T3 restart has one owner, FirstMate's half (10 November 2026)
+
+![Before: Firstmate read the server's process id with lsof and ps, refused the main's first tool call when its lock named a dead process, and steered every working or waiting worker; after: T3 reports its own start time, its note brings any main to session start, and only workers that have not reported since the restart are steered](media/t3-restart-single-owner.svg)
+
+The same review of both public forks found restart recovery built on a premise that had since changed.
+On 28 October T3 resumed nothing after a restart and nothing woke FirstMate, which justified reading the server's process id, refusing the main's first tool call, and steering every worker.
+T3 now resumes the runs it cut, and its half of this change tells every pinned coordinator about every restart and reports its own start time.
+The captain's answer to the review:
+
+> Okay, in terms of the both forks, go with the recommended and the optional.
+
+What changed on FirstMate's side:
+
+- **T3's start time is the restart identity.** FirstMate reads `serverStartedAt` from T3 instead of the listening process's id and start time, so it no longer runs `lsof` and `ps` for it, and a server reached at a non-loopback address is covered too.
+- **No reminder hook on the main.** T3's note opens whatever message reaches the main after a restart, the resume of a cut turn or a note on its own, so the first-tool-call refusal is gone, and a Codex or other main is covered the same way as a Claude one; the credential guard in the same hook stays.
+- **Fewer redundant steers.** A worker whose current status line was written after the restart has already resumed and said where it stands, so it is left alone; a worker that is merely busy again is still steered, since being busy does not show it checked what the restart took, and an idle worker whose wait vanished is steered as before.
+
+The choices made:
+
+- **The status line's own time decides "since the restart".** Nothing watched the status files at the moment of the restart, so the line's `[at=]` stamp is the only witness; it must be later than the restart's whole second and not in the future, and it only ever spares a line from distrust, never makes an older line current.
+- **No fallback to process ids.** A T3 without the restart time reads as unknown, as a remote server always did, since FirstMate needs the paired T3 Code fork anyway.
+- **A new record name.** The handled restart is now recorded as a time rather than a process id, under a new name, so the first session start after this lands records it quietly instead of reading a format change as a restart.
+
+## 37. The model routing table on the Bridge (10 November 2026)
+
+The ask:
+
+> I want to create a model routing table in the bridge tab of T three code.
+
+T3's half added a read-only Model routing section to the Bridge and a tool to fill it.
+FirstMate's half sends its routing table there, the same way it already sends the high level objectives.
+
+What it looks like, with made-up rules:
+
+| When | Harness | Model | Effort | Why |
+| --- | --- | --- | --- | --- |
+| Hard design work. (captain approves) | claude | big-model | xhigh | Strongest reasoning. |
+| Small fixes. | claude | small-model | high |  |
+| Anything else | claude | - | - |  |
+
+The choices made:
+
+- **The dispatch file is the only source.** Each sync pass builds the table from `config/crew-dispatch.json`, one row per model the rule can use, with the default last, and sends it only when it changed.
+- **Rows are never dropped.** Past T3's 8,192-character limit each long reason is cut to one shared length first, then each long condition, and the pass says how many cells it cut.
+- **A broken file is reported, not guessed around.** A file missing what the table needs is named on every pass, and the Bridge keeps its last good table; a deleted file clears it once, and only if one was ever sent.
+- **One shared push for both feeds.** The objectives and the routing table now go through the same send-on-change, retry, and back-off step, so they cannot drift apart.
+
+The evidence is the needs-me regression suite against the stand-in T3: the table is sent on change, not resent unchanged, kept on a malformed file, cleared when the file goes away, and skipped quietly by a T3 without the tool.
+No screenshot yet: the running T3 did not offer the new tool when this was built.
+
+## 38. The routing table's model in one column (10 November 2026)
+
+> These three columns in the bridge should be one column
+
+The Bridge panel is narrow, and the Harness, Model and Effort columns took most of its width and wrapped.
+They are now one Model column reading `claude · claude-fable-5-2 · xhigh`, and a missing model or effort is left out rather than shown as `-`, so the default row reads `claude · claude-opus-5-5`.
+When and Why, and how a long table is fitted to T3's limit, are unchanged.
+The evidence is the needs-me regression suite's routing-table test, which pins the new layout.
+
+## 39. Every standing rule on the Bridge, FirstMate's half (10 November 2026)
+
+The ask:
+
+> The rule section in the bridge should show all the rules, regardless of the ones that need action or don't need action, and label them with chips, such as approved, or if it's not approved, give your recommendations in a dashed chip or hollow chip or something like that. I want to be able to see every rule. And I will make decisions from there by either agreeing with your choice and clicking on the chip, or I will copy the rule and add my own comment and send it back to you here in this chat.
+
+T3's half adds the Rules section and a tool to fill it; this half sends FirstMate's rules there and records his taps.
+It replaces the separate review board the rules were last reviewed on.
+
+The choices made:
+
+- **One private inventory is the source.** Each rule's id, heading, file, current wording, and either the day he approved it or FirstMate's recommendation live in one home-private file. Each sync pass checks it against the shared contract and sends it only when it changed, through the same send-on-change, retry, and back-off step as the objectives and the routing table.
+- **Nothing is cut to fit.** A rule past the contract's limits, or a pending rule with no recommendation, is named on every pass and the Bridge keeps its last good list, rather than showing a shortened rule he might approve by mistake.
+- **A tap is recorded, not acted on blindly.** His tap arrives as one chat message with a machine line. `fm-rules.sh` approves the rule (with the narrower wording when that was the recommendation) or takes it off the list, writes the rules history entry with his words, and prints the edit FirstMate still has to make in the rule's file. The rule files themselves are never edited by the script.
+- **Disagreeing stays in chat.** An answer other than the recommendation is recorded only with his own words, never with the chip's sentence.
+
+The evidence is the needs-me regression suite against the stand-in T3 (the list is sent on change, proven by its ids, retried, kept on a malformed inventory, cleared once) and the new rules suite for the answers.
+No screenshot yet: T3's section is being built alongside.
+
+## 40. Model routing as model and description (10 November 2026)
+
+> Let's make model routing get the format of the model In highlights and then the description in normal text color and then remove the actual description use our current titles as description
+
+The routing table had three columns, and the long Why paragraphs made it the tallest thing on the Bridge.
+Each route is now one list entry: the model highlighted as inline code, and beneath it, in normal text, the old When text as its description.
+The Why is no longer sent; the dispatch file still carries and checks it.
+
+- **A list entry with a hard line break.** T3 renders the Bridge with its ordinary chat Markdown, without its option that turns every newline into a line break, so a plain newline would have run the description onto the model's line. A backslash at the end of the model line is the standard Markdown hard break and puts the description on its own line, while the list keeps each route visibly one item.
+- **Only the description is cut.** Past T3's 8192-character limit every long description is cut to one shared length with an ellipsis; no route is dropped.
+
+A route now reads like this (made-up entries from the regression test):
+
+```markdown
+- `claude · big-model · xhigh`\
+  Hard design work. (captain approves)
+- `claude`\
+  Anything else
+```
+
+The evidence is the needs-me regression suite's routing test, which pins this shape, the cut, and that a stray backtick or list marker in a rule stays text.

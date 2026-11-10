@@ -84,7 +84,8 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
-  needs-me/<id>.json the words Firstmate raised and updated a captain call with, for its T3 decision thread; written only by bin/fm-captain-hold.sh context, which owns the schema
+  needs-me/<id>.json the words Firstmate raised and updated a captain call with, for its T3 Bridge decision; written only by bin/fm-captain-hold.sh context, which owns the schema
+  rules/inventory.json  every standing captain rule the T3 Bridge lists, with its approval or Firstmate's recommendation, and the rule-file edits his answers still need; kept by Firstmate, answers recorded with bin/fm-rules.sh, schema owned by bin/fm-t3-mcp.mjs rules-payload
   <id>/status.log <id>/status.<N>.log <id>/children/<child>/...  optional teardown archives; see docs/architecture.md "Task status archives"
   pipeline-spend.jsonl  optional per-task no-mistakes pipeline spend, written only when config/pipeline-spend is present; bin/fm-pipeline-spend.sh owns the schema
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
@@ -133,8 +134,7 @@ state/               runtime records and signals; gitignored
   pr-health.check.sh  generated owned-PR health poll shim and its .check-trust binding; present only after bin/fm-pr-health.sh arm, which config/pr-health-monitor gates (docs/configuration.md "PR health monitor")
   pr-health.json     the health monitor's fm-pr-health.v1 record: per-PR fingerprints of the conditions already reported, the task branch-to-PR lookup cache, and the GitHub notifications cursor, replaced by rename under .pr-health.lock; bin/fm-pr-health.sh owns the format
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
-  t3-captain-wait/   live T3 workers whose card may show a status label; bin/fm-t3-captain-label.sh owns it
-  t3-needs-me/       the FirstMate thread the captain's T3 decisions reply to, the run of refused decision passes and its alert for the watcher, the last objectives push, and, only on a T3 without the Bridge list, each call's decision thread; bin/fm-t3-needs-me.sh owns it
+  t3-needs-me/       the FirstMate thread the captain's T3 decisions reply to, the run of refused decision passes and its alert for the watcher, and the last objectives, routing and rules pushes; bin/fm-t3-needs-me.sh owns it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
@@ -167,6 +167,9 @@ state/               runtime records and signals; gitignored
   .secondmate-relaunch-<id> .secondmate-relaunch-bound-<id>   durable relaunch history and parked-bound state; never touch (bin/fm-secondmate-liveness-lib.sh owns the ledger contract)
   .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
   lane-capacity.json  this home's published lane facts, refreshed only while config/lane-capacity exists; written only by bin/fm-capacity.sh --publish, whose header owns the document
+  lane-footprint.json  auto lane budget's per-lane footprint ledger, written only by bin/fm-capacity.sh --publish in auto mode, whose header owns the format
+  .lane-vitals-host  cached Windows host view for the auto budget under WSL2 and on native Windows, written only by bin/fm-capacity.sh --publish; safe to delete
+  .lane-admission.lock  bin/fm-spawn.sh's machine-wide lane admission lock in the local root home, taken only with admit-spawns; never touch
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
 .no-mistakes/        local validation state and evidence; gitignored

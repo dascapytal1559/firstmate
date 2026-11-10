@@ -124,7 +124,7 @@ test_gate_refuses_missing_tools() {
   expect_code 4 "$RC" "a server without t3_thread_launch must be refused"
   assert_equals capability_gate "$(field "$OUT" error.code)" "the refusal should be the capability gate"
   assert_contains "$ERR" "t3_thread_launch" "the refusal should name the missing tool"
-  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_thread_configuration","t3_project_list","t3_project_create","t3_pending_request_list","t3_pending_request_read","t3_pending_request_respond","orchestrator_capabilities"]'
+  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_thread_configure","t3_project_list","t3_project_create","t3_pending_request","orchestrator_capabilities"]'
   mcp status
   expect_code 4 "$RC" "a server without t3_environment_read cannot prove its identity"
   assert_contains "$ERR" "lacks t3_environment_read" "the refusal should name the missing identity tool"
@@ -400,7 +400,7 @@ test_thread_for_root() {
 # nothing up and changes nothing.
 test_pin_coordinator() {
   local project captain other pins
-  fresh_case pin-coordinator '{"toolset":"current","coordinatorRestartNote":true}'
+  fresh_case pin-coordinator '{"coordinatorRestartNote":true}'
   mcp project-ensure --root "$TMP_ROOT/proj"
   project=$(field "$OUT" projectId)
   mcp pin-coordinator --root "$TMP_ROOT/proj"
@@ -426,7 +426,7 @@ test_pin_coordinator() {
   pins=$(t3_fake_calls t3_thread_configure | grep -c '"coordinator":true' || true)
   assert_equals 2 "$pins" "each pin is one t3_thread_configure coordinator:true"
 
-  fresh_case pin-coordinator-absent '{"toolset":"current"}'
+  fresh_case pin-coordinator-absent
   mcp project-ensure --root "$TMP_ROOT/proj"
   project=$(field "$OUT" projectId)
   mcp launch --project "$project" --title captain --model-selection "$SEL"
@@ -441,61 +441,70 @@ test_pin_coordinator() {
   pass "fm-t3-mcp pin-coordinator: pins the live root thread as the one coordinator only where T3 offers it"
 }
 
-# status-label sets and clears a thread's crew card label, updates only when
-# that changes it, proves T3's answer, and leaves a thread that is gone alone. A
-# T3 without the label refuses only setting one, and still passes the gate.
-test_status_label() {
-  local project thread
-  fresh_case status-label '{"toolset":"current","statusLabels":true}'
+# crew-status brings every card in one session in line with the label it wants
+# for its worker's turn: it updates only when that changes the card, proves
+# T3's answer, leaves a card whose turn it cannot read, and reports a gone
+# thread or an older T3 per card. A T3 without the label still passes the gate.
+test_crew_status() {
+  local project thread other
+  fresh_case crew-status '{"statusLabels":true}'
   mcp project-ensure --root "$TMP_ROOT/proj"
   project=$(field "$OUT" projectId)
   mcp launch --project "$project" --title 'Print view' --model-selection "$SEL"
   thread=$(field "$OUT" threadId)
-  mcp status-label --thread "$thread" --label 'Testing'
+  mcp launch --project "$project" --title 'Other' --model-selection "$SEL"
+  other=$(field "$OUT" threadId)
+  FM_T3_A=$thread FM_T3_B=$other t3_fake_set 'for (const id of [process.env.FM_T3_A, process.env.FM_T3_B]) { const t = w.threads[id]; t.status = "completed"; t.activeRunId = null; }'
+  : > "$T3_FAKE_LOG"
+  crew_cards() {  # <json-cards> -> runs the verb on {cards: <json-cards>}
+    printf '{"cards":%s}\n' "$1" > "$TMP_ROOT/cards.json"
+    mcp crew-status --file "$TMP_ROOT/cards.json"
+  }
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"},{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
   expect_code 0 "$RC" "labelling should succeed: $ERR"
-  assert_equals 'Testing' "$(field "$OUT" statusLabel)" "the label is set"
-  assert_equals true "$(field "$OUT" changed)" "the first label updates"
-  mcp status-label --thread "$thread" --label 'Testing'
-  assert_equals false "$(field "$OUT" changed)" "a repeat updates nothing"
-  assert_equals 1 "$(t3_fake_calls t3_thread_update | wc -l | tr -d ' ')" "a repeat makes no update call"
-  mcp status-label --thread "$thread" --label 'Waiting for captain'
-  assert_equals 'Waiting for captain' "$(field "$OUT" statusLabel)" "another label replaces it"
-  mcp status-label --thread "$thread"
-  expect_code 0 "$RC" "clearing should succeed: $ERR"
-  assert_equals '' "$(field "$OUT" statusLabel)" "no label clears it"
-  assert_equals true "$(field "$OUT" changed)" "clearing updates"
-  mcp status-label --thread "$thread"
-  assert_equals false "$(field "$OUT" changed)" "a clear card needs no update"
+  assert_equals 'set set' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.1.outcome)" "both cards are set"
+  assert_equals 'Testing Ready' "$(field "$OUT" cards.0.label) $(field "$OUT" cards.1.label)" "each to its own label"
+  assert_equals 1 "$(t3_fake_calls t3_environment_read | wc -l | tr -d ' ')" "every card goes through one session"
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  assert_equals unchanged "$(field "$OUT" cards.0.outcome)" "a repeat changes nothing"
+  assert_equals 2 "$(t3_fake_calls t3_thread_update | wc -l | tr -d ' ')" "a repeat makes no update call"
+
+  FM_T3_ID=$other t3_fake_set 'const t = w.threads[process.env.FM_T3_ID]; t.status = "running"; t.activeRunId = "run-x";'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
+  assert_equals cleared "$(field "$OUT" cards.0.outcome)" "a worker at work gets its working label, here none"
+  FM_T3_ID=$other t3_fake_set 'w.threads[process.env.FM_T3_ID].pendingRequestCount = 1'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Waiting\",\"working\":\"\"}]"
+  assert_equals 'set Waiting' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.0.label)" "a pending request is between turns"
+  FM_T3_ID=$other t3_fake_set 'const t = w.threads[process.env.FM_T3_ID]; t.pendingRequestCount = 0; t.status = "failed"; t.activeRunId = null;'
+  crew_cards "[{\"thread\":\"$other\",\"between\":\"Ready\",\"working\":\"\"}]"
+  assert_equals 'left Waiting' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.0.label)" "a turn it cannot read leaves the card"
+  crew_cards "[{\"thread\":\"$other\",\"between\":null,\"working\":null}]"
+  assert_equals left "$(field "$OUT" cards.0.outcome)" "null leaves the card whatever the turn"
   assert_equals 0 "$(t3_fake_calls t3_thread_update | grep -c '"action":"rename"')" "a label never renames"
 
   t3_fake_set 'w.statusLabelAnswers = "something else"'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 1 "$RC" "a label T3 does not answer with is unproven"
-  assert_contains "$OUT" status_label_unproven "the failure names the unproven label"
-  t3_fake_set 'delete w.statusLabelAnswers; w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
-  mcp status-label --thread "$thread"
-  expect_code 3 "$RC" "T3's refusal of the update is a typed failure"
-  t3_fake_set 'delete w.failTools'
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"\",\"working\":\"\"},{\"thread\":\"thread-missing\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  expect_code 0 "$RC" "a failed card is reported per card: $ERR"
+  assert_equals failed "$(field "$OUT" cards.0.outcome)" "a label T3 does not answer with is unproven"
+  assert_equals status_label_unproven "$(field "$OUT" cards.0.error.code)" "the failure names the unproven label"
+  assert_equals gone "$(field "$OUT" cards.1.outcome)" "a thread T3 no longer has is gone, and the failure before it stops nothing"
+  t3_fake_set 'delete w.statusLabelAnswers'
 
-  mcp status-label --thread thread-missing --label 'Testing'
-  expect_code 0 "$RC" "a thread T3 no longer has is no failure: $ERR"
-  assert_equals false "$(field "$OUT" exists)" "a missing thread reads exists:false"
   FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Testing"; w.threads[process.env.FM_T3_ID].archived = true'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 0 "$RC" "an archived thread is no failure: $ERR"
-  assert_equals true "$(field "$OUT" archived)" "the result reports the archive"
-  assert_equals '' "$(field "$OUT" statusLabel)" "an archived thread has no card, so it always loses the label"
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"}]"
+  assert_equals 'cleared' "$(field "$OUT" cards.0.outcome)$(field "$OUT" cards.0.label)" "an archived thread has no card, so it always loses the label"
 
   t3_fake_set 'delete w.statusLabels'
-  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = false'
-  mcp status-label --thread "$thread" --label 'Testing'
-  expect_code 4 "$RC" "a T3 without the label refuses only this verb"
-  assert_contains "$OUT" status_label_unsupported "the refusal names the missing label"
-  mcp status-label --thread "$thread"
-  expect_code 0 "$RC" "a T3 without the label has none to clear: $ERR"
+  # An older T3 carries no labels at all.
+  FM_T3_ID="$thread" t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = false; for (const t of Object.values(w.threads)) delete t.statusLabel;'
+  crew_cards "[{\"thread\":\"$thread\",\"between\":\"Testing\",\"working\":\"Testing\"},{\"thread\":\"$other\",\"between\":\"\",\"working\":\"\"}]"
+  expect_code 0 "$RC" "a T3 without the label is no failure: $ERR"
+  assert_equals 'unsupported unchanged' "$(field "$OUT" cards.0.outcome) $(field "$OUT" cards.1.outcome)" "only setting a label is unsupported there"
+  crew_cards '[{"thread":"x","between":7,"working":""}]'
+  expect_code 2 "$RC" "a malformed card is a usage error"
   mcp state --thread "$thread"
   expect_code 0 "$RC" "the label stays out of the capability gate: $ERR"
-  pass "fm-t3-mcp status-label: one label on the card, proven, and harmless on a repeat, a gone thread, or an older T3"
+  pass "fm-t3-mcp crew-status: every card in one session, proven, and harmless on a repeat, a gone thread, or an older T3"
 }
 
 test_typed_failure_and_transport_errors() {
@@ -548,27 +557,34 @@ test_telemetry_reported() {
   pass "fm-t3-mcp status: reads an unset telemetry setting as off and warns only on an explicit enable"
 }
 
-test_status_reports_server_start() {
+test_status_reports_server_started_at() {
   local tdir="$TMP_ROOT/server-start" first second url
-  command -v lsof >/dev/null 2>&1 || { echo "skip - fm-t3-mcp status serverStart: lsof absent"; return 0; }
   t3_fake_stop
   t3_fake_start "$tdir"
   url=$T3_FAKE_URL
   fresh_case server-start
   mcp status
-  expect_code 0 "$RC" "status against a loopback server: $ERR"
-  first=$(field "$OUT" serverStart)
-  case "$first" in "$T3_FAKE_PID@"?*) ;; *) fail "serverStart names the listening process and its start time, got '$first'" ;; esac
+  expect_code 0 "$RC" "status against a T3 without the restart registry: $ERR"
+  assert_equals "" "$(field "$OUT" serverStartedAt)" "a T3 without t3_restart_status has no restart identity"
+  t3_fake_set 'w.restartStatus = true'
   mcp status
-  assert_equals "$first" "$(field "$OUT" serverStart)" "serverStart is stable while the same server runs"
+  expect_code 0 "$RC" "status against the T3 Code fork: $ERR"
+  first=$(field "$OUT" serverStartedAt)
+  case "$first" in 20[0-9][0-9]-*T*Z) ;; *) fail "serverStartedAt is T3's ISO start time, got '$first'" ;; esac
+  mcp status
+  assert_equals "$first" "$(field "$OUT" serverStartedAt)" "serverStartedAt is stable while the same server runs"
   t3_fake_restart "$tdir"
   assert_equals "$url" "http://127.0.0.1:$(cat "$tdir/port")" "the restarted fake keeps its origin"
   mcp status
   expect_code 0 "$RC" "status after a restart: $ERR"
-  second=$(field "$OUT" serverStart)
-  case "$second" in "$T3_FAKE_PID@"?*) ;; *) fail "serverStart after a restart names the new process, got '$second'" ;; esac
-  assert_not_equals "$first" "$second" "a restarted server behind the same origin reads a new serverStart"
-  pass "fm-t3-mcp status: serverStart identifies the loopback server process and changes on every restart"
+  second=$(field "$OUT" serverStartedAt)
+  case "$second" in 20[0-9][0-9]-*T*Z) ;; *) fail "serverStartedAt after a restart is an ISO time, got '$second'" ;; esac
+  assert_not_equals "$first" "$second" "a restarted server behind the same origin reads a new serverStartedAt"
+  t3_fake_set 'w.failTools = { t3_restart_status: { code: "unavailable", message: "down" } }'
+  mcp status
+  expect_code 0 "$RC" "a failed restart read never fails status: $ERR"
+  assert_equals "" "$(field "$OUT" serverStartedAt)" "a failed restart read reports no identity"
+  pass "fm-t3-mcp status: serverStartedAt is T3's restart identity, new on every restart and absent where T3 has none"
 }
 
 test_read_limit_matches_t3_cap() {
@@ -764,7 +780,7 @@ test_requests_and_respond() {
   printf '{"q1":"a"}' > "$TMP_ROOT/answers"
   mcp respond --thread thread-q --request req-question --answers-file "$TMP_ROOT/answers"
   expect_code 0 "$RC" "respond: $ERR"
-  assert_equals '{"q1":"a"}' "$(field "$(t3_fake_calls t3_pending_request_respond)" answers)" "the answers reach t3_pending_request_respond"
+  assert_equals '{"q1":"a"}' "$(field "$(t3_fake_calls t3_pending_request | grep '"action":"respond"')" answers)" "the answers reach t3_pending_request action respond"
   mcp respond --thread thread-q --request req-approval --answers-file "$TMP_ROOT/answers"
   expect_code 3 "$RC" "a permission approval cannot be answered through the question tools"
   mcp requests --thread thread-q
@@ -779,7 +795,7 @@ test_requests_and_respond() {
 # that does not keeps approvals unanswerable.
 test_approvals_with_approval_responses() {
   local sig
-  fresh_case approvals '{"toolset":"current","approvalResponses":true}'
+  fresh_case approvals '{"approvalResponses":true}'
   t3_fake_set 'w.threads = { "thread-a": { threadId: "thread-a", projectId: "p", status: "running", activeRunId: "run-a", archived: false, worktreePath: null,
     items: [{ itemId: "turn-item:runtime-request:req-appr-a", type: "approval_request", status: "waiting", text: "python3?" }],
     runs: [{ runId: "run-a", ordinal: 1, status: "running" }],
@@ -836,7 +852,7 @@ test_approvals_with_approval_responses() {
   expect_code 4 "$RC" "a request that is not a pending approval is refused"
   assert_equals not_an_approval "$(field "$OUT" error.code)" "the refusal says it is not an approval"
 
-  fresh_case approvals-off '{"toolset":"current"}'
+  fresh_case approvals-off
   t3_fake_set 'w.threads = { "thread-a": { threadId: "thread-a", projectId: "p", status: "running", activeRunId: "run-a", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-a", ordinal: 1, status: "running" }],
     runtimeRequests: [{ id: "req-appr-a", kind: "approval", status: "pending", command: "python3 - <<EOF" }] } }'
@@ -1060,72 +1076,27 @@ test_capture_clamps_lines_and_closes_session() {
   pass "fm-t3-mcp capture: --lines above 500 reads the last 500, and the verb ends its MCP session"
 }
 
-test_gate_accepts_either_tool_generation() {
-  fresh_case generations '{"toolset":"current"}'
+test_gate_refuses_pre_0_1_3_tool_names() {
+  fresh_case pre-0-1-3
+  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_thread_configuration","t3_project_list","t3_project_create","t3_pending_request_list","t3_pending_request_read","t3_pending_request_respond","orchestrator_capabilities","t3_environment_read"]'
   mcp status
-  expect_code 0 "$RC" "a T3 offering only the 0.1.3 tool names passes the gate: $ERR"
-  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_project_list","t3_project_create","t3_pending_request","orchestrator_capabilities","t3_environment_read"]'
-  mcp status
-  expect_code 4 "$RC" "a server with neither configuration tool must be refused"
-  assert_contains "$ERR" "t3_thread_configure (or t3_thread_configuration)" "the refusal names both generations of the missing capability"
-  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_thread_configure","t3_project_list","t3_project_create","t3_pending_request_list","t3_pending_request_read","orchestrator_capabilities","t3_environment_read"]'
-  mcp status
-  expect_code 4 "$RC" "an incomplete earlier pending-request family must be refused"
-  assert_contains "$ERR" "t3_pending_request (or t3_pending_request_list, t3_pending_request_read, t3_pending_request_respond)" "the refusal names both pending-request generations"
-  pass "fm-t3-mcp gate: each merged capability is met by the T3 0.1.3 tool or the complete earlier family"
+  expect_code 4 "$RC" "a T3 offering only the tool names from before 0.1.3 must be refused"
+  assert_equals capability_gate "$(field "$OUT" error.code)" "the refusal should be the capability gate"
+  assert_contains "$ERR" "lacks t3_thread_configure, t3_pending_request" "the refusal names the merged tools it lacks"
+  pass "fm-t3-mcp gate: refuses a T3 offering only the tool names from before 0.1.3"
 }
 
-test_current_tool_names_drive_launch_and_requests() {
+test_launch_reads_binding_through_configure() {
   local project sel='{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"}]}'
-  fresh_case current-tools '{"toolset":"current"}'
+  fresh_case configure-read
   mcp project-ensure --root "$TMP_ROOT/proj"
   project=$(field "$OUT" projectId)
   : > "$T3_FAKE_LOG"
-  mcp launch --project "$project" --title current --model-selection "$sel" --worktree "$WT"
+  mcp launch --project "$project" --title read --model-selection "$sel" --worktree "$WT"
   expect_code 0 "$RC" "a launch reads its binding back through t3_thread_configure: $ERR"
   assert_equals 1 "$(t3_fake_calls t3_thread_configure | grep -c threadId)" "the binding is read once through t3_thread_configure"
   assert_not_contains "$(t3_fake_calls t3_thread_configure)" modelSelection "the configuration read never sends a modelSelection"
-  t3_fake_set 'w.bindModel = "gpt-6-luna"'
-  mcp launch --project "$project" --title model --model-selection "$sel" --worktree "$WT"
-  expect_code 4 "$RC" "a launch on another model is still refused under the 0.1.3 names"
-  t3_fake_set 'delete w.bindModel; w.threads = { "thread-q": { threadId: "thread-q", projectId: "p", status: "running", activeRunId: "run-q", archived: false, worktreePath: null, items: [],
-    runs: [{ runId: "run-q", ordinal: 1, status: "running" }],
-    runtimeRequests: [
-      { id: "req-question", kind: "user_input", status: "pending", questions: [{ id: "q1", header: "Pick", question: "Which?", options: [{ label: "a", description: "A" }] }] },
-      { id: "req-approval", kind: "approval", status: "pending" } ] } }'
-  mcp requests --thread thread-q
-  expect_code 0 "$RC" "requests through t3_pending_request: $ERR"
-  assert_equals req-question "$(field "$OUT" questions.0.requestId)" "the question is listed through action list"
-  assert_equals Which? "$(field "$OUT" questions.0.questions.0.question)" "the question is read through action read"
-  assert_equals 1 "$(field "$OUT" approvals)" "the approval is still counted"
-  printf '{"q1":"a"}' > "$TMP_ROOT/answers"
-  mcp respond --thread thread-q --request req-question --answers-file "$TMP_ROOT/answers"
-  expect_code 0 "$RC" "respond through t3_pending_request: $ERR"
-  assert_equals '{"q1":"a"}' "$(field "$(t3_fake_calls t3_pending_request | grep '"action":"respond"')" answers)" "the answers reach t3_pending_request action respond"
-  pass "fm-t3-mcp current tools: launch read-back and pending requests use t3_thread_configure and t3_pending_request"
-}
-
-test_both_generations_pick_the_working_tools() {
-  local project sel='{"instanceId":"codex","model":"gpt-5.6-sol","options":[{"id":"reasoningEffort","value":"high"}]}'
-  fresh_case both-tools
-  # Earlier T3 lists t3_thread_configure beside t3_thread_configuration but
-  # refuses it without modelSelection, so the dedicated read must win.
-  t3_fake_set 'w.tools = ["t3_thread_launch","t3_thread_send","t3_thread_read","t3_thread_wait","t3_thread_interrupt","t3_thread_organize","t3_thread_list","t3_thread_configuration","t3_thread_configure","t3_project_list","t3_project_create","t3_pending_request_list","t3_pending_request_read","t3_pending_request_respond","t3_pending_request","orchestrator_capabilities","t3_environment_read"]'
-  mcp project-ensure --root "$TMP_ROOT/proj"
-  project=$(field "$OUT" projectId)
-  : > "$T3_FAKE_LOG"
-  mcp launch --project "$project" --title both --model-selection "$sel" --worktree "$WT"
-  expect_code 0 "$RC" "launch on a T3 that lists both configuration tools: $ERR"
-  assert_equals 1 "$(t3_fake_calls t3_thread_configuration | grep -c threadId)" "the dedicated configuration read is used when offered"
-  assert_equals "" "$(t3_fake_calls t3_thread_configure)" "t3_thread_configure is never called where it only writes"
-  t3_fake_set 'w.threads["thread-q"] = { threadId: "thread-q", projectId: "p", status: "running", activeRunId: "run-q", archived: false, worktreePath: null, items: [],
-    runs: [{ runId: "run-q", ordinal: 1, status: "running" }],
-    runtimeRequests: [{ id: "req-question", kind: "user_input", status: "pending", questions: [{ id: "q1", header: "Pick", question: "Which?", options: [] }] }] }'
-  mcp requests --thread thread-q
-  expect_code 0 "$RC" "requests with both pending-request generations offered: $ERR"
-  assert_contains "$(t3_fake_calls t3_pending_request)" '"action":"list"' "the merged pending-request tool is preferred when offered"
-  assert_equals "" "$(t3_fake_calls t3_pending_request_list)" "the earlier list tool is not called"
-  pass "fm-t3-mcp gate: with both generations offered, the configuration read stays on the dedicated tool and pending requests use the merged tool"
+  pass "fm-t3-mcp launch: the binding read-back is t3_thread_configure without a modelSelection"
 }
 
 # A zero budget is the watcher's read beside another backend's wait: it
@@ -1134,7 +1105,7 @@ test_both_generations_pick_the_working_tools() {
 test_watch_zero_budget_reads_pending_requests_only() {
   local started elapsed sig
   fresh_case watch-zero-budget
-  t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+  t3_fake_set 'w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-w", ordinal: 1, status: "running" }] } }'
   started=$(date +%s)
   mcp watch --thread thread-w --timeout-ms 0
@@ -1171,7 +1142,7 @@ calls() {  # <tool> -> how many calls to <tool> the fake logged
 test_watch_pending_push_ends_the_wait() {
   local started elapsed bg_pid sig call
   fresh_case watch-pending-push
-  t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.pendingPush = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+  t3_fake_set 'w.approvalResponses = true; w.pendingPush = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-w", ordinal: 1, status: "running" }], runtimeRequests: [] } }'
   ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-touch", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt", override: "provider_check" })' ) &
   bg_pid=$!
@@ -1234,7 +1205,7 @@ test_watch_pending_push_ends_the_wait() {
 test_watch_without_pending_push_reads_at_the_next_call() {
   local bg_pid
   fresh_case watch-no-push
-  t3_fake_set 'w.toolset = "current"; w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
+  t3_fake_set 'w.approvalResponses = true; w.threads = { "thread-w": { threadId: "thread-w", projectId: "p", status: "running", activeRunId: "run-w", archived: false, worktreePath: null, items: [],
     runs: [{ runId: "run-w", ordinal: 1, status: "running" }], runtimeRequests: [] } }'
   ( sleep 0.5; t3_fake_set 'w.threads["thread-w"].runtimeRequests.push({ id: "req-touch", kind: "approval", status: "pending", requestKind: "command", command: "touch probe.txt" })' ) &
   bg_pid=$!
@@ -1550,10 +1521,10 @@ test_launch_refusals
 test_send_state_capture_interrupt_archive
 test_thread_for_root
 test_pin_coordinator
-test_status_label
+test_crew_status
 test_typed_failure_and_transport_errors
 test_telemetry_reported
-test_status_reports_server_start
+test_status_reports_server_started_at
 test_read_limit_matches_t3_cap
 test_interrupt_confirms_only_the_interrupted_run
 test_send_lost_reply_is_unconfirmed_and_retry_is_one_delivery
@@ -1568,9 +1539,8 @@ test_launch_binds_thread_environment_and_instructions
 test_launch_names_its_crew_parent
 test_close_stops_delegated_threads
 test_requests_and_respond
-test_gate_accepts_either_tool_generation
-test_current_tool_names_drive_launch_and_requests
-test_both_generations_pick_the_working_tools
+test_gate_refuses_pre_0_1_3_tool_names
+test_launch_reads_binding_through_configure
 test_watch_is_event_driven_and_bounded
 test_watch_reports_failed_waits_not_timeout
 test_helper_runs_through_symlinked_path
