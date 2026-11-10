@@ -104,7 +104,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds and current state |
-| `fm-t3-needs-me.sh`      | Keep the decisions on the captain's T3 Bridge in line with his open captain calls and the Bridge's objectives in line with his objectives file, and read a decision reply's task id |
+| `fm-t3-needs-me.sh`      | Keep the captain's T3 Bridge in line with his open captain calls, objectives file, model routing table, and rule inventory, and read a decision reply's task id |
+| `fm-rules.sh`            | Record the captain's answer to a rule on T3's Bridge and track the rule-file edit it still needs |
 | `fm-t3-main-pretool-check.sh` | PreToolUse credential seatbelt for a T3 home's main |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
