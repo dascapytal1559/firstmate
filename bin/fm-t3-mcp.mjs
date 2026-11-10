@@ -275,6 +275,23 @@
 //     through t3_routing_set (markdown null clears it). T3 must answer with
 //     exactly that markdown, else exit 1 (routing_unproven). Exit 4
 //     (routing_unsupported) when this T3 has no t3_routing_set.
+//   fm-t3-mcp.mjs rules-payload --file <json-file>
+//     Local, no T3 call: the Bridge's rules section (docs/t3code-backend.md
+//     "Rules"), from <json-file>, the home's data/rules/inventory.json
+//     ({rules[], pendingEdits[]?}). Every rule must hold to the T3 fork's
+//     t3_rules_set contract: exactly the fields id, group, source?, text,
+//     status ("approved" or "pending"), approvedOn? (YYYY-MM-DD, approved
+//     only) and recommendation (pending only, and required there: choice one
+//     of keep, keep-narrower, make-rule, fact, drop, a label, note?,
+//     proposedText?); ids distinct; at most 400 rules; text, note and
+//     proposedText at most 2000 characters. Anything else exits 1
+//     (rules_malformed) naming the first fault; nothing is cut. Prints
+//     {rules (the contract fields only, in file order), count, pending}.
+//   fm-t3-mcp.mjs rules --file <json-file>
+//     Replaces the Bridge's rules with <json-file>'s {rules} through
+//     t3_rules_set (an empty list clears them). T3 must answer with {rules}
+//     holding exactly the ids sent, in order, else exit 1 (rules_unproven).
+//     Exit 4 (rules_unsupported) when this T3 has no t3_rules_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
@@ -2222,6 +2239,107 @@ async function routing(flags) {
   return { ok: true, modelRouting: got };
 }
 
+// --- rules (docs/t3code-backend.md "Rules") --------------------------------
+
+export const RULES_MAX = 400;
+export const RULE_TEXT_MAX = 2000;
+const RULE_FIELDS = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
+const RECOMMENDATION_FIELDS = new Set(["choice", "label", "note", "proposedText"]);
+export const RULE_CHOICES = ["keep", "keep-narrower", "make-rule", "fact", "drop"];
+
+// The t3_rules_set list from a data/rules/inventory.json value, or a Refusal
+// naming the first fault. Nothing is cut: a rule out of bounds is refused.
+export function rulesPayload(source) {
+  const bad = (what) => {
+    throw new Refusal("rules_malformed", `data/rules/inventory.json: ${what}`, 1);
+  };
+  const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const text = (v) => typeof v === "string" && v.trim() !== "";
+  if (!isObject(source)) bad("the top-level value must be an object");
+  const extra = Object.keys(source).find((k) => k !== "rules" && k !== "pendingEdits");
+  if (extra !== undefined) bad(`unknown top-level field ${extra}`);
+  if (!Array.isArray(source.rules)) bad("rules must be an array");
+  if (source.pendingEdits !== undefined && !Array.isArray(source.pendingEdits)) bad("pendingEdits must be an array");
+  if (source.rules.length > RULES_MAX) bad(`${source.rules.length} rules, past the ${RULES_MAX} the Bridge takes`);
+  const seen = new Set();
+  const rules = source.rules.map((r, i) => {
+    const at = `rules[${i}]${isObject(r) && text(r.id) ? ` (${r.id})` : ""}`;
+    if (!isObject(r)) bad(`${at} must be an object`);
+    const unknown = Object.keys(r).find((k) => !RULE_FIELDS.has(k));
+    if (unknown !== undefined) bad(`${at} has unknown field ${unknown}`);
+    if (!text(r.id)) bad(`${at} needs id`);
+    if (seen.has(r.id)) bad(`${at} repeats id ${r.id}`);
+    seen.add(r.id);
+    if (!text(r.group)) bad(`${at} needs group`);
+    if (r.source !== undefined && !text(r.source)) bad(`${at}.source must be non-empty text`);
+    if (!text(r.text)) bad(`${at} needs text`);
+    if (r.text.length > RULE_TEXT_MAX) bad(`${at}.text is ${r.text.length} characters, past ${RULE_TEXT_MAX}`);
+    if (r.status !== "approved" && r.status !== "pending") bad(`${at}.status must be "approved" or "pending"`);
+    const out = { id: r.id, group: r.group };
+    if (r.source !== undefined) out.source = r.source;
+    out.text = r.text;
+    out.status = r.status;
+    if (r.status === "approved") {
+      if (r.recommendation !== undefined) bad(`${at} is approved, so it takes no recommendation`);
+      if (r.approvedOn !== undefined) {
+        const m = typeof r.approvedOn === "string" && /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.approvedOn);
+        const day = m && new Date(`${r.approvedOn}T00:00:00Z`);
+        if (!m || Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== r.approvedOn) bad(`${at}.approvedOn must be a YYYY-MM-DD date`);
+        out.approvedOn = r.approvedOn;
+      }
+      return out;
+    }
+    if (r.approvedOn !== undefined) bad(`${at} is pending, so it takes no approvedOn`);
+    const rec = r.recommendation;
+    if (!isObject(rec)) bad(`${at} is pending, so it needs a recommendation`);
+    const unknownRec = Object.keys(rec).find((k) => !RECOMMENDATION_FIELDS.has(k));
+    if (unknownRec !== undefined) bad(`${at}.recommendation has unknown field ${unknownRec}`);
+    if (!RULE_CHOICES.includes(rec.choice)) bad(`${at}.recommendation.choice must be one of ${RULE_CHOICES.join(", ")}`);
+    if (!text(rec.label)) bad(`${at}.recommendation needs label`);
+    out.recommendation = { choice: rec.choice, label: rec.label };
+    for (const k of ["note", "proposedText"]) {
+      if (rec[k] === undefined) continue;
+      if (!text(rec[k])) bad(`${at}.recommendation.${k} must be non-empty text`);
+      if (rec[k].length > RULE_TEXT_MAX) bad(`${at}.recommendation.${k} is ${rec[k].length} characters, past ${RULE_TEXT_MAX}`);
+      out.recommendation[k] = rec[k];
+    }
+    return out;
+  });
+  return { ok: true, rules, count: rules.length, pending: rules.filter((r) => r.status === "pending").length };
+}
+
+async function rulesPayloadVerb(flags) {
+  let source;
+  try {
+    source = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    throw new Refusal("rules_malformed", `data/rules/inventory.json is not readable JSON: ${err.message}`, 1);
+  }
+  return rulesPayload(source);
+}
+
+async function rulesVerb(flags) {
+  let input;
+  try {
+    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
+  } catch (err) {
+    usage(`--file is not readable JSON: ${err.message}`);
+  }
+  let rules;
+  try {
+    ({ rules } = rulesPayload({ rules: input?.rules }));
+  } catch (err) {
+    usage(`--file rules are outside the contract: ${err.message}`);
+  }
+  const { session } = await verifiedSession(flags);
+  if (!session.toolSchemas.has("t3_rules_set")) throw new Refusal("rules_unsupported", "this T3 has no Bridge rules", 4);
+  const out = await session.call("t3_rules_set", { rules });
+  const got = out?.rules;
+  const same = Array.isArray(got) && got.length === rules.length && got.every((r, i) => r?.id === rules[i].id);
+  if (!same) throw new Refusal("rules_unproven", "T3 accepted the rules but answered with a different list", 1);
+  return { ok: true, rules: got.length };
+}
+
 const VERBS = {
   login,
   status,
@@ -2250,6 +2368,8 @@ const VERBS = {
   objectives,
   "routing-payload": routingPayloadVerb,
   routing,
+  "rules-payload": rulesPayloadVerb,
+  rules: rulesVerb,
 };
 
 async function main(argv) {

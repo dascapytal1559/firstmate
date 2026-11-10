@@ -745,8 +745,129 @@ test_routing_absent_or_unsupported() {
   pass "fm-t3-needs-me.sh sync: no dispatch file sends no routing table; an older T3 is quiet and retried"
 }
 
+# --- rules -------------------------------------------------------------------
+
+# write_rules <file>: a made-up data/rules/inventory.json.
+write_rules() {
+  mkdir -p "$(dirname "$1")"
+  cat > "$1" <<'EOF'
+{
+  "rules": [
+    { "id": "R1", "group": "FirstMate · How to work", "source": "data/captain.md", "text": "Answer in **plain** words.",
+      "status": "approved", "approvedOn": "2026-11-08" },
+    { "id": "R2", "group": "FirstMate · How to work", "text": "Search before saying not found.", "status": "pending",
+      "recommendation": { "choice": "keep-narrower", "label": "Keep narrower", "note": "Too broad.", "proposedText": "Search X first." } },
+    { "id": "W1", "group": "Workers", "text": "Use short commands.", "status": "pending",
+      "recommendation": { "choice": "drop", "label": "Drop" } }
+  ],
+  "pendingEdits": [{ "id": "R0", "choice": "drop", "on": "2026-11-09", "text": "Old rule." }]
+}
+EOF
+}
+
+rules_payload() {
+  node "$ROOT/bin/fm-t3-mcp.mjs" rules-payload --file "$1"
+}
+
+rules_calls() {
+  t3_fake_calls t3_rules_set | grep -c . || true
+}
+
+# rules_refused <file> <fault>: rules-payload refuses the file, naming <fault>.
+rules_refused() {
+  local out
+  out=$(rules_payload "$1" 2>/dev/null)
+  expect_code 1 "$?" "a file outside the contract is refused ($2)"
+  assert_equals "rules_malformed" "$(printf '%s' "$out" | jq -r '.error.code')" "and named so ($2)"
+  assert_contains "$(printf '%s' "$out" | jq -r '.error.message')" "$2" "with the fault"
+}
+
+test_rules_payload_shape() {
+  local f="$TMP_ROOT/rules/inventory.json" g="$TMP_ROOT/rules/bad.json" out long
+  write_rules "$f"
+  out=$(rules_payload "$f") || fail "the list should build"
+  assert_equals "3 2" "$(printf '%s' "$out" | jq -r '"\(.count) \(.pending)"')" "three rules, two pending"
+  assert_equals "$(jq -c '.rules' "$f")" "$(printf '%s' "$out" | jq -c '.rules')" "sent exactly as kept, pendingEdits left out"
+  jq '.rules[0].owner = "me"' "$f" > "$g"; rules_refused "$g" "rules[0] (R1) has unknown field owner"
+  jq '.rules[1].id = "R1"' "$f" > "$g"; rules_refused "$g" "repeats id R1"
+  jq 'del(.rules[2].recommendation)' "$f" > "$g"; rules_refused "$g" "is pending, so it needs a recommendation"
+  jq '.rules[0].recommendation = .rules[2].recommendation' "$f" > "$g"; rules_refused "$g" "is approved, so it takes no recommendation"
+  jq '.rules[1].recommendation.choice = "maybe"' "$f" > "$g"; rules_refused "$g" "recommendation.choice must be one of"
+  jq '.rules[0].approvedOn = "2026-02-30"' "$f" > "$g"; rules_refused "$g" "approvedOn must be a YYYY-MM-DD date"
+  jq '.rules[0].status = "done"' "$f" > "$g"; rules_refused "$g" "status must be"
+  long=$(head -c 2001 /dev/zero | tr '\0' 'x')
+  jq --arg t "$long" '.rules[0].text = $t' "$f" > "$g"; rules_refused "$g" "text is 2001 characters, past 2000"
+  jq --arg t "$long" '.rules[1].recommendation.proposedText = $t' "$f" > "$g"; rules_refused "$g" "proposedText is 2001 characters"
+  jq '.rules = [range(401) | {id: "R\(.)", group: "G", text: "t", status: "approved"}]' "$f" > "$g"; rules_refused "$g" "401 rules, past the 400"
+  printf '{"rules": []}\n' > "$g"
+  assert_equals "0" "$(rules_payload "$g" | jq -r '.count')" "an empty list is a list"
+  pass "fm-t3-mcp.mjs rules-payload: sends the contract fields as kept, refuses anything outside the contract"
+}
+
+test_rules_push_only_when_changed() {
+  make_home rules 'w.rulesTool = true'
+  local out inv="$HOME_DIR/data/rules/inventory.json"
+  write_rules "$inv"
+  : > "$T3_FAKE_LOG"
+  out=$(sync_now)
+  expect_code 0 "$?" "the first pass pushes the rules: $out"
+  assert_equals "1" "$(rules_calls)" "one push"
+  assert_equals "$(jq -c '.rules' "$inv")" "$(jq -c '.rules' "$T3_FAKE_WORLD")" "of the whole list"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "an unchanged pass should succeed"
+  assert_equals "0" "$(rules_calls)" "an unchanged list is not pushed again"
+  jq '.rules[1].text = "Search, then say."' "$inv" > "$inv.next" && mv "$inv.next" "$inv"
+  t3_fake_set 'w.rulesAnswer = []'
+  out=$(sync_now)
+  expect_code 1 "$?" "an answer without the ids sent is not proof: $out"
+  assert_contains "$out" "rules: the push failed" "the line names the rules"
+  t3_fake_set 'delete w.rulesAnswer'
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "the retry should succeed"
+  assert_equals "1" "$(rules_calls)" "the next pass retries"
+  assert_equals "Search, then say." "$(jq -r '.rules[1].text' "$T3_FAKE_WORLD")" "with the new text"
+  jq '.rules[0].recommendation = {choice: "keep", label: "Keep"}' "$inv" > "$inv.next" && mv "$inv.next" "$inv"
+  : > "$T3_FAKE_LOG"
+  out=$(sync_now)
+  expect_code 1 "$?" "a malformed inventory is reported: $out"
+  assert_contains "$out" "is approved, so it takes no recommendation" "naming the fault"
+  assert_equals "0" "$(rules_calls)" "and nothing is sent"
+  assert_equals "Search, then say." "$(jq -r '.rules[1].text' "$T3_FAKE_WORLD")" "so the Bridge keeps the last list"
+  out=$(sync_now)
+  expect_code 1 "$?" "and reported again on the next pass: $out"
+  rm -f "$inv"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a pass without the inventory should succeed"
+  assert_equals '{"rules":[]}' "$(t3_fake_calls t3_rules_set)" "a removed inventory clears the list"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "the pass should succeed"
+  assert_equals "0" "$(rules_calls)" "only once"
+  pass "fm-t3-needs-me.sh sync: the rules are pushed when they change, proven, retried, kept on a malformed inventory, cleared once"
+}
+
+test_rules_absent_or_unsupported() {
+  make_home rules-none 'w.rulesTool = true'
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a home without an inventory should succeed"
+  assert_equals "0" "$(rules_calls)" "never sent, so nothing is cleared"
+  local out n
+  make_home rules-old-t3
+  write_rules "$HOME_DIR/data/rules/inventory.json"
+  out=$(sync_now)
+  expect_code 0 "$?" "a T3 without the rules section is not a failure: $out"
+  assert_equals "" "$out" "and says nothing"
+  for n in 1 2 3 4; do sync_now >/dev/null || fail "a T3 without the rules section stays quiet once held back"; done
+  t3_fake_set 'w.rulesTool = true'
+  FM_NEEDS_ME_NOW=$(( $(date +%s) + 900 )) needs_me sync >/dev/null || fail "the retry should succeed"
+  assert_equals "R1 R2 W1" "$(jq -r '[.rules[].id] | join(" ")' "$T3_FAKE_WORLD")" "and a T3 that gains it gets the list"
+  pass "fm-t3-needs-me.sh sync: no inventory sends no rules; an older T3 is quiet and retried"
+}
+
 test_objectives_payload_shape
 test_objectives_payload_fits_the_limit
+test_rules_payload_shape
+test_rules_push_only_when_changed
+test_rules_absent_or_unsupported
 test_routing_payload_shape
 test_routing_push_only_when_changed
 test_routing_absent_or_unsupported

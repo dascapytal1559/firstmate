@@ -300,6 +300,19 @@ A file without the fields the table needs is reported on every pass and leaves t
 Failures, retries, and a T3 without `t3_routing_set` are handled exactly as for the objectives.
 `bin/fm-t3-mcp.mjs` (`routing-payload` and `routing`) owns the exact table rules, and the T3 Code fork's `fork/README.md` owns the tool's contract.
 
+### Rules
+
+The Bridge also lists every standing rule the captain has given FirstMate, approved or not, under headings by where it applies.
+Its source is the home's private `data/rules/inventory.json`, which FirstMate keeps: each rule's id, heading, file, current wording, and either the date he approved it or FirstMate's recommendation for it (keep, keep narrower with the proposed wording, make it a rule, fact, or drop).
+Each `bin/fm-t3-needs-me.sh sync` pass validates it and pushes the list with `t3_rules_set` only when it differs from the last list T3 accepted.
+A list outside the contract (an unknown field, a pending rule without a recommendation, more than 400 rules, a text past 2000 characters) is reported on every pass and leaves the Bridge's rules as they were; nothing is cut to fit.
+A file that is absent or unreadable clears the list once, and only if one was sent before.
+Failures, retries, and a T3 without `t3_rules_set` are handled exactly as for the objectives.
+- Answer: tapping a pending rule's recommendation sends FirstMate's thread a message whose last line reads `rule-answer: <id> <choice>`.
+  `bin/fm-rules.sh answer <id> <choice>` records it: the inventory, one rules-history log entry with his words, and the rule-file edit FirstMate still owes, which it prints; `bin/fm-rules.sh edited <id>` clears that edit once made.
+  An answer he writes himself is recorded the same way with `--words-file`.
+`bin/fm-t3-mcp.mjs` (`rules-payload` and `rules`) owns the exact field rules, `bin/fm-rules.sh` owns the answer mechanics, and the T3 Code fork's `fork/README.md` owns the tool's contract.
+
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.

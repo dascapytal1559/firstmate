@@ -96,6 +96,15 @@ This is fork-only: upstream has no Bridge, and the dispatch file and how FirstMa
 The table is only shown, never edited from T3 Code, and a T3 Code without it simply shows none.
 Details: [Model routing](docs/t3code-backend.md#model-routing).
 
+## Every standing rule on T3 Code's Bridge
+
+T3 Code's Bridge tab lists every standing rule the captain has given FirstMate, under headings by where it applies, each marked approved or carrying FirstMate's recommendation (keep, keep narrower, make it a rule, fact, or drop).
+Tapping a recommendation sends FirstMate one message saying he agrees, and FirstMate records it: the rule is approved or leaves the list, the rules history gets his words, and FirstMate makes any edit the answer needs in the rule's file.
+For anything else he copies the rule into chat with his own words.
+This is fork-only: upstream has no Bridge and no rule inventory, and FirstMate's approval process for rules is unchanged; the list only shows it.
+A T3 Code without the section simply shows none.
+Details: [Rules](docs/t3code-backend.md#rules) and [`fm-rules.sh`](bin/fm-rules.sh).
+
 ## What the worker is waiting on, on its card
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
