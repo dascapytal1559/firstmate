@@ -285,7 +285,8 @@
 //     status ("approved" or "pending"), approvedOn? (YYYY-MM-DD, approved
 //     only) and recommendation (pending only, and required there: choice one
 //     of keep, keep-narrower, make-rule, fact, drop, a label, note?,
-//     proposedText?); ids distinct; at most 400 rules; text, note and
+//     proposedText?); ids distinct and made of [A-Za-z0-9._-] (the ids
+//     bin/fm-rules.sh records); at most 400 rules; text, note and
 //     proposedText at most 2000 characters. Anything else exits 1
 //     (rules_malformed) naming the first fault; nothing is cut. Prints
 //     {rules (the contract fields only, in file order), count, pending}.
@@ -2253,6 +2254,7 @@ export const RULE_TEXT_MAX = 2000;
 const RULE_FIELDS = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
 const RECOMMENDATION_FIELDS = new Set(["choice", "label", "note", "proposedText"]);
 export const RULE_CHOICES = ["keep", "keep-narrower", "make-rule", "fact", "drop"];
+const RULE_ID = /^[A-Za-z0-9._-]+$/;
 
 // The t3_rules_set list from a data/rules/inventory.json value, or a Refusal
 // naming the first fault. Nothing is cut: a rule out of bounds is refused.
@@ -2274,7 +2276,7 @@ export function rulesPayload(source) {
     if (!isObject(r)) bad(`${at} must be an object`);
     const unknown = Object.keys(r).find((k) => !RULE_FIELDS.has(k));
     if (unknown !== undefined) bad(`${at} has unknown field ${unknown}`);
-    if (!text(r.id)) bad(`${at} needs id`);
+    if (typeof r.id !== "string" || !RULE_ID.test(r.id)) bad(`${at}.id must be letters, digits, dots, underscores or hyphens`);
     if (seen.has(r.id)) bad(`${at} repeats id ${r.id}`);
     seen.add(r.id);
     if (!text(r.group)) bad(`${at} needs group`);

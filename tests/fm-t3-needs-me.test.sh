@@ -824,6 +824,8 @@ test_rules_payload_shape() {
   assert_equals "$(jq -c '.rules' "$f")" "$(printf '%s' "$out" | jq -c '.rules')" "sent exactly as kept, pendingEdits left out"
   jq '.rules[0].owner = "me"' "$f" > "$g"; rules_refused "$g" "rules[0] (R1) has unknown field owner"
   jq '.rules[1].id = "R1"' "$f" > "$g"; rules_refused "$g" "repeats id R1"
+  jq '.rules[1].id = "R 2"' "$f" > "$g"; rules_refused "$g" "rules[1] (R 2).id must be letters, digits"
+  jq '.rules[1].id = 2' "$f" > "$g"; rules_refused "$g" "rules[1].id must be letters, digits"
   jq 'del(.rules[2].recommendation)' "$f" > "$g"; rules_refused "$g" "is pending, so it needs a recommendation"
   jq '.rules[0].recommendation = .rules[2].recommendation' "$f" > "$g"; rules_refused "$g" "is approved, so it takes no recommendation"
   jq '.rules[1].recommendation.choice = "maybe"' "$f" > "$g"; rules_refused "$g" "recommendation.choice must be one of"

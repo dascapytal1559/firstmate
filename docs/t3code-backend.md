@@ -307,7 +307,7 @@ Failures, retries, and a T3 without `t3_routing_set` are handled exactly as for 
 The Bridge also lists every standing rule the captain has given FirstMate, approved or not, under headings by where it applies.
 Its source is the home's private `data/rules/inventory.json`, which FirstMate keeps: each rule's id, heading, file, current wording, and either the date he approved it or FirstMate's recommendation for it (keep, keep narrower with the proposed wording, make it a rule, fact, or drop).
 Each `bin/fm-t3-needs-me.sh sync` pass validates it and pushes the list with `t3_rules_set` only when it differs from the last list T3 accepted.
-A list outside the contract (an unknown field, a pending rule without a recommendation, more than 400 rules, a text past 2000 characters) is reported on every pass and leaves the Bridge's rules as they were; nothing is cut to fit.
+A list outside the contract (an unknown field, a rule id other than letters, digits, dots, underscores and hyphens, a pending rule without a recommendation, more than 400 rules, a text past 2000 characters) is reported on every pass and leaves the Bridge's rules as they were; nothing is cut to fit.
 A file that is absent or unreadable clears the list once, and only if one was sent before.
 Failures, retries, and a T3 without `t3_rules_set` are handled exactly as for the objectives.
 - Answer: tapping a pending rule's recommendation sends FirstMate's thread a message whose last line reads `rule-answer: <id> <choice>`.
