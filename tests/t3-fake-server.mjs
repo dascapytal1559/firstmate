@@ -81,8 +81,9 @@
 //   - a T3 with the Bridge's rules section (world rulesTool, the T3 Code
 //     fork) offers t3_rules_set {rules}, which replaces world rules with the
 //     list within the contract's bounds (at most 400 rules with distinct ids,
-//     each exactly the contract's fields) and answers {rules} (world
-//     rulesAnswer answers another value instead).
+//     each exactly the contract's fields) and answers with counts {rules,
+//     pending, sent} like the fork (world rulesAnswer answers another value
+//     instead).
 //   - a T3 with the Bridge decision list (world decisionsTool, the T3 Code
 //     fork) offers t3_decisions_set {replyTo, decisions}, which replaces world
 //     decisionList {replyTo, decisions} within the fork's bounds: replyTo an
@@ -405,7 +406,8 @@ async function callTool(w, name, a) {
         }
       }
       w.rules = a.rules;
-      return [ok({ rules: w.rulesAnswer ?? w.rules }), true];
+      const counts = { rules: w.rules.length, pending: w.rules.filter((r) => r.status === "pending").length, sent: [] };
+      return [ok(w.rulesAnswer ?? counts), true];
     }
     case "t3_decisions_set": {
       if (Object.keys(a).some((k) => k !== "replyTo" && k !== "decisions")) return [err("invalid_params", "unknown argument"), false];

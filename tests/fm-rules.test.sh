@@ -59,6 +59,7 @@ test_keep_approves_as_worded() {
     "$(rule R3)" "the rule is approved today, its recommendation gone"
   assert_contains "$out" "no rule-file edit" "and needs no file edit"
   assert_equals "null" "$(jq -c '.pendingEdits' "$HOME_DIR/data/rules/inventory.json")" "so none is listed"
+  # shellcheck disable=SC2016 # the backticks are the log's literal Markdown
   assert_equals "$(printf '%s\n' '' '### 2026-11-11 (Bridge rule answers)' '' \
     '- R3, `config/brief-include.md`: "Use short commands.". Approved as a standing rule on his "Keep" chip on the Bridge. His words: "Agree with your recommendation on rule R3: Keep."')" \
     "$(log_tail 4)" "one log entry under today's heading, his chip's words"

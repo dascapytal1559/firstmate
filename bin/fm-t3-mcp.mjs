@@ -289,8 +289,9 @@
 //     {rules (the contract fields only, in file order), count, pending}.
 //   fm-t3-mcp.mjs rules --file <json-file>
 //     Replaces the Bridge's rules with <json-file>'s {rules} through
-//     t3_rules_set (an empty list clears them). T3 must answer with {rules}
-//     holding exactly the ids sent, in order, else exit 1 (rules_unproven).
+//     t3_rules_set (an empty list clears them). T3 answers with counts
+//     {rules, pending, sent}; rules must be the number of rules sent and
+//     pending the number of those pending, else exit 1 (rules_unproven).
 //     Exit 4 (rules_unsupported) when this T3 has no t3_rules_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
@@ -2334,10 +2335,11 @@ async function rulesVerb(flags) {
   const { session } = await verifiedSession(flags);
   if (!session.toolSchemas.has("t3_rules_set")) throw new Refusal("rules_unsupported", "this T3 has no Bridge rules", 4);
   const out = await session.call("t3_rules_set", { rules });
-  const got = out?.rules;
-  const same = Array.isArray(got) && got.length === rules.length && got.every((r, i) => r?.id === rules[i].id);
-  if (!same) throw new Refusal("rules_unproven", "T3 accepted the rules but answered with a different list", 1);
-  return { ok: true, rules: got.length };
+  const pending = rules.filter((r) => r.status === "pending").length;
+  if (out?.rules !== rules.length || out?.pending !== pending) {
+    throw new Refusal("rules_unproven", `T3 accepted the rules but counted ${out?.rules} rules and ${out?.pending} pending, not ${rules.length} and ${pending}`, 1);
+  }
+  return { ok: true, rules: out.rules, pending: out.pending };
 }
 
 const VERBS = {

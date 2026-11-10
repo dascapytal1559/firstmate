@@ -817,9 +817,10 @@ test_rules_push_only_when_changed() {
   sync_now >/dev/null || fail "an unchanged pass should succeed"
   assert_equals "0" "$(rules_calls)" "an unchanged list is not pushed again"
   jq '.rules[1].text = "Search, then say."' "$inv" > "$inv.next" && mv "$inv.next" "$inv"
-  t3_fake_set 'w.rulesAnswer = []'
+  t3_fake_set 'w.rulesAnswer = { rules: 3, pending: 1, sent: [] }'
   out=$(sync_now)
-  expect_code 1 "$?" "an answer without the ids sent is not proof: $out"
+  expect_code 1 "$?" "an answer with the wrong pending count is not proof: $out"
+  assert_contains "$out" "counted 3 rules and 1 pending, not 3 and 2" "the line names both counts"
   assert_contains "$out" "rules: the push failed" "the line names the rules"
   t3_fake_set 'delete w.rulesAnswer'
   : > "$T3_FAKE_LOG"
