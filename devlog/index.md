@@ -1059,3 +1059,17 @@ With today's dispatch file the list reads:
 ```
 
 The evidence is the needs-me regression suite's routing test, which pins the grouping, the joined descriptions, when family sub-headings appear, the Other group, and the cut keeping the captain's mark.
+
+## 42. Model routing without provider headings (11 November 2026)
+
+Looking at the grouped list, with Anthropic's families nested under it and OpenAI and xAI as headings of their own, the captain asked:
+
+> remove provider level heading e.g. OpenAI
+
+The list now has one level: a heading per model family, always, in the order each first appears, so today it reads Opus, Fable, Sonnet, Sol, Grok.
+Every entry sits directly under its own family, so a single-model provider no longer looks like a peer of Anthropic's families, and nothing reads as nested under the wrong heading.
+The family is still read from the model name and only for display; the provider half of that reading was removed rather than left unused.
+A model the reader does not recognise is its own family, and a route with no model goes under "Other".
+The 8192-character fit is unchanged.
+
+The evidence is the needs-me regression suite's routing test, which pins the flat family headings, their first-appearance order, and that no provider heading appears.

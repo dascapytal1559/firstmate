@@ -682,43 +682,38 @@ test_routing_payload_shape() {
   write_routing "$f"
   out=$(routing_payload "$f") || fail "the list should build"
   want=$(cat <<'EOF'
-#### Anthropic
-
-###### Opus
+#### Opus
 
 - `claude · claude-opus-9`\
   Default · Long chats.
 
-###### Fable
+#### Fable
 
 - `claude · claude-fable-9 · xhigh`\
   Hard design work. (captain approves)
 - `claude · claude-fable-9 · high`\
   Quick drafts.
 
-###### Sonnet
-
-- `claude · claude-sonnet-9 · high`\
-  Small fixes.
-
-#### OpenAI
+#### Sol
 
 - `codex · gpt-9-sol · high`\
   Hard design work. (captain approves) · Browsing.
 
-#### Other
+#### Sonnet
+
+- `claude · claude-sonnet-9 · high`\
+  Small fixes.
+
+#### big|model
 
 - `local · big|model`\
   Odd jobs.
 EOF
 )
-  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "grouped by provider then family, the default first, one entry per model with its Whens joined"
+  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "grouped by family, the default first, one entry per model with its Whens joined"
   assert_equals "8 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "eight routes, none shortened"
   assert_not_contains "$(printf '%s' "$out" | jq -r '.markdown')" "Strongest reasoning" "the Why is not shown"
-  jq '.rules |= map(select(.when != "Quick drafts."))' "$f" > "$f.next" && mv "$f.next" "$f"
-  out=$(routing_payload "$f" | jq -r '.markdown')
-  assert_not_contains "$out" "######" "a family heading is left out when every family has one entry"
-  assert_contains "$out" $'#### Anthropic\n\n- `claude · claude-opus-9`\\\n  Default · Long chats.\n- `claude · claude-fable-9 · xhigh`' "and the provider stays one list"
+  assert_not_contains "$(printf '%s' "$out" | jq -r '.markdown')" "Anthropic" "no provider heading"
   jq -n '{rules: [{when: "- not a list", use: {harness: "a`b"}}, {when: "2. not a list", use: {harness: "c"}}]}' > "$f"
   want=$(cat <<'EOF'
 #### Other
@@ -746,7 +741,7 @@ EOF
   expect_code 1 "$?" "a profile without a harness is malformed"
   assert_equals "routing_malformed" "$(printf '%s' "$out" | jq -r '.error.code')" "and named so"
   assert_contains "$(printf '%s' "$out" | jq -r '.error.message')" "rules[0].use needs harness" "with the field"
-  pass "fm-t3-mcp.mjs routing-payload: grouped by provider and family, one entry per model, fits the limit, refuses a malformed file"
+  pass "fm-t3-mcp.mjs routing-payload: grouped by family, one entry per model, fits the limit, refuses a malformed file"
 }
 
 test_routing_push_only_when_changed() {

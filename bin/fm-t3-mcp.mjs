@@ -261,11 +261,10 @@
 //     Local, no T3 call: the Bridge's model routing table
 //     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
 //     config/crew-dispatch.json. Markdown grouped under a "####" heading per
-//     provider, then a "######" heading per family only when that provider
-//     has several families and one holds more than one entry. Provider and
-//     family come from the model name, for display only: claude-<family> is
-//     Anthropic, gpt-<version>[-<name>] OpenAI, gemini-* Google, grok-* xAI,
-//     anything else (or no model) "Other". Groups and entries keep the order
+//     model family, always. The family comes from the model name, for display
+//     only: claude-<family> gives <Family>, gpt-<version>-<name> <Name>,
+//     gpt-<version> GPT-<version>, gemini-* Gemini, grok-* Grok, any other
+//     model its own name, and no model "Other". Groups and entries keep the order
 //     each first appears, reading the default profiles first and then each
 //     rule in order. One bullet item per distinct "harness · model · effort"
 //     (a missing part left out) as inline code, a hard line break, then the
@@ -2191,32 +2190,29 @@ function routingRows(source) {
   return [...defaults, ...rows];
 }
 
-// A model name's provider and family, for presentation only: never used to
-// choose a worker or a credential. An unrecognised name is provider "Other".
+// A model name's family, for presentation only: never used to choose a
+// worker or a credential. An unrecognised name is its own family.
 const capitalized = (word) => word.charAt(0).toUpperCase() + word.slice(1);
-export function modelLineage(model) {
+export function modelFamily(model) {
   const parts = model.toLowerCase().split("-");
-  const named = (provider, family) => ({ provider, family });
-  if (parts[0] === "claude" && parts[1]) return named("Anthropic", capitalized(parts[1]));
-  if (parts[0] === "gpt" && parts[1]) return named("OpenAI", parts[2] ? capitalized(parts[2]) : `GPT-${parts[1]}`);
-  if (parts[0] === "gemini" && parts[1]) return named("Google", "Gemini");
-  if (parts[0] === "grok" && parts[1]) return named("xAI", "Grok");
-  return named("Other", model || "Other");
+  if (parts[0] === "claude" && parts[1]) return capitalized(parts[1]);
+  if (parts[0] === "gpt" && parts[1]) return parts[2] ? capitalized(parts[2]) : `GPT-${parts[1]}`;
+  if (parts[0] === "gemini" && parts[1]) return "Gemini";
+  if (parts[0] === "grok" && parts[1]) return "Grok";
+  return model || "Other";
 }
 
 // The Bridge's routing list from a config/crew-dispatch.json value, grouped by
-// provider and then family. Each entry is one distinct harness · model · effort
+// model family. Each entry is one distinct harness · model · effort
 // as inline code, then a hard line break and the Whens of every route to it,
 // joined by " · ". A route's Why is validated but not shown.
 export function routingPayload(source) {
   const routes = routingRows(source);
   if (routes.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
-  const providers = new Map();
+  const families = new Map();
   for (const r of routes) {
     const label = [r.harness, r.model, r.effort].map(oneLine).filter(Boolean).join(" · ");
-    const { provider, family } = modelLineage(oneLine(r.model));
-    if (!providers.has(provider)) providers.set(provider, new Map());
-    const families = providers.get(provider);
+    const family = modelFamily(oneLine(r.model));
     if (!families.has(family)) families.set(family, new Map());
     const entries = families.get(family);
     if (!entries.has(label)) entries.set(label, { model: inlineCode(label), routes: [] });
@@ -2228,19 +2224,10 @@ export function routingPayload(source) {
     const when = e.routes.map((r) => `${cut(r.when, cap)}${r.mark}`.trim()).filter(Boolean).join(" · ");
     return when ? `- ${e.model}\\\n  ${plainLine(when)}` : `- ${e.model}`;
   };
-  const render = (cap) => {
-    const blocks = [];
-    for (const [provider, families] of providers) {
-      blocks.push(`#### ${plainLine(provider)}`);
-      // A family heading adds information only when its provider has several
-      // families and one of them holds more than one entry.
-      const headed = families.size > 1 && [...families.values()].some((entries) => entries.size > 1);
-      const list = (entries) => [...entries.values()].map((e) => item(e, cap)).join("\n");
-      if (!headed) blocks.push([...families.values()].map(list).join("\n"));
-      else for (const [family, entries] of families) blocks.push(`###### ${plainLine(family)}`, list(entries));
-    }
-    return blocks.join("\n\n");
-  };
+  const render = (cap) =>
+    [...families]
+      .map(([family, entries]) => `#### ${plainLine(family)}\n\n${[...entries.values()].map((e) => item(e, cap)).join("\n")}`)
+      .join("\n\n");
   // The longest shared When length that fits.
   let lo = 0;
   let hi = Math.max(...routes.map((r) => r.when.length));
