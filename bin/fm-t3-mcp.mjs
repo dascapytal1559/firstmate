@@ -260,18 +260,23 @@
 //   fm-t3-mcp.mjs routing-payload --file <json-file>
 //     Local, no T3 call: the Bridge's model routing table
 //     (docs/t3code-backend.md "Model routing"), from <json-file>, the home's
-//     config/crew-dispatch.json. A Markdown bullet list, one item per profile
-//     of each rule in order, then one per default profile: the model
-//     ("harness · model · effort", a missing part left out) as inline code,
-//     a hard line break, then the When as plain text, marked
-//     "(captain approves)" when the rule's approval is "captain" and
-//     "Anything else" for a default profile. A rule's why is checked but not
-//     shown. Past 8192 characters every When is cut to one shared length,
-//     ending in an ellipsis; no item is dropped. A file without the fields
+//     config/crew-dispatch.json. Markdown grouped under a "####" heading per
+//     model family, always. The family comes from the model name, for display
+//     only: claude-<family> gives <Family>, gpt-<version>-<name> <Name>,
+//     grok-* Grok, any other model its own name, and no model "Other". Groups and entries keep the order
+//     each first appears, reading the default profiles first and then each
+//     rule in order. One bullet item per distinct "harness · model · effort"
+//     (a missing part left out) as inline code, a hard line break, then the
+//     When of every route to it joined by " · ": "Default" for a default
+//     profile, a rule's When followed by "(captain approves)" when its
+//     approval is "captain". A rule's why is checked but not shown. Past
+//     8192 characters every When is cut to one shared length, ending in an
+//     ellipsis, before its mark; no entry is dropped. A file without the fields
 //     the list needs (a rule's when and use, each profile's harness, string
 //     model and effort, a string why) exits 1 (routing_malformed) naming the
-//     first fault. Prints {markdown, rows, shortened (how many Whens were
-//     cut)}; no rows give markdown null.
+//     first fault. Prints {markdown, rows (how many routes, one per profile
+//     of each rule and of the default), shortened (how many Whens were
+//     cut)}; no routes give markdown null.
 //   fm-t3-mcp.mjs routing --file <json-file>
 //     Replaces the Bridge's model routing table with <json-file>'s {markdown}
 //     through t3_routing_set (markdown null clears it). T3 must answer with
@@ -2176,34 +2181,54 @@ function routingRows(source) {
     if (r === null || typeof r !== "object" || Array.isArray(r)) bad(`rules[${i}] must be an object`);
     if (typeof r.when !== "string" || !r.when.trim()) bad(`rules[${i}] needs when`);
     if (r.why !== undefined && typeof r.why !== "string") bad(`rules[${i}].why must be text`);
-    const when = r.approval === "captain" ? `${r.when.trim()} (captain approves)` : r.when;
-    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when, ...p });
+    const mark = r.approval === "captain" ? " (captain approves)" : "";
+    for (const p of profiles(r.use, `rules[${i}].use`)) rows.push({ when: oneLine(r.when), mark, ...p });
   });
-  if (source.default !== undefined) {
-    for (const p of profiles(source.default, "default")) rows.push({ when: "Anything else", ...p });
-  }
-  return rows;
+  // The default comes first: the list is grouped in order of first appearance.
+  const defaults = source.default === undefined ? [] : profiles(source.default, "default").map((p) => ({ when: "Default", mark: "", ...p }));
+  return [...defaults, ...rows];
 }
 
-// The Bridge's routing list from a config/crew-dispatch.json value: one list
-// item per row, its model as inline code, then a hard line break and its When
-// as plain text. A row's Why is validated but not shown.
+// A model name's family, for presentation only: never used to choose a
+// worker or a credential. An unrecognised name is its own family.
+const capitalized = (word) => word.charAt(0).toUpperCase() + word.slice(1);
+export function modelFamily(model) {
+  const parts = model.toLowerCase().split("-");
+  if (parts[0] === "claude" && parts[1]) return capitalized(parts[1]);
+  if (parts[0] === "gpt" && parts[2]) return capitalized(parts[2]);
+  if (parts[0] === "grok" && parts[1]) return "Grok";
+  return model || "Other";
+}
+
+// The Bridge's routing list from a config/crew-dispatch.json value, grouped by
+// model family. Each entry is one distinct harness · model · effort
+// as inline code, then a hard line break and the Whens of every route to it,
+// joined by " · ". A route's Why is validated but not shown.
 export function routingPayload(source) {
-  const rows = routingRows(source).map((r) => ({
-    model: inlineCode([r.harness, r.model, r.effort].map(oneLine).filter(Boolean).join(" · ")),
-    when: oneLine(r.when),
-  }));
-  if (rows.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
+  const routes = routingRows(source);
+  if (routes.length === 0) return { ok: true, markdown: null, rows: 0, shortened: 0 };
+  const families = new Map();
+  for (const r of routes) {
+    const label = [r.harness, r.model, r.effort].map(oneLine).filter(Boolean).join(" · ");
+    const family = modelFamily(oneLine(r.model));
+    if (!families.has(family)) families.set(family, new Map());
+    const entries = families.get(family);
+    if (!entries.has(label)) entries.set(label, { model: inlineCode(label), routes: [] });
+    entries.get(label).routes.push(r);
+  }
   // A cut never ends in a lone backslash, which would escape the ellipsis.
   const cut = (text, cap) => (text.length <= cap ? text : cutText(text, cap).replace(/\\+…$/, "…"));
-  const item = (r, cap) => {
-    const when = cut(r.when, cap);
-    return when ? `- ${r.model}\\\n  ${plainLine(when)}` : `- ${r.model}`;
+  const item = (e, cap) => {
+    const when = e.routes.map((r) => `${cut(r.when, cap)}${r.mark}`.trim()).filter(Boolean).join(" · ");
+    return when ? `- ${e.model}\\\n  ${plainLine(when)}` : `- ${e.model}`;
   };
-  const render = (cap) => rows.map((r) => item(r, cap)).join("\n");
+  const render = (cap) =>
+    [...families]
+      .map(([family, entries]) => `#### ${plainLine(family)}\n\n${[...entries.values()].map((e) => item(e, cap)).join("\n")}`)
+      .join("\n\n");
   // The longest shared When length that fits.
   let lo = 0;
-  let hi = Math.max(...rows.map((r) => r.when.length));
+  let hi = Math.max(...routes.map((r) => r.when.length));
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     if (render(mid).length <= ROUTING_MAX) lo = mid;
@@ -2213,8 +2238,8 @@ export function routingPayload(source) {
   if (markdown.length > ROUTING_MAX) {
     throw new Refusal("routing_too_long", `the routing list needs ${markdown.length} characters even with every When cut, past T3's ${ROUTING_MAX}`, 1);
   }
-  const shortened = rows.filter((r) => r.when.length > lo).length;
-  return { ok: true, markdown, rows: rows.length, shortened };
+  const shortened = routes.filter((r) => r.when.length > lo).length;
+  return { ok: true, markdown, rows: routes.length, shortened };
 }
 
 async function routingPayloadVerb(flags) {
