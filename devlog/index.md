@@ -1019,3 +1019,43 @@ A route now reads like this (made-up entries from the regression test):
 ```
 
 The evidence is the needs-me regression suite's routing test, which pins this shape, the cut, and that a stray backtick or list marker in a rule stays text.
+
+## 41. Model routing grouped by model (11 November 2026)
+
+> Um this tab here let's group by model provider and then model family. If a model has two Two tasks or allocations just use dots to separate them. So we're essentially going from task-oriented to model family oriented and we want to put claude opus 5.5 first and just say default
+
+The routing list followed the dispatch file's rule order, so Sol appeared twice and the default sat last as "Anything else".
+It now reads by model: a small heading per provider, one entry per model, and every kind of task routed to that model on the line beneath it, joined by " · ".
+The dispatch file and how FirstMate picks a worker are unchanged; only the list is drawn differently.
+
+The choices made:
+
+- **Default first, then order of first appearance.** The default's entry opens the list and reads "Default". Providers, families and models then follow in the order each first appears in the dispatch file, so the default's provider and family lead and the rest stay stable as rules are added.
+- **Provider and family from the model name, for display only.** `claude-*` is Anthropic with its family as the second word (Opus, Fable, Sonnet), `gpt-*` is OpenAI, `gemini-*` Google, `grok-*` xAI, and anything else, or a profile with no model, goes under "Other" instead of failing. Nothing else reads these names.
+- **A family sub-heading only when it says something.** A provider gets family sub-headings only when it has several families and one of them holds more than one entry, such as Fable at two efforts. With today's file every family has one model, so the list stays at three provider headings and is short on a phone.
+- **The captain's mark stays with its rule.** "(captain approves)" follows that rule's own text inside a shared entry, and a long text is now cut before the mark, so the mark always survives the fit to T3's limit.
+
+With today's dispatch file the list reads:
+
+```markdown
+#### Anthropic
+
+- `claude · claude-opus-5-5`\
+  Default
+- `claude · claude-fable-5-2 · xhigh`\
+  The task is hard technical, product, design, architecture, or planning work where the reasoning itself is genuinely difficult. (captain approves)
+- `claude · claude-sonnet-5-5 · high`\
+  The task is a simple bug fix whose root cause and expected behaviour are already well known.
+
+#### OpenAI
+
+- `codex · gpt-6.1-sol · high`\
+  The task is an investigation: a scout that produces a report and no code change, such as a diagnosis, audit, reproduction, research or review. Not design explorations or visual mockups. · The task is browser computer use: driving a web browser by seeing the screen and clicking or typing, as the main way the work gets done. This lane cannot control desktop Mac apps.
+
+#### xAI
+
+- `grok · grok-4.7 · high`\
+  The task is searching X (Twitter): finding, reading or summarising posts, threads, replies or accounts on X.
+```
+
+The evidence is the needs-me regression suite's routing test, which pins the grouping, the joined descriptions, when family sub-headings appear, the Other group, and the cut keeping the captain's mark.

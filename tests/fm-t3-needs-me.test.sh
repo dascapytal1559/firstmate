@@ -656,11 +656,15 @@ write_routing() {
 {
   "rules": [
     { "when": "Hard design work.", "approval": "captain",
-      "use": [{ "harness": "claude", "model": "big-model", "effort": "xhigh" }, { "harness": "codex", "model": "other|model" }],
+      "use": [{ "harness": "claude", "model": "claude-fable-9", "effort": "xhigh" }, { "harness": "codex", "model": "gpt-9-sol", "effort": "high" }],
       "why": "Strongest reasoning." },
-    { "when": "Small fixes.", "use": { "harness": "claude", "model": "small-model", "effort": "high" } }
+    { "when": "Small fixes.", "use": { "harness": "claude", "model": "claude-sonnet-9", "effort": "high" } },
+    { "when": "Long chats.", "use": { "harness": "claude", "model": "claude-opus-9" } },
+    { "when": "Browsing.", "use": { "harness": "codex", "model": "gpt-9-sol", "effort": "high" } },
+    { "when": "Odd jobs.", "use": { "harness": "local", "model": "big|model" } },
+    { "when": "Quick drafts.", "use": { "harness": "claude", "model": "claude-fable-9", "effort": "high" } }
   ],
-  "default": { "harness": "claude" }
+  "default": { "harness": "claude", "model": "claude-opus-9" }
 }
 EOF
 }
@@ -678,44 +682,71 @@ test_routing_payload_shape() {
   write_routing "$f"
   out=$(routing_payload "$f") || fail "the list should build"
   want=$(cat <<'EOF'
-- `claude · big-model · xhigh`\
+#### Anthropic
+
+###### Opus
+
+- `claude · claude-opus-9`\
+  Default · Long chats.
+
+###### Fable
+
+- `claude · claude-fable-9 · xhigh`\
   Hard design work. (captain approves)
-- `codex · other|model`\
-  Hard design work. (captain approves)
-- `claude · small-model · high`\
+- `claude · claude-fable-9 · high`\
+  Quick drafts.
+
+###### Sonnet
+
+- `claude · claude-sonnet-9 · high`\
   Small fixes.
-- `claude`\
-  Anything else
+
+#### OpenAI
+
+- `codex · gpt-9-sol · high`\
+  Hard design work. (captain approves) · Browsing.
+
+#### Other
+
+- `local · big|model`\
+  Odd jobs.
 EOF
 )
-  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "one item per profile, its model as code above its When, the default last"
-  assert_equals "4 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "four rows, none shortened"
+  assert_equals "$want" "$(printf '%s' "$out" | jq -r '.markdown')" "grouped by provider then family, the default first, one entry per model with its Whens joined"
+  assert_equals "8 0" "$(printf '%s' "$out" | jq -r '"\(.rows) \(.shortened)"')" "eight routes, none shortened"
   assert_not_contains "$(printf '%s' "$out" | jq -r '.markdown')" "Strongest reasoning" "the Why is not shown"
+  jq '.rules |= map(select(.when != "Quick drafts."))' "$f" > "$f.next" && mv "$f.next" "$f"
+  out=$(routing_payload "$f" | jq -r '.markdown')
+  assert_not_contains "$out" "######" "a family heading is left out when every family has one entry"
+  assert_contains "$out" $'#### Anthropic\n\n- `claude · claude-opus-9`\\\n  Default · Long chats.\n- `claude · claude-fable-9 · xhigh`' "and the provider stays one list"
   jq -n '{rules: [{when: "- not a list", use: {harness: "a`b"}}, {when: "2. not a list", use: {harness: "c"}}]}' > "$f"
   want=$(cat <<'EOF'
+#### Other
+
 - ``a`b``\
   \- not a list
 - `c`\
   2\. not a list
 EOF
 )
-  assert_equals "$want" "$(routing_payload "$f" | jq -r '.markdown')" "a backtick in the model and a block marker in the When stay text"
+  assert_equals "$want" "$(routing_payload "$f" | jq -r '.markdown')" "no model goes under Other; a backtick in the model and a block marker in the When stay text"
   printf '{"rules": []}\n' > "$f"
   assert_equals "null" "$(routing_payload "$f" | jq -r '.markdown')" "no rules and no default give no list"
   long=$(head -c 3000 /dev/zero | tr '\0' 'x')
-  jq -n --arg when "$long" '{rules: [range(6) | {when: "Rule \(.) \($when)", use: {harness: "claude"}, why: $when}], default: {harness: "codex"}}' > "$f"
+  jq -n --arg when "$long" '{rules: [range(6) | {when: "Rule \(.) \($when)", approval: (if . == 0 then "captain" else null end), use: {harness: "claude", model: "m\(.)"}, why: $when}], default: {harness: "codex"}}' > "$f"
   out=$(routing_payload "$f") || fail "a long list should build"
   [ "$(printf '%s' "$out" | jq -r '.markdown | length')" -le 8192 ] || fail "the list fits T3's limit"
-  assert_equals "7" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^- `')" "no row is dropped"
-  assert_equals "6" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^  Rule [0-5] x*…$')" "each long When is cut, with an ellipsis"
-  assert_contains "$(printf '%s' "$out" | jq -r '.markdown')" '  Anything else' "a short When is kept whole"
+  assert_equals "7" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^- `')" "no entry is dropped"
+  assert_equals "6" "$(printf '%s' "$out" | jq -r '.markdown' | grep -c '^  Rule [0-5] x*…\( (captain approves)\)\{0,1\}$')" "each long When is cut, with an ellipsis"
+  assert_contains "$(printf '%s' "$out" | jq -r '.markdown')" '… (captain approves)' "the captain's mark survives the cut"
+  assert_contains "$(printf '%s' "$out" | jq -r '.markdown')" $'\n  Default\n' "a short When is kept whole"
   assert_equals "6" "$(printf '%s' "$out" | jq -r '.shortened')" "and the count says so"
   printf '{"rules": [{"when": "x", "use": {"model": "m"}}]}\n' > "$f"
   out=$(routing_payload "$f" 2>/dev/null)
   expect_code 1 "$?" "a profile without a harness is malformed"
   assert_equals "routing_malformed" "$(printf '%s' "$out" | jq -r '.error.code')" "and named so"
   assert_contains "$(printf '%s' "$out" | jq -r '.error.message')" "rules[0].use needs harness" "with the field"
-  pass "fm-t3-mcp.mjs routing-payload: one item per profile, fits the limit, refuses a malformed file"
+  pass "fm-t3-mcp.mjs routing-payload: grouped by provider and family, one entry per model, fits the limit, refuses a malformed file"
 }
 
 test_routing_push_only_when_changed() {
@@ -775,7 +806,7 @@ test_routing_absent_or_unsupported() {
   for n in 1 2 3 4; do sync_now >/dev/null || fail "a T3 without the routing table stays quiet once held back"; done
   t3_fake_set 'w.routingTool = true'
   FM_NEEDS_ME_NOW=$(( $(date +%s) + 900 )) needs_me sync >/dev/null || fail "the retry should succeed"
-  assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "big-model" "and a T3 that gains it gets the table"
+  assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "claude-fable-9" "and a T3 that gains it gets the table"
   pass "fm-t3-needs-me.sh sync: no dispatch file sends no routing table; an older T3 is quiet and retried"
 }
 

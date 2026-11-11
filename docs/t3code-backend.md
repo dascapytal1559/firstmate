@@ -292,8 +292,9 @@ A failed push is reported and retried on the next pass without holding back the 
 
 The Bridge also shows the home's model routing table, read-only, after the decisions.
 Its source is the home's `config/crew-dispatch.json` ([Crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson)), which this feature only reads.
-Each `bin/fm-t3-needs-me.sh sync` pass renders it as a Markdown list with one entry per profile of each rule and the default last.
-Each entry shows the model highlighted as inline code (harness · model · effort, leaving out a missing model or effort) and, on the line beneath it, the rule's When as its description, a rule the captain approves marked so and the default reading "Anything else".
+Each `bin/fm-t3-needs-me.sh sync` pass renders it as Markdown grouped under a small heading per model provider (Anthropic, OpenAI, Google, xAI, or Other), with a family sub-heading (such as Opus or Fable) only when it adds information, the default's provider and family first.
+Provider and family are read from the model name for display only; they never affect which worker or credential is chosen.
+Each entry is one distinct model, highlighted as inline code (harness · model · effort, leaving out a missing model or effort), and, on the line beneath it, the When of every route to it joined by " · ", a rule the captain approves marked so and the default reading "Default".
 A rule's Why is not shown.
 It pushes the table with `t3_routing_set` only when it differs from the last table T3 accepted.
 A table past T3's 8192-character limit keeps every entry and cuts each long When to one shared length, and the pass says so.
