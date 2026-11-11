@@ -1066,7 +1066,7 @@ Looking at the grouped list, with Anthropic's families nested under it and OpenA
 
 > remove provider level heading e.g. OpenAI
 
-The list now has one level: a heading per model family, always, in the order each first appears, so today it reads Opus, Fable, Sonnet, Sol, Grok.
+The list now has one level: a heading per model family, always, in the order each first appears, so today it reads Opus, Fable, Sol, Sonnet, Grok.
 Every entry sits directly under its own family, so a single-model provider no longer looks like a peer of Anthropic's families, and nothing reads as nested under the wrong heading.
 The family is still read from the model name and only for display; the provider half of that reading was removed rather than left unused.
 A model the reader does not recognise is its own family, and a route with no model goes under "Other".

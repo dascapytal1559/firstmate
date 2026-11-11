@@ -263,8 +263,7 @@
 //     config/crew-dispatch.json. Markdown grouped under a "####" heading per
 //     model family, always. The family comes from the model name, for display
 //     only: claude-<family> gives <Family>, gpt-<version>-<name> <Name>,
-//     gpt-<version> GPT-<version>, gemini-* Gemini, grok-* Grok, any other
-//     model its own name, and no model "Other". Groups and entries keep the order
+//     grok-* Grok, any other model its own name, and no model "Other". Groups and entries keep the order
 //     each first appears, reading the default profiles first and then each
 //     rule in order. One bullet item per distinct "harness · model · effort"
 //     (a missing part left out) as inline code, a hard line break, then the
@@ -2196,8 +2195,7 @@ const capitalized = (word) => word.charAt(0).toUpperCase() + word.slice(1);
 export function modelFamily(model) {
   const parts = model.toLowerCase().split("-");
   if (parts[0] === "claude" && parts[1]) return capitalized(parts[1]);
-  if (parts[0] === "gpt" && parts[1]) return parts[2] ? capitalized(parts[2]) : `GPT-${parts[1]}`;
-  if (parts[0] === "gemini" && parts[1]) return "Gemini";
+  if (parts[0] === "gpt" && parts[2]) return capitalized(parts[2]);
   if (parts[0] === "grok" && parts[1]) return "Grok";
   return model || "Other";
 }
