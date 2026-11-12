@@ -1192,3 +1192,30 @@ This is FirstMate's half: it now tells T3 which message caused each worker and e
   A launch is checked by reading the thread back; a cause T3 refuses stops the launch with nothing created, while a steer goes out without it and says so, because a message should never wait on its accounting.
 
 The evidence is the T3 client, T3 backend, and inbox regression suites, run against a fake T3 that checks causes the way the fork does: the turn's prompt found behind a long turn, no cause for a steered turn or a stale background job, the cause carried on the launch, the brief, and every doorbell, and a refused cause reported without losing the message.
+
+## 47. Max effort reaches the strongest Codex models (13 November 2026)
+
+The question that started it:
+
+> can we invoke pro intelligence on codex via first mate? ... that's the whole reason I pay the Pro tier subscription
+>
+> — 12 November 2026
+
+The investigation found the subscription Codex CLI already offers `gpt-6.1-sol` and `gpt-6-astra` at max reasoning.
+The gap was in Firstmate: a Codex worker launched with `--effort max` quietly started without it unless the model was `gpt-5.6-luna`, the one name the launch code knew.
+
+- **The model catalog decides.**
+  The Codex CLI's own cache says which efforts each model offers, so no model name is hardcoded.
+  Sol, Astra, and Luna now run at max; any future model that lists max does too.
+- **Nothing is dropped silently.**
+  An effort the catalog says a model lacks stops the spawn with a message.
+  Max for a model the catalog cannot confirm also stops it, rather than guessing.
+  The four older levels keep forwarding as before.
+- **Dispatch profiles agree.**
+  The profile checks at session start and at dispatch read the same catalog, so a rule naming Sol at max is accepted.
+- **T3 Code was already right.**
+  It checks effort against T3's own catalog, so it needed no change.
+  Ultra, which adds subagents, stays out of scope.
+
+The evidence is a portable regression with a fake catalog (a new `fm-codex-effort-catalog` suite plus the spawn and bootstrap suites), and one short live `codex exec` of Sol at max under the ChatGPT login.
+That run accepted the setting and answered, but its JSON output does not echo the effective model or effort, so the launch flag is proven and the effective level is not.

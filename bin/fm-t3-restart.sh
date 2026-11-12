@@ -154,7 +154,7 @@ reported_since_restart() {  # <status-line>
   [ "$at" -gt "$STARTED" ] && [ "$at" -le "$NOW" ]
 }
 
-STEER="Firstmate: the T3 server restarted at $CURRENT and ended your session, so anything that lived only in it is gone: background commands, waits, monitors, and any command that was still running. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
+STEER="Firstmate: the T3 server restarted at $CURRENT and ended your session, so anything that lived only in it is gone: background commands, waits, and monitors, and any command you ran in the foreground. A detached job you started with fm-job.sh is not one of them: it is still running or has already sent you its result, so check it with fm-job.sh status <your task id> and never rerun it. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
 
 echo "t3-restart: the T3 server restarted at $CURRENT; it ended every T3 session, this one included."
 FAILED=0

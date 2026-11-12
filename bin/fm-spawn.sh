@@ -3548,6 +3548,27 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
 fi
+# A pane-backed Codex worker forwards its effort only as a model_reasoning_effort
+# override, so an effort the model does not offer must be refused here rather than
+# dropped from the launch. The Codex model catalog is the one source of what each
+# model offers; T3 Code validates the same request against T3's own catalog.
+if [ "$HARNESS" = codex ] && [ "$RAW_LAUNCH" = 0 ] && [ "$BACKEND" != t3code ] && [ -n "$EFFORT" ] && [ "$EFFORT" != default ]; then
+  case "$("$SCRIPT_DIR/fm-harness.sh" codex-effort-check "$MODEL" "$EFFORT")" in
+  supported) ;;
+  unsupported)
+    echo "error: Codex model ${MODEL:-default} does not offer effort $EFFORT in its model catalog; pick an effort it lists or another model" >&2
+    exit 1
+    ;;
+  *)
+    # No catalog evidence: the four long-standing levels keep their forwarding,
+    # but max is only ever sent on evidence, so it is refused rather than guessed.
+    if [ "$EFFORT" = max ]; then
+      echo "error: cannot confirm Codex model ${MODEL:-default} offers effort max: name a model that ${CODEX_HOME:-~/.codex}/models_cache.json lists with max" >&2
+      exit 1
+    fi
+    ;;
+  esac
+fi
 # Per-secondmate omp profile pin (header above): resolved before any endpoint,
 # worktree, or record exists, and before the catalog check that must read the
 # same profile. A ship or scout passes no mate, so it never reads a pin.
@@ -3843,15 +3864,11 @@ effort_flag_for_harness() {
     esac
     ;;
   codex)
-    # The installed codex config schema uses model_reasoning_effort. The
-    # installed model catalog supports max for gpt-5.6-luna; keep that level
-    # scoped to the model whose catalog entry advertises it.
+    # The installed codex config schema uses model_reasoning_effort. The launch
+    # refuses an effort the model catalog does not offer before it reaches here,
+    # so every level the shared vocabulary names for codex is forwarded as given.
     case "$effort" in
-    low | medium | high | xhigh) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
-    max)
-      [ "$model" = gpt-5.6-luna ] || return 0
-      printf -- '-c %s ' "$(shell_quote 'model_reasoning_effort="max"')"
-      ;;
+    low | medium | high | xhigh | max) printf -- '-c %s ' "$(shell_quote "model_reasoning_effort=\"$effort\"")" ;;
     esac
     ;;
   grok)
