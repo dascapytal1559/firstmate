@@ -243,13 +243,19 @@ test_reconcile_wakes_cleanup_when_t3_cannot_keep_it() {
 
   # A new handoff recorded while the old T3 answers keeps its record, so the
   # pass drops nothing and asks for no cleanup.
-  make_home dropped-renewed '{"reviews":false,"delayMethods":{"tools/list":1500}}'
+  make_home dropped-renewed '{"reviews":false,"delayMethods":{"tools/list":3000}}'
   fm_write_meta "$HOME_DIR/state/s1.meta" window=fm-s1 endpoint_task_id=s1 kind=scout harness=claude backend=t3code \
     "t3_thread_id=$THREAD" t3_project_id=proj-1 "worktree=$HOME_DIR/copy" spawn_gen=gen-1 decisions_reviewed=1 \
     "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-s1
   printf 'handoff\n' > "$HOME_DIR/data/s1/handoff-r1.md"
   local renew
-  ( sleep 0.7; sed -i.bak 's/^t3_review_request=fm-review-s1$/t3_review_request=fm-review-s1-r2/' "$HOME_DIR/state/s1.meta" ) &
+  (
+    for ((i = 0; i < 600; i++)); do
+      grep -q '"delaying":true' "$T3_FAKE_LOG" 2>/dev/null && break
+      sleep 0.05
+    done
+    sed -i.bak 's/^t3_review_request=fm-review-s1$/t3_review_request=fm-review-s1-r2/' "$HOME_DIR/state/s1.meta"
+  ) &
   renew=$!
   review reconcile
   wait "$renew"
