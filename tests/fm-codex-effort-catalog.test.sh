@@ -42,16 +42,16 @@ test_no_evidence_is_unknown() {
   pass "a missing, malformed, or non-listing catalog is unknown, never a guess"
 }
 
-test_models_lists_only_models_offering_the_effort() {
-  assert_equals '["gpt-6.1-sol","gpt-6-astra","gpt-5.6-luna"]' \
-    "$(CODEX_HOME="$TMP_ROOT/codex-home" "$HARNESS" codex-effort-models max)" "max models"
-  assert_equals '["gpt-6.1-sol","gpt-6-astra"]' \
-    "$(CODEX_HOME="$TMP_ROOT/codex-home" "$HARNESS" codex-effort-models ultra)" "ultra models"
-  assert_equals '[]' "$(CODEX_HOME="$TMP_ROOT/absent-home" "$HARNESS" codex-effort-models max)" "no catalog"
-  pass "codex-effort-models lists exactly the models that offer the effort"
+test_lacking_lists_only_models_listed_without_the_effort() {
+  assert_equals '["gpt-5"]' \
+    "$(CODEX_HOME="$TMP_ROOT/codex-home" "$HARNESS" codex-effort-lacking max)" "models without max"
+  assert_equals '["gpt-5.6-luna","gpt-5"]' \
+    "$(CODEX_HOME="$TMP_ROOT/codex-home" "$HARNESS" codex-effort-lacking ultra)" "models without ultra"
+  assert_equals '[]' "$(CODEX_HOME="$TMP_ROOT/absent-home" "$HARNESS" codex-effort-lacking max)" "no catalog is no evidence against any model"
+  pass "codex-effort-lacking lists exactly the models the catalog lists without the effort"
 }
 
 test_catalog_models_offer_max
 test_catalog_model_without_the_effort_is_unsupported
 test_no_evidence_is_unknown
-test_models_lists_only_models_offering_the_effort
+test_lacking_lists_only_models_listed_without_the_effort

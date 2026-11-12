@@ -199,6 +199,48 @@ test_reconcile_notices_his_close_and_reopen() {
   pass "fm-t3-review reconcile: his archive or delete is recorded once with a notice, a reopen is kept again, and nothing is revived or steered"
 }
 
+# A pending record that cannot be published (its handoff is gone) fails only
+# itself: the same pass still notices his close of a review listed after it.
+test_reconcile_survives_a_record_it_cannot_publish() {
+  make_home survive
+  retain
+  assert_equals waiting "$(meta t3_review)" "published first: $OUT"
+  fm_write_meta "$HOME_DIR/state/a0.meta" window=fm-a0 endpoint_task_id=a0 kind=scout harness=claude backend=t3code \
+    "t3_thread_id=$THREAD" "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-a0
+  thread_set 't.archived = true;'
+  review reconcile
+  assert_equals closed "$(meta t3_review)" "a review after one whose handoff is missing is still reconciled"
+  assert_present "$HOME_DIR/state/t3-review/s1.closed" "and leaves its close notice"
+  assert_equals pending "$(sed -n 's/^t3_review=//p' "$HOME_DIR/state/a0.meta")" "the unpublishable record stays kept for retry"
+  review publish a0
+  expect_code 1 "$RC" "publishing it directly still fails on its own: $OUT"
+  assert_contains "$OUT" "handoff" "the failure names the missing handoff"
+  pass "fm-t3-review reconcile: one record that cannot publish never stops the pass for the others"
+}
+
+# A pending handoff a T3 too old to keep threads refuses is dropped, and
+# firstmate is woken to clean the scout up as usual.
+test_reconcile_wakes_cleanup_when_t3_cannot_keep_it() {
+  make_home dropped '{"reviews":false}'
+  fm_write_meta "$HOME_DIR/state/s1.meta" window=fm-s1 endpoint_task_id=s1 kind=scout harness=claude backend=t3code \
+    "t3_thread_id=$THREAD" t3_project_id=proj-1 "worktree=$HOME_DIR/copy" spawn_gen=gen-1 decisions_reviewed=1 \
+    "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-s1
+  printf 'handoff\n' > "$HOME_DIR/data/s1/handoff-r1.md"
+  review reconcile
+  assert_equals '' "$(meta t3_review)" "a T3 that cannot keep the thread drops the record"
+  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed" 2>/dev/null)" "bin/fm-teardown.sh s1" "the drop leaves a cleanup notice for firstmate"
+  pass "fm-t3-review reconcile: a review an old T3 cannot keep is dropped with a cleanup notice"
+}
+
+test_retain_refuses_an_option_without_its_value() {
+  make_home usage
+  review retain s1 --summary-file
+  expect_code 2 "$RC" "an option missing its value is a usage error, not a hang"
+  review retain s1 --summary-file "$HOME_DIR/summary.md" --body-file
+  expect_code 2 "$RC" "a trailing --body-file without a value is a usage error"
+  pass "fm-t3-review retain: an option without its value is refused"
+}
+
 WATCH_PID=
 start_watcher() {  # -> output in $HOME_DIR/watch.out
   local fakebin
@@ -270,3 +312,6 @@ test_watcher_never_calls_an_idle_kept_review_stale
 test_retain_refuses_what_it_must_not_keep
 test_failures_retry_and_close_wins
 test_reconcile_notices_his_close_and_reopen
+test_reconcile_survives_a_record_it_cannot_publish
+test_reconcile_wakes_cleanup_when_t3_cannot_keep_it
+test_retain_refuses_an_option_without_its_value

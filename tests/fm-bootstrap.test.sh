@@ -1391,6 +1391,7 @@ unverified dispatch harness is flagged^{"rules":[{"when":"anything","use":{"harn
 codex Luna max effort is accepted^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-5.6-luna","effort":"max"}}]}^empty^
 codex Sol max effort is accepted^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-6.1-sol","effort":"max"}}]}^empty^
 codex Astra max effort is accepted^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-6-astra","effort":"max"}}]}^empty^
+codex max for a model the catalog does not list is accepted^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-7-unlisted","effort":"max"}}]}^empty^
 codex unsupported model max effort is flagged^{"rules":[{"when":"big feature","use":{"harness":"codex","model":"gpt-5","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
 unsupported grok max effort is flagged^{"rules":[{"when":"deep current work","use":{"harness":"grok","model":"grok-4","effort":"max"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:max
 unsupported grok xhigh effort is flagged^{"rules":[{"when":"deep current work","use":{"harness":"grok","model":"grok-4","effort":"xhigh"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:xhigh
@@ -1443,7 +1444,7 @@ profile floor provider override is flagged^{"rules":[{"when":"images","use":{"ha
 profile quota_scope empty is flagged^{"rules":[{"when":"images","use":{"harness":"agy","quota_scope":""}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile quota_scope must be a non-empty string when present
 default profile quota_scope non-string is flagged^{"default":{"harness":"agy","quota_scope":3}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile quota_scope must be a non-empty string when present
 unknown select is flagged^{"rules":[{"when":"big feature","use":[{"harness":"claude"},{"harness":"codex"}],"select":"mystery"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - unknown select: mystery
-array profile codex max without a model is flagged^{"rules":[{"when":"big feature","use":[{"harness":"codex","effort":"max"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max
+array profile codex max without a model is accepted^{"rules":[{"when":"big feature","use":[{"harness":"codex","effort":"max"}]}]}^empty^
 empty default array is flagged^{"default":[]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default needs at least one profile
 non-object default array entry is flagged^{"default":["codex"]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile must be an object
 default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each default profile needs harness

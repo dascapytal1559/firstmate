@@ -31,6 +31,21 @@ test_t3_thread_alert_protocol_only_in_a_locked_t3_session() {
   pass "renderer appends the T3 alert protocol only for a locked session inside a T3 thread"
 }
 
+# A secondmate reaches the captain only through its parent channel (AGENTS.md),
+# so its session never learns to alert him from its own T3 thread.
+test_t3_thread_alert_protocol_never_in_a_secondmate_home() {
+  local sm out
+  sm="$TMP_ROOT/secondmate-home"
+  mkdir -p "$sm/config"
+  printf 'sm-t3\n' > "$sm/.fm-secondmate-home"
+  out=$(T3CODE_THREAD_ID='mcp:test-thread' FM_ROOT_OVERRIDE="$sm" "$RENDER" --harness claude)
+  assert_not_contains "$out" 'alert_when_done' "a secondmate session inside a T3 thread rendered the T3 alert protocol"
+  rm -f "$sm/.fm-secondmate-home"
+  out=$(T3CODE_THREAD_ID='mcp:test-thread' FM_ROOT_OVERRIDE="$sm" "$RENDER" --harness claude)
+  assert_contains "$out" 'alert_when_done' "the same home without the secondmate marker should render the T3 alert protocol"
+  pass "renderer never gives a secondmate home the T3 alert protocol"
+}
+
 test_selected_harness_block_only() {
   local out
   out=$("$RENDER" --harness codex)
@@ -421,6 +436,7 @@ test_literal_paths_in_rendered_snippets() {
 
 test_literal_paths_in_rendered_snippets
 test_t3_thread_alert_protocol_only_in_a_locked_t3_session
+test_t3_thread_alert_protocol_never_in_a_secondmate_home
 test_supervision_host_protocol_on_a_claude_home_unless_off
 test_supervision_host_protocol_on_every_arm_owner
 test_selected_harness_block_only

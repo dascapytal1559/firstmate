@@ -31,7 +31,8 @@
 #     first records t3_review=closed instead (his close wins). A busy thread
 #     exits 75 and stays pending; any other failure exits 1 and stays pending
 #     for retry, never archived. A T3 too old to keep threads drops the
-#     record and exits 4, so the scout is cleaned up as usual.
+#     record, leaves the same cleanup wake as a close, and exits 4, so the
+#     scout is cleaned up as usual.
 #   fm-t3-review.sh reconcile
 #     The watcher's minute pass over every retained review: a pending one is
 #     published; a waiting one whose thread now reads archived or deleted is
@@ -153,8 +154,8 @@ refresh_cards() {
     "$SCRIPT_DIR/fm-t3-crew-status.sh" sync >/dev/null 2>&1 </dev/null || true
 }
 
-leave_close_wake() {  # <id>
-  local reason="check: t3-review $1: the captain closed the kept review thread; clean it up with bin/fm-teardown.sh $1"
+leave_close_wake() {  # <id> [what happened]
+  local reason="check: t3-review $1: ${2:-the captain closed the kept review thread}; clean it up with bin/fm-teardown.sh $1"
   mkdir -p "$ALERTS" && { printf '%s\n' "$reason" > "$ALERTS/$1.closed.tmp" && mv -f "$ALERTS/$1.closed.tmp" "$ALERTS/$1.closed"; } \
     || echo "t3-review: could not leave the close notice for $1" >&2
 }
@@ -182,6 +183,7 @@ publish_task() {
     lock "$id" || die "cannot lock $id's record"
     [ "$(fm_meta_get "$meta" t3_review_request)" != "$request" ] || set_fields "$meta" "${CLEARED_FIELDS[@]}" || die "cannot drop $id's review record"
     release
+    leave_close_wake "$id" "this T3 cannot keep the review thread"
     echo "t3-review: this T3 cannot keep $id's thread ($(head -n 1 "$WORK/mcp.err")); it is cleaned up as usual" >&2
     return 4
   fi
@@ -222,8 +224,8 @@ cmd_retain() {
   shift || true
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --summary-file) summary=${2:-}; shift 2 ;;
-      --body-file) body=${2:-}; shift 2 ;;
+      --summary-file) summary=${2:-}; shift 2 || usage ;;
+      --body-file) body=${2:-}; shift 2 || usage ;;
       *) usage ;;
     esac
   done
@@ -302,7 +304,7 @@ reconcile_task() {
     # Never wait on a record cleanup is holding; the next pass gets it.
     lock "$id" try || return 0
     release
-    publish_task "$id" >/dev/null 2>&1 || true
+    ( trap release EXIT; publish_task "$id" ) >/dev/null 2>&1 || true
     return 0
   fi
   thread=$(fm_meta_get "$meta" t3_thread_id)

@@ -1672,7 +1672,6 @@ test_cause_names_the_one_prompt_of_the_callers_turn() {
   expect_code 0 "$RC" "cause should answer: $ERR"
   assert_equals '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' "$(field "$OUT" causedBy)" \
     "the cause is the one prompt of the caller's active turn, found behind a turn longer than the first window"
-  assert_equals true "$(field "$OUT" offered)" "a T3 with causes says it takes them"
   assert_equals "" "$(t3_fake_mutations)" "cause changes nothing"
   assert_equals "" "$(t3_fake_calls t3_thread_read | node -e '
 for (const l of require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean)) {
@@ -1683,7 +1682,6 @@ for (const l of require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean
   t3_coordinator "$(iso_in -60)"
   in_agent coord cause --thread coord
   assert_equals msg-c "$(field "$OUT" causedBy.messageId)" "a T3 that takes no cause still answers which prompt it was"
-  assert_equals false "$(field "$OUT" offered)" "and says it takes none"
   pass "fm-t3-mcp cause: the caller's active turn's one prompt, read without its text"
 }
 
@@ -1738,7 +1736,6 @@ test_launch_and_send_carry_the_cause() {
   mcp send --thread "$thread" --message-file "$TMP_ROOT/brief.txt" --client-request-id req-1 --caused-by "$cause"
   expect_code 0 "$RC" "a send with a cause succeeds: $ERR"
   assert_equals "$cause" "$(field "$(t3_fake_calls t3_thread_send | tail -1)" causedBy)" "the send carries the cause"
-  assert_equals recorded "$(field "$OUT" cause)" "the send reads its message back with that cause"
   before=$(node -e 'process.stdout.write(String(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads).length))' "$T3_FAKE_WORLD")
   mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by '{"threadId":"coord","messageId":"msg-old-reply"}'
   expect_code 3 "$RC" "a cause T3 refuses fails the launch"
@@ -1756,6 +1753,9 @@ test_launch_and_send_carry_the_cause() {
   expect_code 4 "$RC" "a thread that reads back another cause is refused"
   assert_contains "$ERR" "causedBy differs" "the refusal names the cause"
   assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the mis-bound thread is archived"
+  t3_fake_set "w.bindCause = {threadId: 'coord', runId: 'run-c', messageId: 'msg-c'}"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by '{"threadId":"coord","messageId":"msg-c"}'
+  expect_code 0 "$RC" "a cause sent without its run binds when T3 records the run it belongs to: $ERR"
   fresh_case cause-upstream-carry
   t3_coordinator "$(iso_in -60)"
   mcp project-ensure --root "$TMP_ROOT/proj"
@@ -1768,7 +1768,6 @@ test_launch_and_send_carry_the_cause() {
   mcp send --thread "$thread" --message-file "$TMP_ROOT/brief.txt" --client-request-id req-3 --caused-by "$cause"
   expect_code 0 "$RC" "a T3 without causes takes the send without one: $ERR"
   assert_equals "" "$(field "$(t3_fake_calls t3_thread_send | tail -1)" causedBy)" "an undeclared cause is never sent on a send"
-  assert_equals none "$(field "$OUT" cause)" "the send reports no cause"
   mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by '{"threadId":"coord"}'
   expect_code 2 "$RC" "a cause without its message is invalid use"
   mcp cause-check --json '{"messageId":"m","runId":"r","threadId":"t"}'

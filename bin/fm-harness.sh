@@ -32,9 +32,10 @@
 #                                        (${CODEX_HOME:-~/.codex}/models_cache.json).
 #                                        unsupported means the catalog lists the model
 #                                        without that effort; unknown means no evidence.
-#        fm-harness.sh codex-effort-models <effort>
-#                                        Print a JSON array of the catalog models that
-#                                        offer the effort ([] without a catalog).
+#        fm-harness.sh codex-effort-lacking <effort>
+#                                        Print a JSON array of the catalog models listed
+#                                        without the effort ([] without a catalog), the
+#                                        only models a profile check may refuse it for.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -712,19 +713,20 @@ codex_effort_check() {
   echo "${verdict:-unknown}"
 }
 
-# codex-effort-models <effort>: print a JSON array of the catalog slugs that
-# offer the effort, `[]` when the catalog is absent or unreadable.
-codex_effort_models() {
+# codex-effort-lacking <effort>: print a JSON array of the catalog slugs listed
+# without the effort (codex-effort-check's unsupported), `[]` when the catalog
+# is absent or unreadable.
+codex_effort_lacking() {
   local effort=${1:-} file
   file=$(codex_catalog_file)
   [ -r "$file" ] || { echo '[]'; return 0; }
-  jq -c --arg e "$effort" '[.models[]? | select(([.supported_reasoning_levels[]?.effort] | index($e)) != null) | .slug]' "$file" 2>/dev/null || echo '[]'
+  jq -c --arg e "$effort" '[.models[]? | select(([.supported_reasoning_levels[]?.effort] | index($e)) == null) | .slug]' "$file" 2>/dev/null || echo '[]'
 }
 
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
   codex-effort-check) shift; codex_effort_check "$@" ;;
-  codex-effort-models) shift; codex_effort_models "$@" ;;
+  codex-effort-lacking) shift; codex_effort_lacking "$@" ;;
   ancestry)
     case "${2:-}" in
       ''|*[!0-9]*) [ -z "${2:-}" ] || { echo "error: ancestry takes a numeric pid" >&2; exit 2; } ;;

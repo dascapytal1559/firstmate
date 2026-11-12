@@ -957,7 +957,7 @@ else
   # environment, so its steer records none.
   SEND_CAUSE=
   if [ "$TARGET_BACKEND" != remote ]; then
-    SEND_CAUSE=$(fm_t3_cause_resolve "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token" "this steer") || exit 1
+    SEND_CAUSE=$(fm_t3_cause_resolve "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token") || exit 1
   fi
   if [ "$MARK_FROM_FIRSTMATE" = 1 ] && [ -n "$FIRE_AND_FORGET_ID" ]; then
     fm_message_mark_from_firstmate "$MESSAGE" MESSAGE

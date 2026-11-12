@@ -99,7 +99,14 @@ test_start_runs_detached_and_records_the_result() {
   remember_runner "$r"
   runner=$(field "$r" runner_pid)
   ppid=$(ps -o ppid= -p "$runner" | tr -d ' ')
-  [ "$ppid" = 1 ] || fail "the runner should be reparented to init, parent is $ppid"
+  # A Linux user session's systemd is a subreaper and adopts orphans in init's
+  # place, which bin/fm-fleet-idle.sh accepts as detached too.
+  if [ "$ppid" != 1 ]; then
+    case "$(ps -o comm= -p "$ppid" 2>/dev/null)" in
+      systemd|*/systemd) ;;
+      *) fail "the runner should be reparented to init, parent is $ppid" ;;
+    esac
+  fi
   sess=$(ps -o sess= -p "$runner" | tr -d ' ')
   own_sess=$(ps -o sess= -p "$$" | tr -d ' ')
   if [ -n "$sess" ] && [ "$sess" != 0 ]; then
@@ -171,6 +178,50 @@ test_timer_ends_with_its_runner() {
   ! kill -0 "$timer" 2>/dev/null || fail "a timer must exit once its runner is gone, not wait out the timeout and signal a stale process group"
   [ ! -e "$(dirname "$r")/timed-out" ] || fail "an orphaned timer must not mark the job timed out"
   pass "a job's timeout timer exits when its runner is killed"
+}
+
+# A runner killed outright leaves its command running in its own group; deliver
+# stops that command before reporting the job lost, so the worker's rerun is
+# never a second copy, and a group whose leader is no longer the recorded
+# process is never signalled.
+test_deliver_stops_a_command_its_runner_left() {
+  local h r runner cpgid i
+  h=$(new_home orphan)
+  job "$h" start t1 -- sleep 300 >/dev/null || fail "orphan job did not start"
+  r=$(rec "$h" 1)
+  remember_runner "$r"
+  runner=$(field "$r" runner_pid)
+  for ((i = 0; i < 50; i++)); do
+    [ -n "$(field "$r" command_pgid)" ] && break
+    sleep 0.1
+  done
+  cpgid=$(field "$r" command_pgid)
+  [ -n "$cpgid" ] || fail "the runner never recorded its command"
+  kill -KILL "$runner" || fail "could not kill the runner"
+  for ((i = 0; i < 50; i++)); do kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
+  kill -0 -- "-$cpgid" 2>/dev/null || fail "the command should outlive a killed runner until something stops it"
+  job "$h" deliver || fail "deliver failed"
+  ! kill -0 -- "-$cpgid" 2>/dev/null || fail "deliver must stop the command a dead runner left running before reporting it lost"
+  [ "$(field "$r" outcome)" = lost ] || fail "the job should read lost: $(cat "$r")"
+  [ -n "$(field "$r" notified)" ] || fail "the lost result should be delivered"
+
+  # A record whose command group leader is not the process it started (pid
+  # reuse) is reported lost without signalling that group.
+  set -m
+  sleep 300 &
+  cpgid=$!
+  set +m
+  STARTED_PIDS+=("$cpgid")
+  kill -0 -- "-$cpgid" 2>/dev/null || fail "the stand-in process should lead its own group"
+  mkdir -p "$h/state/t1.jobs/2"
+  : > "$h/state/t1.jobs/2/log"
+  printf 'task=t1\njob=2\ncommand=sleep 300\ncwd=%s\nlog=%s\ntimeout=60\nstarted=100\nrunner_identity=gone\nrunner_pid=999999\ncommand_start=Thu Jan  1 00:00:00 1970\ncommand_pgid=%s\n' \
+    "$h/wt" "$h/state/t1.jobs/2/log" "$cpgid" > "$h/state/t1.jobs/2/record"
+  job "$h" deliver || fail "deliver with a reused command pid failed"
+  [ "$(field "$(rec "$h" 2)" outcome)" = lost ] || fail "the job with a reused command pid should read lost"
+  kill -0 -- "-$cpgid" 2>/dev/null || fail "a process that only reuses the recorded pid must never be signalled"
+  kill -KILL "$cpgid" 2>/dev/null || true
+  pass "deliver stops a command its killed runner left running, and never signals a reused pid"
 }
 
 test_live_deliver_and_lost() {
@@ -267,6 +318,7 @@ trap 'cleanup_jobs; fm_test_cleanup' EXIT
 test_start_runs_detached_and_records_the_result
 test_timeout_stop_and_leftovers
 test_timer_ends_with_its_runner
+test_deliver_stops_a_command_its_runner_left
 test_live_deliver_and_lost
 test_watcher_tick_delivers
 test_reap_stops_and_removes

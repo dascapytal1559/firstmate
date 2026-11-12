@@ -2221,7 +2221,7 @@ fm_task_id_creation_valid "$ID" || {
 if [ "$RELAUNCH" -eq 1 ] && [ -z "${FM_T3CODE_CAUSED_BY:-}" ]; then
   SPAWN_CAUSE=$(fm_meta_get "$STATE/$ID.meta" caused_by)
 else
-  SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token" "the launch of $ID") || exit 1
+  SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ]; then
   BRANCH="$BRANCH_PREFIX$ID"

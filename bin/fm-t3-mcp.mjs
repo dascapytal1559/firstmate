@@ -95,10 +95,7 @@
 //     t3_thread_send mode auto: start an idle thread's next turn or steer the
 //     running one. --caused-by rides as causedBy where the send schema
 //     declares it; T3 refusing that cause is exit 3 (cause_refused), proven
-//     non-delivery. A send that carried a cause reads the thread's newest
-//     messages back for the one it created and reports cause recorded, differs
-//     (with a stderr warning), or unconfirmed (not among them, as a queued
-//     message is not yet); a send without one reports cause none. T3 derives the message and command ids from the client
+//     non-delivery. T3 derives the message and command ids from the client
 //     request id within the auth session that sent it, so a retry with the
 //     same id under the same sign-in is the same delivery; after a fresh
 //     sign-in it is a new delivery and can duplicate. T3 commits a send
@@ -124,13 +121,13 @@
 //     (one second of slack for ps's whole-second ages). A background job left
 //     over from an earlier turn, or one orphaned to init, therefore answers
 //     null rather than borrowing the current turn's prompt; so does an agent
-//     that runs commands in a shell older than the turn. Message text is
-//     never read. offered says whether this T3's launch or send schema
-//     declares causedBy. Changes nothing.
+//     that runs commands in a shell older than the turn. The message pages
+//     it reads ask for one character of each item, so message text is never
+//     read. Changes nothing.
 //   fm-t3-mcp.mjs cause-check --json <text>
 //     Local, no T3 call: {causedBy} for <text>, a JSON object of exactly
-//     threadId, messageId, and optional runId, all non-empty strings, in that
-//     key order; anything else exits 2. T3 checks the ids themselves when the
+//     threadId, messageId, and optional runId, all non-empty strings, in any
+//     key order (the answer is in that order); anything else exits 2. T3 checks the ids themselves when the
 //     cause is sent.
 //   fm-t3-mcp.mjs state --thread <id>
 //     exists, archived, status, activeRunId, pendingRequestCount,
@@ -1419,36 +1416,17 @@ async function send(flags) {
       { threadId: args.threadId, clientRequestId: args.clientRequestId },
     );
   }
-  const messageId = out?.messageId ?? null;
-  // The send result does not echo causedBy, so the message itself is read
-  // back. The message is committed whatever this finds, so nothing here
-  // fails the send.
-  let recorded = "none";
-  if (cause !== null) {
-    recorded = "unconfirmed";
-    try {
-      const head = threadOf(await session.call("t3_thread_read", { threadId: args.threadId, limit: 1, runLimit: 1 }));
-      const items = await readMessagesFrom(session, args.threadId, Math.max(0, (head.itemCount ?? 0) - CAUSE_READBACK_SPAN));
-      const mine = messageId === null ? undefined : items.find((it) => it.messageId === messageId);
-      if (mine) recorded = sameCause(cause, mine.causedBy) ? "recorded" : "differs";
-    } catch {
-      recorded = "unconfirmed";
-    }
-    if (recorded === "differs") {
-      process.stderr.write(`warning: T3 took message ${messageId} on thread ${args.threadId} but reads back another cause than ${JSON.stringify(cause)}\n`);
-    }
-  }
   return {
     ok: true, threadId: args.threadId, clientRequestId: args.clientRequestId, delivery: out?.delivery ?? null, status: out?.status ?? null,
-    runId: out?.runId ?? null, messageId, causedBy: cause, cause: recorded,
+    runId: out?.runId ?? null, messageId: out?.messageId ?? null, causedBy: cause,
   };
 }
 
 // --- causes -----------------------------------------------------------------
 // A cause is the prompt T3's causedBy names: {threadId, runId?, messageId}.
 
-// How far back, in timeline positions, a send looks for the message it just
-// made, and the first window the cause verb searches for its turn's prompt.
+// The first window, in timeline positions, the cause verb searches for its
+// turn's prompt.
 const CAUSE_READBACK_SPAN = 200;
 const CAUSE_KEYS = ["threadId", "runId", "messageId"];
 
@@ -1475,7 +1453,8 @@ function causeFlag(flags) {
   return cause;
 }
 
-const sameCause = (a, b) => Boolean(b) && typeof b === "object" && CAUSE_KEYS.every((k) => (a[k] ?? null) === (b[k] ?? null));
+const sameCause = (a, b) =>
+  Boolean(b) && typeof b === "object" && CAUSE_KEYS.every((k) => (k === "runId" && a.runId === undefined) || (a[k] ?? null) === (b[k] ?? null));
 
 // T3 refuses a cause it cannot verify with a typed error whose message starts
 // "causedBy:" (the T3 Code fork's threadAccess verifyCause), before anything
@@ -1570,8 +1549,7 @@ function turnLocality(threadId, runStartMs) {
 async function causeVerb(flags) {
   const threadId = need(flags, "thread");
   const { session } = await verifiedSession(flags);
-  const offered = toolOffers(session, "t3_thread_launch", "causedBy") || toolOffers(session, "t3_thread_send", "causedBy");
-  const none = (reason) => ({ ok: true, threadId, causedBy: null, reason, offered });
+  const none = (reason) => ({ ok: true, threadId, causedBy: null, reason });
   let head;
   try {
     head = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 5 });
@@ -1591,7 +1569,7 @@ async function causeVerb(flags) {
   if (prompts.length !== 1) {
     return none(prompts.length ? `turn ${runId} received ${prompts.length} prompts, so which one caused this is unknown` : `turn ${runId} shows no prompt`);
   }
-  return { ok: true, threadId, causedBy: { threadId, runId, messageId: prompts[0].messageId }, reason: null, offered };
+  return { ok: true, threadId, causedBy: { threadId, runId, messageId: prompts[0].messageId }, reason: null };
 }
 
 async function read(flags) {

@@ -89,9 +89,11 @@
 # A T3 scout kept for the captain (bin/fm-t3-review.sh) refuses every cleanup,
 # --force included, until T3 reads its thread archived or deleted; an
 # unreadable T3 refuses too. Once closed it passes the same gates as any
-# scout, and after the thread is stopped and archived it must also read back
-# fenced on its recorded worktree (bin/fm-t3-mcp.mjs fence) before the copy
-# is returned; a fence that cannot be proven keeps the lease and the records.
+# scout, its close is read again just before its thread is stopped (a reopen
+# meanwhile refuses), and after the thread is stopped and archived it must
+# also read back fenced on its recorded worktree (bin/fm-t3-mcp.mjs fence)
+# before the copy is returned; a fence that cannot be proven keeps the lease
+# and the records.
 # A scratch copy (kind=scout) and a --force run discard untracked content.
 # Treehouse's return resets with `git clean -fd`, which never deletes a nested
 # git repository, so the pool slot stays dirty and later checkouts skip it.
@@ -4104,6 +4106,13 @@ if [ "$BACKEND" = t3code ]; then
   # first: the archived thread stays in T3. Failing here never stops cleanup.
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-t3-crew-status.sh" clear "$ID" >&2 || true
+  if [ "$T3_REVIEW" = closed ]; then
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+      FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || {
+      echo "error: $ID's kept review thread $T no longer reads closed in T3, so it is left running for the captain" >&2
+      endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
+    }
+  fi
   fm_backend_kill t3code "$T" || {
     echo "error: could not stop and archive T3 thread $T for $ID; start T3 Code (or archive the thread there) and re-run teardown" >&2
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1

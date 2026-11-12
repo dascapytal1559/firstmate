@@ -96,7 +96,9 @@ Claim the task's lease and run `bin/fm-teardown.sh <task>` with no flags: the sc
 Report the cleanup in that event's outcome with the PR's URL.
 
 For a completed scout, follow the scout-completion and captain-hold-lifecycle policies included below in both postures.
-After their completion gate passes, retain the report, claim the task's lease, and run `bin/fm-teardown.sh <task>` with no flags.
+After their completion gate passes, keep the report.
+A T3 scout is then kept for the captain as scout-completion says: run `bin/fm-t3-review.sh retain` and leave it under way, and clean it up only when `retain` exits 4 or a `check: t3-review <task>` wake says he closed its thread.
+Otherwise, and for that later cleanup, claim the task's lease and run `bin/fm-teardown.sh <task>` with no flags.
 Report the findings and cleanup result in that event's outcome; a refusal is reported with its exact reason and never forced, worked around, or repaired by hand.
 Reporting a scout as finished and idle is not a substitute for that cleanup.
 Missing or incomplete reports, an unreviewed decision inventory or unrecorded captain calls, WIP ships, deliberate external waits, and idle or exited agents are not proof of task completion.

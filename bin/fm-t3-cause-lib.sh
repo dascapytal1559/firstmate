@@ -27,16 +27,15 @@
 #                   prompts or an action a recorded note caused; T3 checks
 #                   the ids when the cause is sent.
 # Anything else is refused (status 2) before the boundary acts.
-# A cause that could not be established is noted on stderr with the reason,
-# and the action goes ahead without one. Message text is never read.
+# A cause that could not be established is left out silently, and the action
+# goes ahead without one. Message text is never read.
 
 _FM_T3_CAUSE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# fm_t3_cause_resolve <token-file> <action> -> the cause JSON on stdout, or
-# nothing. <action> names what is about to happen, for the stderr note.
+# fm_t3_cause_resolve <token-file> -> the cause JSON on stdout, or nothing.
 # Status 2 when FM_T3CODE_CAUSED_BY is malformed; 0 otherwise.
 fm_t3_cause_resolve() {
-  local token=$1 action=$2 given=${FM_T3CODE_CAUSED_BY:-} out
+  local token=$1 given=${FM_T3CODE_CAUSED_BY:-} out
   case "$given" in
     off) return 0 ;;
     '') ;;
@@ -52,24 +51,17 @@ fm_t3_cause_resolve() {
   if [ -z "${T3CODE_THREAD_ID:-}" ] || [ ! -f "$token" ] || ! command -v node >/dev/null 2>&1; then
     return 0
   fi
-  if ! out=$(node "$_FM_T3_CAUSE_LIB_DIR/fm-t3-mcp.mjs" cause --thread "$T3CODE_THREAD_ID" --token-file "$token" 2>/dev/null); then
-    echo "note: no T3 cause recorded for $action: T3 could not be read" >&2
-    return 0
-  fi
-  out=$(_fm_t3_cause_field "$out") || return 0
-  case "$out" in
-    '{'*) printf '%s' "$out" ;;
-    *) echo "note: no T3 cause recorded for $action: $out" >&2 ;;
-  esac
+  out=$(node "$_FM_T3_CAUSE_LIB_DIR/fm-t3-mcp.mjs" cause --thread "$T3CODE_THREAD_ID" --token-file "$token" 2>/dev/null) || return 0
+  _fm_t3_cause_field "$out" || true
   return 0
 }
 
-# _fm_t3_cause_field <helper-json>: the causedBy JSON, else the reason text.
+# _fm_t3_cause_field <helper-json>: the causedBy JSON; status 1 without one.
 _fm_t3_cause_field() {
   printf '%s' "$1" | node -e '
 let d;
 try { d = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch { process.exit(1); }
-if (!d || d.ok !== true) process.exit(1);
-process.stdout.write(d.causedBy ? JSON.stringify(d.causedBy) : String(d.reason ?? "unknown"));
+if (!d || d.ok !== true || !d.causedBy) process.exit(1);
+process.stdout.write(JSON.stringify(d.causedBy));
 '
 }

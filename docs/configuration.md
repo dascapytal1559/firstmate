@@ -2025,7 +2025,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 **Model, effort, and fallback behavior**
 
 - `ultra` is native-only: the model-aware validation contract and launch mapping are owned by `bin/fm-harness.sh validate-native-effort` and `bin/fm-spawn.sh` respectively.
-- A Codex effort is valid when the profile's model lists it in the Codex CLI's own model catalog (`${CODEX_HOME:-~/.codex}/models_cache.json`, read by `bin/fm-harness.sh codex-effort-check`); `max` needs that catalog evidence, and a pane-backed spawn refuses an effort the catalog says the model does not offer rather than omitting it.
+- Which efforts a Codex model offers comes from the Codex CLI's own model catalog (`${CODEX_HOME:-~/.codex}/models_cache.json`, read by `bin/fm-harness.sh codex-effort-check`). Profile validation refuses `max` only for a model that catalog lists without it, so a missing or stale catalog never invalidates the whole file; a pane-backed spawn refuses an effort the catalog says the model does not offer, and `max` with no catalog evidence, rather than omitting it.
 - On pane backends, an omitted model or effort means the selected harness uses its own default for that axis; [T3 selection](t3code-backend.md#provider-instances-and-models) owns server-backed defaults.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
 - Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.

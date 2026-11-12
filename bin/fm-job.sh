@@ -37,8 +37,10 @@
 #          worker's next turn): its outcome, exit code, run time, log path, and
 #          the log's last lines. A job whose runner is gone without recording
 #          an outcome (the machine restarted, or it was killed) is recorded as
-#          lost and delivered the same way. A failed send is retried on the
-#          next cycle. Silent; exits 0 unless the state directory is unusable.
+#          lost and delivered the same way, after stopping any command it left
+#          running, so the lost result never leaves a second copy running. A
+#          failed send is retried on the next cycle. Silent; exits 0 unless the
+#          state directory is unusable.
 # live     Print "<task-id><TAB><runner-pid>" for every job still running whose
 #          runner is the process that recorded itself (pid plus start
 #          identity). bin/fm-fleet-idle.sh reads it to leave a running job out
@@ -49,11 +51,14 @@
 #
 # Records live in this home's state/<task-id>.jobs/<n>/: `record` holds
 # key=value lines read last-value-wins (task, job, command, cwd, log,
-# timeout, started, runner_pid, runner_identity, command_pgid, exit, finished,
-# outcome, notified), `argv` holds the NUL-separated command, and `log` its
-# output. Lines are only ever appended. `outcome=` (passed, failed, timed-out,
-# stopped, or lost) is written last and is what marks a job ended; `notified=`
-# marks its result delivered.
+# timeout, started, runner_pid, runner_identity, command_start, command_pgid,
+# exit, finished, outcome, notified), `argv` holds the NUL-separated command,
+# and `log` its output. Lines are only ever appended. `outcome=` (passed,
+# failed, timed-out, stopped, or lost) is written last and is what marks a job
+# ended; `notified=` marks its result delivered. The runner, a start that gives
+# up on it, stop, and deliver each claim an unstarted job by creating its
+# `claimed` directory, so a runner that starts late never runs a job already
+# given up.
 #
 # Process shape: the runner (`fm-job.sh _run <dir>`, never called directly)
 # leads its own session, and starts the command in a process group of its own
@@ -62,7 +67,9 @@
 # process it left behind in its group is stopped the same way, so an ended job
 # leaves nothing running. Before signalling, stop and reap check that the
 # recorded runner is still the same process; a runner that is gone is never
-# signalled on its recorded pid.
+# signalled on its recorded pid. A command whose runner is gone is stopped by
+# stop, reap, and deliver only while its leader still has the start time
+# recorded as command_start.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,14 +117,26 @@ job_dir() {  # <task-id> <job>
   printf '%s' "$STATE/$1.jobs/$2"
 }
 
-# runner_live <record>: the recorded runner is alive and is still the process
-# that recorded itself.
+# runner_live <record>: 0 when the recorded runner is alive and is still the
+# process that recorded itself, 1 when it is gone, 2 when its pid is alive but
+# its identity cannot be read now.
 runner_live() {
-  local pid identity
+  local pid identity current
   pid=$(job_get "$1" runner_pid)
   identity=$(job_get "$1" runner_identity)
   [ -n "$pid" ] && [ -n "$identity" ] && fm_pid_alive "$pid" || return 1
-  [ "$(fm_pid_identity "$pid" 2>/dev/null)" = "$identity" ]
+  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 2
+  [ "$current" = "$identity" ]
+}
+
+# command_live <record>: the command's group leader is alive and is still the
+# process the runner started.
+command_live() {
+  local pgid start
+  pgid=$(job_get "$1" command_pgid)
+  start=$(job_get "$1" command_start)
+  [ -n "$pgid" ] && [ -n "$start" ] && fm_pid_alive "$pgid" || return 1
+  [ "$(fm_pid_start_time "$pgid" 2>/dev/null)" = "$start" ]
 }
 
 group_alive() { [ -n "${1-}" ] && kill -0 -- "-$1" 2>/dev/null; }
@@ -141,7 +160,7 @@ stop_group() {
 }
 
 cmd_start() {
-  local id=${1-} timeout=$JOB_TIMEOUT cwd jobs n dir display i
+  local id=${1-} timeout=$JOB_TIMEOUT cwd jobs n dir display i launched=1
   [ "$#" -gt 0 ] && shift
   valid_task "$id"
   cwd=$(pwd -P)
@@ -186,16 +205,20 @@ cmd_start() {
     open(STDIN, "<", "/dev/null"); open(STDOUT, ">", "/dev/null"); open(STDERR, ">&", \*STDOUT);
     POSIX::close($_) for 3 .. 255;
     exec { $ARGV[0] } @ARGV or POSIX::_exit(127);
-  ' "$BASH" "$SELF" _run "$dir" || die "could not start the detached runner for job $n"
-  for ((i = 0; i < 100; i++)); do
+  ' "$BASH" "$SELF" _run "$dir" || launched=0
+  for ((i = 0; ; i++)); do
     [ -z "$(job_get "$dir/record" runner_pid)" ] || break
+    if [ "$launched" = 0 ] || [ "$i" -ge 100 ]; then
+      if mkdir "$dir/claimed" 2>/dev/null; then
+        job_put "$dir/record" outcome lost
+        job_put "$dir/record" notified "$(now)"
+        [ "$launched" = 1 ] || die "could not start the detached runner for job $n; nothing is running"
+        die "job $n's runner did not start within 10 seconds; nothing is running"
+      fi
+      [ "$i" -lt 300 ] || die "job $n's runner claimed it but has not recorded itself; check fm-job.sh status $id $n"
+    fi
     sleep 0.1
   done
-  if [ -z "$(job_get "$dir/record" runner_pid)" ]; then
-    job_put "$dir/record" outcome lost
-    job_put "$dir/record" notified "$(now)"
-    die "job $n's runner did not start within 10 seconds; nothing is running"
-  fi
   printf 'job: %s\nlog: %s\nruns: %s\nin: %s\ntimeout: %ss\n' "$n" "$dir/log" "$display" "$cwd" "$timeout"
 }
 
@@ -204,6 +227,7 @@ cmd_run() {
   local -a argv=()
   rec="$dir/record"
   [ -f "$rec" ] || exit 2
+  mkdir "$dir/claimed" 2>/dev/null || exit 0
   job_put "$rec" runner_identity "$(fm_pid_identity "$$" 2>/dev/null)"
   job_put "$rec" runner_pid "$$"
   cwd=$(job_get "$rec" cwd)
@@ -222,6 +246,7 @@ cmd_run() {
   set -m
   "${argv[@]}" < /dev/null >> "$log" 2>&1 &
   cpid=$!
+  job_put "$rec" command_start "$(fm_pid_start_time "$cpid" 2>/dev/null)"
   job_put "$rec" command_pgid "$cpid"
   # The timer wakes every few seconds to confirm its runner still exists: a
   # runner killed outright must not leave a timer that later signals a process
@@ -232,7 +257,7 @@ cmd_run() {
       left=$((deadline - $(now)))
       [ "$left" -gt 0 ] || break
       sleep "$((left < TIMER_POLL ? left : TIMER_POLL))"
-      runner_live "$rec" || exit 0
+      runner_live "$rec" || [ "$?" = 2 ] || exit 0
     done
     : > "$dir/timed-out"
     kill -TERM -- "-$cpid" 2>/dev/null
@@ -261,12 +286,23 @@ cmd_run() {
 }
 
 # stop_job <dir>: stop a running job and wait for its runner to record the
-# outcome. Returns 1 when its command group survives.
+# outcome; a job whose runner is gone is stopped and recorded here. Returns 1
+# when its command group survives.
 stop_job() {
-  local dir=$1 rec pgid i
+  local dir=$1 rec pgid i rl=0
   rec="$dir/record"
   [ -z "$(job_get "$rec" outcome)" ] || return 0
-  runner_live "$rec" || return 0
+  runner_live "$rec" || rl=$?
+  if [ "$rl" = 1 ]; then
+    if command_live "$rec"; then
+      stop_group "$(job_get "$rec" command_pgid)" "$KILL_GRACE" || return 1
+    elif [ -n "$(job_get "$rec" runner_pid)" ] || ! mkdir "$dir/claimed" 2>/dev/null; then
+      return 0
+    fi
+    job_put "$rec" finished "$(now)"
+    job_put "$rec" outcome stopped
+    return 0
+  fi
   for ((i = 0; i < 50; i++)); do
     pgid=$(job_get "$rec" command_pgid)
     [ -z "$pgid" ] || break
@@ -315,7 +351,7 @@ cmd_live() {
   for rec in "$STATE"/*.jobs/*/record; do
     [ -f "$rec" ] || continue
     [ -z "$(job_get "$rec" outcome)" ] || continue
-    runner_live "$rec" || continue
+    runner_live "$rec" || [ "$?" = 2 ] || continue
     id=${rec%/*/record}
     id=${id##*/}
     printf '%s\t%s\n' "${id%.jobs}" "$(job_get "$rec" runner_pid)"
@@ -342,7 +378,7 @@ result_message() {  # <record>
 }
 
 cmd_deliver() {
-  local rec dir id started
+  local rec dir id started rl
   [ -d "$STATE" ] || return 2
   for rec in "$STATE"/*.jobs/*/record; do
     [ -f "$rec" ] || continue
@@ -353,11 +389,17 @@ cmd_deliver() {
     id=${id%.jobs}
     [ -f "$STATE/$id.meta" ] || continue
     if [ -z "$(job_get "$rec" outcome)" ]; then
-      runner_live "$rec" && continue
-      # A runner that has not recorded itself yet may still be starting.
-      started=$(job_get "$rec" started)
-      if [ -z "$(job_get "$rec" runner_pid)" ] && [ -n "$started" ] && [ "$(($(now) - started))" -lt 30 ]; then
-        continue
+      rl=0
+      runner_live "$rec" || rl=$?
+      [ "$rl" = 1 ] || continue
+      if [ -z "$(job_get "$rec" runner_pid)" ]; then
+        # A runner that has not recorded itself yet may still be starting.
+        started=$(job_get "$rec" started)
+        [ -z "$started" ] || [ "$(($(now) - started))" -ge 30 ] || continue
+        mkdir "$dir/claimed" 2>/dev/null || true
+      fi
+      if command_live "$rec"; then
+        stop_group "$(job_get "$rec" command_pgid)" "$KILL_GRACE" || continue
       fi
       # Re-read: the runner may have recorded its outcome and exited since.
       if [ -z "$(job_get "$rec" outcome)" ]; then

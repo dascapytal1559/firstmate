@@ -475,6 +475,7 @@ test_relaunch_preserves_durable_task_metadata() {
   {
     printf '%s\n' 'x_request=request-19'
     printf '%s\n' 'decisions_reviewed=1'
+    printf '%s\n' 'caused_by={"threadId":"coord","runId":"run-c","messageId":"msg-c"}'
     printf '%s\n' 'pr=https://github.com/example/repo/pull/19'
     printf '%s\n' 'pr_head=0123456789012345678901234567890123456789'
   } >> "$dir/home/state/rl19.meta"
@@ -497,6 +498,8 @@ test_relaunch_preserves_durable_task_metadata() {
     || fail "the task X request must survive relaunch"
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
+  [ "$(meta_field "$dir" rl19 caused_by)" = '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' ] \
+    || fail "the T3 prompt that caused the task must survive relaunch, not be re-resolved from the relaunching turn"
   fm_pr_poll_artifacts_valid "$dir/home/state" rl19 "$ROOT/bin/fm-pr-poll.sh" \
     || fail "relaunch must keep an armed PR poll authenticated"
   pass "fm-control relaunch: an armed PR poll survives replacement launch publication"

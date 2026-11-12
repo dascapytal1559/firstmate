@@ -501,14 +501,11 @@ cmd_note() {
     body="$*"
   fi
   # The T3 prompt that made the writing agent leave this note, when it writes
-  # from inside a T3 turn (bin/fm-t3-cause-lib.sh). Capture never depends on
-  # it: without the library beside this script the note carries no cause.
-  local cause=''
-  if [ -f "$SELF_DIR/fm-t3-cause-lib.sh" ]; then
-    # shellcheck source=bin/fm-t3-cause-lib.sh
-    . "$SELF_DIR/fm-t3-cause-lib.sh"
-    cause=$(fm_t3_cause_resolve "$CONFIG/t3code-token" "this note") || exit 1
-  fi
+  # from inside a T3 turn (bin/fm-t3-cause-lib.sh).
+  local cause
+  # shellcheck source=bin/fm-t3-cause-lib.sh
+  . "$SELF_DIR/fm-t3-cause-lib.sh"
+  cause=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
   queue_note text "$body" "${cause:+caused-by=$cause}" "$request_id" "$json"
 }
 
