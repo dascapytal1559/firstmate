@@ -226,7 +226,7 @@ Ships, and scouts on every other backend, keep the cleanup above.
 - **Publication.** The note is posted with `t3_thread_note`, which starts no worker turn, then the thread gets the exact tag `waiting for captain` and automatic settling switched off, and a read-back proves each.
   The note's request id is derived from the home, task, spawn generation, report, and note, so a retry or a restart posts nothing twice, and a revised report or handoff appends a new note instead of rewriting the old one.
   A busy thread waits for its turn to end, a failure stays kept for the watcher to retry, and nothing is archived as a fallback.
-- **Old T3.** A T3 without these tools, or one whose reads lack `tags` or `autoSettleDisabled`, cannot keep threads; `retain` then writes nothing and the scout is cleaned up as usual.
+- **Old T3.** A T3 without these tools, or one whose reads lack `tags` or `autoSettleDisabled`, cannot keep threads; `retain` (or `publish`) then exits 4, dropping any handoff it had recorded, and the scout is cleaned up as usual. When the watcher's pass is the one to find this out, it drops the record and wakes firstmate with a `check: t3-review` cleanup notice.
   A missing read-back field always means "too old", never "not set".
 - **Card.** A published review reads `Waiting for captain` (see [Crew card status](#crew-card-status)); a real decision still appears on the Bridge exactly as before, and answering it never closes the exploration.
 - **Watcher and recovery.** An idle kept review never enters the stale alarms or the inactive-outcome sweep, and the session-start digest names it as kept, so nothing relaunches or steers it.

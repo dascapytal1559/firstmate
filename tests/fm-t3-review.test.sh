@@ -218,18 +218,29 @@ test_reconcile_survives_a_record_it_cannot_publish() {
   pass "fm-t3-review reconcile: one record that cannot publish never stops the pass for the others"
 }
 
-# A pending handoff a T3 too old to keep threads refuses is dropped, and
-# firstmate is woken to clean the scout up as usual.
+# A pending handoff a T3 too old to keep threads refuses is dropped. Found by
+# the watcher's pass, firstmate is woken to clean the scout up; found by a
+# direct publish, its exit 4 already says so and no second wake is left.
 test_reconcile_wakes_cleanup_when_t3_cannot_keep_it() {
-  make_home dropped '{"reviews":false}'
-  fm_write_meta "$HOME_DIR/state/s1.meta" window=fm-s1 endpoint_task_id=s1 kind=scout harness=claude backend=t3code \
-    "t3_thread_id=$THREAD" t3_project_id=proj-1 "worktree=$HOME_DIR/copy" spawn_gen=gen-1 decisions_reviewed=1 \
-    "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-s1
-  printf 'handoff\n' > "$HOME_DIR/data/s1/handoff-r1.md"
-  review reconcile
-  assert_equals '' "$(meta t3_review)" "a T3 that cannot keep the thread drops the record"
-  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed" 2>/dev/null)" "bin/fm-teardown.sh s1" "the drop leaves a cleanup notice for firstmate"
-  pass "fm-t3-review reconcile: a review an old T3 cannot keep is dropped with a cleanup notice"
+  local mode
+  for mode in publish reconcile; do
+    make_home "dropped-$mode" '{"reviews":false}'
+    fm_write_meta "$HOME_DIR/state/s1.meta" window=fm-s1 endpoint_task_id=s1 kind=scout harness=claude backend=t3code \
+      "t3_thread_id=$THREAD" t3_project_id=proj-1 "worktree=$HOME_DIR/copy" spawn_gen=gen-1 decisions_reviewed=1 \
+      "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-s1
+    printf 'handoff\n' > "$HOME_DIR/data/s1/handoff-r1.md"
+    if [ "$mode" = publish ]; then
+      review publish s1
+      expect_code 4 "$RC" "a direct publish an old T3 refuses exits 4: $OUT"
+      assert_equals '' "$(meta t3_review)" "a direct publish drops the record"
+      assert_absent "$HOME_DIR/state/t3-review/s1.closed" "a direct publish leaves no cleanup notice; its exit 4 already asks for cleanup"
+    else
+      review reconcile
+      assert_equals '' "$(meta t3_review)" "a T3 that cannot keep the thread drops the record"
+      assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed" 2>/dev/null)" "bin/fm-teardown.sh s1" "the watcher's drop leaves a cleanup notice for firstmate"
+    fi
+  done
+  pass "fm-t3-review: a review an old T3 cannot keep is dropped, with a cleanup notice only from the watcher's pass"
 }
 
 test_retain_refuses_an_option_without_its_value() {
