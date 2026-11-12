@@ -78,7 +78,9 @@
 # read (at least one second, like the first visit above), and hitting that
 # bound ends the visit like a state-read timeout.
 # Working, paused, parked, blocked, unknown, persistent secondmates, and
-# captain-held work retain their existing supervision semantics.
+# captain-held work retain their existing supervision semantics. A finished T3
+# scout kept for the captain (bin/fm-t3-review-lib.sh) was handed off before
+# it was kept, so it is never a suspicious terminal outcome.
 #
 # A terminal-outcomes/<fingerprint>.pending record remains until its upstream
 # receipt is durable.
@@ -134,6 +136,8 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 
@@ -635,6 +639,9 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   turn="$STATE/$id.turn-ended"
   last=$(last_status_line "$status")
   status_line_verb "$last" | grep -Fx captain-held >/dev/null 2>&1 && return 0
+  # A finished T3 scout kept for the captain was handed off before it was
+  # kept (bin/fm-t3-review.sh retain), so its outcome is already delivered.
+  [ -z "$(fm_t3_review_state "$meta")" ] || return 0
   # A ledger that states its own outcome is the ledger-first path's to deliver.
   if [ -n "$self" ]; then
     child_terminal_ledger_line "$status" >/dev/null

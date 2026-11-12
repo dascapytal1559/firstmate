@@ -1073,3 +1073,43 @@ A model the reader does not recognise is its own family, and a route with no mod
 The 8192-character fit is unchanged.
 
 The evidence is the needs-me regression suite's routing test, which pins the flat family headings, their first-appearance order, and that no provider heading appears.
+
+## 43. Explorations wait for the captain, FirstMate's half (12 November 2026)
+
+![A kept exploration thread: its card reads Waiting for captain, Firstmate's note holds the summary, the full explanation, and the report link, and the thread is tagged and protected; beside it, the lifecycle from done to his close and the fenced cleanup](media/kept-review-thread.svg)
+
+In his 11 November voice journal the captain asked that exploration threads should
+
+> linger around until I actively like close it
+
+with the thread tagged
+
+> Just say waiting for captain.
+
+and FirstMate's summary posted back into it, so there are three levels to read: the summary, the full body, and a link to the full report.
+Simple fixes
+
+> can just go.
+
+Asked whether to build it, he answered "Yes."
+The T3 half (tags, per-thread auto-settle protection, a passive note that starts no agent turn, and an execution fence) landed in the T3 fork first; this is FirstMate's half.
+
+What was built:
+
+- A finished scout on T3 is now kept rather than cleaned up.
+  FirstMate writes its handoff as two parts, a summary and the full explanation, and one helper composes the note in that fixed order with the report link last, saves it, and only then posts it.
+  The note starts no worker turn, and the thread gets the exact tag `waiting for captain` and automatic settling switched off.
+  Each is read back before it counts.
+- The note's request id is built from the task, its spawn, the report, and the words, so a retry or restart never posts twice, and a revised report gets a new note instead of rewriting the old one.
+  A busy thread waits, a failure is retried by the watcher, and nothing is ever archived as a fallback.
+- His card reads "Waiting for captain" for a kept review even with no question open.
+  Real decisions stay on the Bridge exactly as before, and answering one leaves the exploration open.
+- Cleanup refuses a kept review, even when forced, until T3 reads his thread archived or deleted, and an unreachable T3 refuses too.
+  Once he closes it, cleanup runs every ordinary check, stops the thread, and fences it on its copy before the copy goes back to the pool, so a thread he reopens later stays readable but can never run in a slot another task now holds.
+- The watcher notices his close on its minute pass, even when the thread is gone, and wakes FirstMate once to clean up.
+  An idle kept review never raises a stopped-responding alarm, and recovery never relaunches one.
+- Ships, and scouts on other backends, keep today's cleanup.
+  A T3 too old for these tools is detected and gets the old behaviour, never a guess.
+
+The evidence is the regression suites against the fake T3 server: the T3 client (publish, race, old T3, fence), a new suite for the helper including the watcher's close notice and a stale-alarm control, the crew card, the Bridge, the hold lifecycle, cleanup and its slot-safety cases, the inactive-outcome sweep, and the session-start digest.
+No live thread was touched; the first real kept review is the integrated check.

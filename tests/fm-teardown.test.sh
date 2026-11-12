@@ -79,6 +79,8 @@ set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/t3-fake-lib.sh disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/t3-fake-lib.sh"
 fm_git_identity fmtest fmtest@example.invalid
 
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
@@ -2086,6 +2088,124 @@ test_scout_nested_clone_returns_with_no_untracked_entries() {
   assert_absent "$wt/scratch-clone" "scout-nested-clean: nested clone survived return"
   assert_absent "$wt/scratch.txt" "scout-nested-clean: scratch file survived return"
   pass "scout copy with a nested clone and a scratch file returns with no untracked entries"
+}
+
+# A finished T3 scout kept for the captain (bin/fm-t3-review.sh): its record,
+# its thread on the fake T3 server, and a Treehouse return that leaves a
+# marker the server's request log can see. Args: case_dir review-state
+# [thread-archived] [world-js]
+T3_KEPT_THREAD='mcp:5d6e7f80-9a1b-4c2d-8e3f-4a5b6c7d8e9f'
+prepare_kept_review() {
+  local case_dir=$1 state=$2 archived=${3:-false} world=${4:-}
+  fm_write_meta "$case_dir/state/task-x1.meta" window=fm-task-x1 endpoint_task_id=task-x1 "worktree=$case_dir/wt" \
+    "project=$case_dir/project" kind=scout mode=no-mistakes spawn_gen=teardown-test-task-x1 \
+    backend=t3code "t3_thread_id=$T3_KEPT_THREAD" t3_project_id=proj-1 harness=claude \
+    "t3_review=$state" "t3_review_target=$T3_KEPT_THREAD" t3_review_revision=1 t3_review_request=req-1
+  prepare_scout_teardown "$case_dir"
+  [ -n "$T3_FAKE_PID" ] || t3_fake_start "$TMP_ROOT/t3-server"
+  t3_fake_case "$case_dir/t3-case"
+  FM_T3_ID=$T3_KEPT_THREAD FM_T3_WT="$case_dir/wt" FM_T3_ARCHIVED=$archived FM_T3_PROBE="$case_dir/returned" t3_fake_set '
+w.reviews = true; w.probePath = process.env.FM_T3_PROBE;
+w.threads = { [process.env.FM_T3_ID]: { threadId: process.env.FM_T3_ID, projectId: "proj-1", status: "completed", activeRunId: null,
+  archived: process.env.FM_T3_ARCHIVED === "true", worktreePath: process.env.FM_T3_WT, pendingRequestCount: 0,
+  tags: ["waiting for captain"], autoSettleDisabled: true, items: [], runs: [] } };'
+  [ -z "$world" ] || t3_fake_set "$world"
+  t3_fake_credential "$case_dir/config/t3code-token"
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+[ "\${1:-}" != return ] || : > '$case_dir/returned'
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+}
+
+test_kept_t3_review_refuses_until_the_captain_closes_it() {
+  local case_dir rc flag
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+  for flag in '' --force; do
+    case_dir=$(make_case "t3-kept-open${flag:+-forced}")
+    prepare_kept_review "$case_dir" waiting
+    : > "$case_dir/wt/scratch.txt"
+    set +e
+    run_teardown "$case_dir" $flag > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "t3-kept-open$flag: a review kept open for the captain must refuse"
+    assert_contains "$(cat "$case_dir/stderr")" "kept open for the captain" "t3-kept-open$flag: the refusal says why"
+    assert_present "$case_dir/state/task-x1.meta" "t3-kept-open$flag: the record stays"
+    assert_present "$case_dir/wt/scratch.txt" "t3-kept-open$flag: the copy stays untouched"
+    assert_absent "$case_dir/returned" "t3-kept-open$flag: the lease is kept"
+    assert_equals '' "$(t3_fake_mutations)" "t3-kept-open$flag: the thread is never stopped, archived, or fenced"
+  done
+  t3_fake_stop
+  pass "fm-teardown backend=t3code: a finished review kept open for the captain refuses every cleanup, --force included, and touches nothing"
+}
+
+test_closed_t3_review_is_fenced_before_its_copy_returns() {
+  local case_dir rc fence
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+  case_dir=$(make_case t3-kept-closed)
+  prepare_kept_review "$case_dir" waiting true
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "t3-kept-closed: once he archived the thread, cleanup runs: $(cat "$case_dir/stderr")"
+  assert_present "$case_dir/returned" "t3-kept-closed: the copy goes back to the pool"
+  assert_absent "$case_dir/state/task-x1.meta" "t3-kept-closed: the record is retired"
+  fence=$(t3_fake_calls t3_thread_organize | grep -F '"fence"' || true)
+  [ -n "$fence" ] || fail "t3-kept-closed: the thread must be fenced, got $(t3_fake_mutations)"
+  assert_contains "$fence" "\"expectedWorktreePath\":\"$case_dir/wt\"" "t3-kept-closed: the fence names the returned copy"
+  node -e 'for (const l of require("fs").readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean)) {
+  const e = JSON.parse(l);
+  if (e.tool === "t3_thread_organize" && e.arguments?.action === "fence" && e.probe !== false) process.exit(1);
+}' "$T3_FAKE_LOG" || fail "t3-kept-closed: the fence must land before the copy is returned"
+  node -e 'const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads[process.argv[2]];
+process.exit(t.executionFence && t.archived ? 0 : 1)' "$T3_FAKE_WORLD" "$T3_KEPT_THREAD" || fail "t3-kept-closed: the thread stays archived and fenced"
+  assert_present "$case_dir/data/task-x1/report.md" "t3-kept-closed: the report survives"
+
+  case_dir=$(make_case t3-kept-deleted)
+  prepare_kept_review "$case_dir" waiting false 'w.threads = {}'
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "t3-kept-deleted: a thread he deleted is his close too: $(cat "$case_dir/stderr")"
+  assert_present "$case_dir/returned" "t3-kept-deleted: a deleted thread needs no fence and the copy goes back"
+  t3_fake_stop
+  pass "fm-teardown backend=t3code: a review he archived is stopped, fenced on its copy, and only then returned; a deleted one needs no fence"
+}
+
+test_closed_t3_review_without_a_fence_keeps_its_lease() {
+  local case_dir rc
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+  case_dir=$(make_case t3-kept-unfenced)
+  prepare_kept_review "$case_dir" closed true 'w.reviewActions = ["tag", "untag", "disable_auto_settle", "enable_auto_settle"]'
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "t3-kept-unfenced: a copy whose thread cannot be fenced must not be returned"
+  assert_absent "$case_dir/returned" "t3-kept-unfenced: the lease is kept"
+  assert_present "$case_dir/state/task-x1.meta" "t3-kept-unfenced: the record stays for the retry"
+  assert_absent "$case_dir/state/task-x1.backlog-close" "t3-kept-unfenced: refused before any pending close is recorded"
+  assert_contains "$(cat "$case_dir/stderr")" "cannot fence" "t3-kept-unfenced: the refusal names the missing fence"
+  assert_equals '' "$(t3_fake_mutations)" "t3-kept-unfenced: refused before the thread is touched"
+
+  case_dir=$(make_case t3-ship-leftover)
+  prepare_kept_review "$case_dir" waiting
+  sed -i.bak 's/^kind=scout$/kind=ship/' "$case_dir/state/task-x1.meta"
+  wt_commit "$case_dir"
+  git -C "$case_dir/wt" push -q origin HEAD:refs/heads/fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "t3-ship-leftover: a ship keeps today's cleanup whatever review fields it carries: $(cat "$case_dir/stderr")"
+  ! t3_fake_calls t3_thread_organize | grep -qF '"fence"' || fail "t3-ship-leftover: a ship is never fenced"
+  t3_fake_stop
+  pass "fm-teardown backend=t3code: a closed review T3 cannot fence keeps its lease and record, and a ship keeps today's cleanup"
 }
 
 test_ship_nested_clone_is_refused_and_bytes_stay() {
@@ -6663,3 +6783,6 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_kept_t3_review_refuses_until_the_captain_closes_it
+test_closed_t3_review_is_fenced_before_its_copy_returns
+test_closed_t3_review_without_a_fence_keeps_its_lease

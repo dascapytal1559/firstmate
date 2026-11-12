@@ -84,6 +84,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <id>/handoff-r<n>.md  firstmate's exact handoff note for a kept T3 review, one per revision; bin/fm-t3-review.sh writes it and survives teardown
   needs-me/<id>.json the words Firstmate raised and updated a captain call with, for its T3 Bridge decision; written only by bin/fm-captain-hold.sh context, which owns the schema
   rules/inventory.json  every standing captain rule the T3 Bridge lists, with its approval or Firstmate's recommendation, and the rule-file edits his answers still need; kept by Firstmate, answers recorded with bin/fm-rules.sh, schema owned by bin/fm-t3-mcp.mjs rules-payload
   <id>/status.log <id>/status.<N>.log <id>/children/<child>/...  optional teardown archives; see docs/architecture.md "Task status archives"
@@ -135,6 +136,7 @@ state/               runtime records and signals; gitignored
   pr-health.json     the health monitor's fm-pr-health.v1 record: per-PR fingerprints of the conditions already reported, the task branch-to-PR lookup cache, and the GitHub notifications cursor, replaced by rename under .pr-health.lock; bin/fm-pr-health.sh owns the format
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   t3-needs-me/       the FirstMate thread the captain's T3 decisions reply to, the run of refused decision passes and its alert for the watcher, and the last objectives, routing and rules pushes; bin/fm-t3-needs-me.sh owns it
+  t3-review/         one <task>.closed notice per kept T3 review the captain closed, which the watcher turns into one check wake asking for its cleanup; bin/fm-t3-review.sh owns it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

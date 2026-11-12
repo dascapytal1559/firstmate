@@ -480,6 +480,21 @@ test_list_cleared_while_firstmate_thread_missing_is_sent_once_it_returns() {
   pass "fm-t3-needs-me.sh: a list emptied while FirstMate's thread was missing is sent once it returns"
 }
 
+test_kept_review_alone_is_no_decision() {
+  make_home kept-review
+  fm_write_meta "$HOME_DIR/state/w1.meta" window=fm-w1 endpoint_task_id=w1 kind=scout harness=claude backend=t3code \
+    t3_thread_id=mcp:kept t3_project_id=proj-1 t3_review=waiting t3_review_target=mcp:kept
+  sync_now >/dev/null || fail "a pass should succeed"
+  assert_equals '[]' "$(bridge '[.decisionList.decisions[]?.id]')" "a report kept for reading is not a decision"
+  captain hold w1 --reason "Ship the grid or the list?" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "a real call on the kept review shows once, under its own task"
+  assert_equals "\"$FM_THREAD\"" "$(bridge '.decisionList.replyTo')" "and its reply still goes to FirstMate"
+  answer w1 --release || fail "release should succeed"
+  assert_equals '[]' "$(bridge '.decisionList.decisions')" "the answered call leaves the Bridge"
+  assert_grep 't3_review=waiting' "$HOME_DIR/state/w1.meta" "while the exploration stays kept"
+  pass "fm-t3-needs-me.sh: a kept review is never a decision by itself, and a real call on it stays one Bridge decision"
+}
+
 test_watcher_wakes_firstmate_on_the_alert() {
   make_home list-watch
   local alert="$HOME_DIR/state/t3-needs-me/.alert" out="$HOME_DIR/watch.out" reason i=0
@@ -942,6 +957,7 @@ test_reply_marker
 test_unsupported_t3_or_no_credential_does_nothing
 test_secondmate_home_takes_no_part
 test_list_carries_every_open_call
+test_kept_review_alone_is_no_decision
 test_list_with_only_blocked_calls_is_sent_once
 test_list_resend_keeps_the_captains_answer
 test_list_carries_the_context_payload

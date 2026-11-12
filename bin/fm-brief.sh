@@ -754,6 +754,8 @@ This exception permits only that command, not direct metadata edits, another tas
 If any captain call remains, ask firstmate to register the inventory and attest completion before you report done.
 If the command refuses, report the refusal to firstmate and stop rather than bypassing the completion gate.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
+After that, this conversation may stay open for the captain to read; if he then writes to you here directly, treat it as authoritative: do the bounded follow-up it asks for under this same task, add his exact words and what you found to the report, and append one status line naming the change so firstmate relays it.
+His direct message never answers a captain call or authorizes implementation by itself; firstmate records those.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 append_brief_include

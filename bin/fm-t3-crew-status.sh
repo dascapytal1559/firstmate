@@ -12,7 +12,10 @@
 # hold_origin); a worker's needs-decision line alone is no captain wait.
 #
 # Labels, first match wins:
-#   Waiting for captain  a hold counts for the worker, and it is between turns.
+#   Waiting for captain  a hold counts for the worker, or it is a finished
+#                        scout whose handoff was published into its kept
+#                        thread (bin/fm-t3-review-lib.sh reads t3_review
+#                        waiting), and it is between turns.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
@@ -64,7 +67,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
-  sed -n '32,43p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '35,46p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -79,6 +82,8 @@ command -v jq >/dev/null 2>&1 || { echo "t3-crew-status: jq is required"; exit 1
 
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-crew-status.XXXXXX") || { echo "t3-crew-status: no temporary directory"; exit 1; }
 trap 'rm -rf -- "$WORK"' EXIT
@@ -161,7 +166,8 @@ sync_pass() {
       *) run='' ;;
     esac
     working=$run
-    if grep -Fqx -- "$worker" "$WORK/held"; then
+    if grep -Fqx -- "$worker" "$WORK/held" \
+      || [ "$(fm_t3_review_state "$STATE/$worker.meta")" = waiting ]; then
       between='Waiting for captain'
     elif [ -n "$run" ]; then
       between=$run

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="14">
+  <title>A finished exploration kept open for the captain</title>
+  <rect width="960" height="430" fill="#fafaf8"/>
+
+  <!-- Left: the kept thread -->
+  <text x="24" y="34" font-size="16" font-weight="600" fill="#222">The exploration's own thread, kept</text>
+  <rect x="24" y="50" width="440" height="44" rx="8" fill="#fff" stroke="#d6d3cc"/>
+  <text x="40" y="77" fill="#222">Print view exploration</text>
+  <rect x="300" y="61" width="150" height="22" rx="11" fill="#fff4d6" stroke="#e0b84a"/>
+  <text x="375" y="77" text-anchor="middle" font-size="12" fill="#7a5a00">Waiting for captain</text>
+
+  <rect x="24" y="104" width="440" height="34" rx="8" fill="#fff" stroke="#e7e4dd"/>
+  <text x="40" y="126" font-size="13" fill="#666">Worker: "Report written. The grid layout prints cleanly..."</text>
+
+  <rect x="24" y="148" width="440" height="190" rx="8" fill="#fff" stroke="#9cb7d9"/>
+  <text x="40" y="172" font-size="12" fill="#4a6c96">Note from Firstmate (starts no worker turn)</text>
+  <text x="40" y="198" font-weight="600" fill="#222">Firstmate summary</text>
+  <text x="40" y="218" font-size="13" fill="#444">Grid prints on one page; list needs two. Recommend grid.</text>
+  <text x="40" y="248" font-weight="600" fill="#222">Full explanation</text>
+  <text x="40" y="268" font-size="13" fill="#444">Evidence, reasoning, tradeoffs, what is still uncertain,</text>
+  <text x="40" y="286" font-size="13" fill="#444">and any real choices.</text>
+  <text x="40" y="318" font-size="13" fill="#2a5db0" text-decoration="underline">Full report (Markdown)</text>
+
+  <rect x="24" y="350" width="160" height="24" rx="12" fill="#eef1f6" stroke="#b9c3d3"/>
+  <text x="104" y="367" text-anchor="middle" font-size="12" fill="#3d4a5e">tag: waiting for captain</text>
+  <rect x="194" y="350" width="170" height="24" rx="12" fill="#eef1f6" stroke="#b9c3d3"/>
+  <text x="279" y="367" text-anchor="middle" font-size="12" fill="#3d4a5e">auto-settle: off</text>
+  <text x="24" y="404" font-size="12" fill="#777">Its worker copy stays leased while the thread is open.</text>
+
+  <!-- Right: lifecycle -->
+  <text x="520" y="34" font-size="16" font-weight="600" fill="#222">What happens next</text>
+  <g font-size="13" fill="#222">
+    <rect x="520" y="50" width="416" height="44" rx="8" fill="#fff" stroke="#d6d3cc"/>
+    <text x="536" y="70">Scout reports done; Firstmate reads the report</text>
+    <text x="536" y="87" fill="#666" font-size="12">and checks for real decisions first</text>
+    <text x="728" y="112" text-anchor="middle" fill="#999">↓</text>
+    <rect x="520" y="120" width="416" height="44" rx="8" fill="#fff" stroke="#d6d3cc"/>
+    <text x="536" y="140">Handoff saved, then posted once, proven by read-back</text>
+    <text x="536" y="157" fill="#666" font-size="12">a failure is retried; nothing is archived as a fallback</text>
+    <text x="728" y="182" text-anchor="middle" fill="#999">↓</text>
+    <rect x="520" y="190" width="416" height="44" rx="8" fill="#fff8e6" stroke="#e0b84a"/>
+    <text x="536" y="210">Waits for him: no stale alarms, no relaunch</text>
+    <text x="536" y="227" fill="#666" font-size="12">cleanup refuses; real decisions stay on the Bridge</text>
+    <text x="728" y="252" text-anchor="middle" fill="#999">↓</text>
+    <rect x="520" y="260" width="416" height="44" rx="8" fill="#fff" stroke="#d6d3cc"/>
+    <text x="536" y="280">He archives or deletes the thread</text>
+    <text x="536" y="297" fill="#666" font-size="12">the watcher notices, even with the old endpoint gone</text>
+    <text x="728" y="322" text-anchor="middle" fill="#999">↓</text>
+    <rect x="520" y="330" width="416" height="44" rx="8" fill="#eef7ee" stroke="#8fbf8f"/>
+    <text x="536" y="350">Cleanup stops it, fences it, then returns the copy</text>
+    <text x="536" y="367" fill="#666" font-size="12">a reopened thread stays readable but can never run there</text>
+  </g>
+</svg>

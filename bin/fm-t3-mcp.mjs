@@ -188,6 +188,37 @@
 //     declares stop (T3's Stop: the turn, the queue, and every delegated
 //     task), else the run alone with a plain interrupt, and the thread is
 //     then archived with archive's proof.
+//   fm-t3-mcp.mjs review-support
+//     Whether this T3 can keep a finished thread for its reader
+//     (docs/t3code-backend.md "Retained reviews"): it offers t3_thread_note
+//     and its t3_thread_organize schema, where it lists actions, lists tag,
+//     disable_auto_settle, and fence. Prints {supported, missing[]}; changes
+//     nothing.
+//   fm-t3-mcp.mjs review-publish --thread <id> --note-file <file> --request-id <id> --tag <tag>
+//     Publish a retained review's handoff into its thread in one session:
+//     one passive t3_thread_note (no run starts) under that stable request id,
+//     then the tag, then disable_auto_settle, then the read-back that proves
+//     each: the same note id posted again answers created:false with the same
+//     messageId, and the thread reads tags containing <tag> and
+//     autoSettleDisabled true. Prints outcome published (with messageId),
+//     closed (the thread reads archived, or the verified server no longer has
+//     it, at any step: a close wins over publication), or busy (a run, queued
+//     message, or pending request is open; nothing is posted, retry later).
+//     A read-back without the tags or autoSettleDisabled field is a T3 too
+//     old for this, never false: exit 4 (review_unsupported), as is a T3 that
+//     review-support refuses. A read-back that disagrees exits 1
+//     (review_unproven). Repeating the call is harmless.
+//   fm-t3-mcp.mjs fence --thread <id> --worktree <abs-path> --label <label>
+//     Retire a stopped thread from running before its worktree goes back to
+//     its owner: t3_thread_organize fence with that label, the thread's own
+//     worktreePath as expectedWorktreePath, which must be <worktree> by real
+//     path (else exit 4, fence_mismatch, nothing sent), then the read-back of
+//     executionFence with that label and path (else exit 1,
+//     fence_unproven). An already matching fence is the end state. A thread
+//     the verified server no longer has needs no fence (fenced:false,
+//     missing:true). A read without the tags field is a T3 too old for
+//     fences: exit 4 (review_unsupported). T3 refuses a fence while a run,
+//     queued message, or request is open, so close the thread first.
 //   fm-t3-mcp.mjs thread-for-root --root <abs-path>
 //     The one unarchived, worktree-less thread with an active run on the live
 //     project rooted at <root>, across every t3_thread_list page; a fork
@@ -1525,6 +1556,136 @@ function threadOf(out) {
   return out?.thread ?? out ?? {};
 }
 
+// --- Retained reviews (docs/t3code-backend.md "Retained reviews") ---------
+
+const REVIEW_NOTE_TOOL = "t3_thread_note";
+const REVIEW_ACTIONS = ["tag", "disable_auto_settle", "fence"];
+
+// The action values a tool's tools/list schema enumerates, or null when it
+// does not enumerate them.
+function toolActions(session, tool) {
+  const action = session.toolSchemas?.get(tool)?.properties?.action;
+  const values = action?.enum ?? action?.anyOf?.flatMap((s) => (s?.const !== undefined ? [s.const] : s?.enum ?? []));
+  return Array.isArray(values) && values.length ? values : null;
+}
+
+function reviewMissing(session) {
+  const missing = [];
+  if (!session.toolSchemas?.has(REVIEW_NOTE_TOOL)) missing.push(REVIEW_NOTE_TOOL);
+  const actions = toolActions(session, "t3_thread_organize");
+  if (actions) for (const a of REVIEW_ACTIONS) if (!actions.includes(a)) missing.push(`t3_thread_organize ${a}`);
+  return missing;
+}
+
+function requireReviewSupport(session) {
+  const missing = reviewMissing(session);
+  if (missing.length) {
+    throw new Refusal("review_unsupported", `this T3 cannot keep a thread for its reader: it lacks ${missing.join(", ")}`, 4, { missing });
+  }
+}
+
+// A read that lacks the review fields comes from a T3 too old for them; it
+// never means "not tagged" or "not protected".
+function requireReviewFields(t, threadId) {
+  if (!Array.isArray(t.tags) || typeof t.autoSettleDisabled !== "boolean") {
+    throw new Refusal("review_unsupported", `T3 read thread ${threadId} back without tags or autoSettleDisabled, so it is too old to keep a thread for its reader`, 4);
+  }
+}
+
+async function reviewSupport(flags) {
+  const { session } = await verifiedSession(flags);
+  const missing = reviewMissing(session);
+  return { ok: true, supported: missing.length === 0, missing };
+}
+
+// One read of <threadId>: null when the verified server no longer has it.
+async function readThreadOrNull(session, threadId) {
+  try {
+    return threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+}
+
+const closedOutcome = (threadId, t) => ({ ok: true, threadId, outcome: "closed", ...(t ? { archived: true } : { missing: true }) });
+
+async function reviewPublish(flags) {
+  const threadId = need(flags, "thread");
+  const text = readFileSync(need(flags, "note-file"), "utf8").trim();
+  if (!text || text.length > 120_000) usage("--note-file must hold 1 to 120000 characters");
+  const clientRequestId = need(flags, "request-id");
+  if (clientRequestId.length > 256) usage("--request-id must be at most 256 characters");
+  const tag = need(flags, "tag").trim();
+  if (!tag || tag.length > 64 || /\n/.test(tag)) usage("--tag must be one line of 1 to 64 characters");
+  const { session } = await verifiedSession(flags);
+  requireReviewSupport(session);
+  let t = await readThreadOrNull(session, threadId);
+  if (!t || isArchived(t)) return closedOutcome(threadId, t);
+  requireReviewFields(t, threadId);
+  if ((t.activeRunId ?? null) !== null || (t.pendingRequestCount ?? 0) > 0) return { ok: true, threadId, outcome: "busy", activeRunId: t.activeRunId ?? null };
+  // Each step that fails re-reads the thread: an archive or delete that raced
+  // it is the captain's close, which wins over publication.
+  const step = async (fn) => {
+    try {
+      return { out: await fn() };
+    } catch (err) {
+      if (!(err instanceof Refusal) || err.exit === 2) throw err;
+      const now = await readThreadOrNull(session, threadId);
+      if (!now || isArchived(now)) return { closed: closedOutcome(threadId, now) };
+      throw err;
+    }
+  };
+  const note = () => session.call(REVIEW_NOTE_TOOL, { threadId, text, clientRequestId });
+  let r = await step(note);
+  if (r.closed) return r.closed;
+  const messageId = r.out?.messageId ?? null;
+  if (!messageId) throw new Refusal("review_unproven", `T3 accepted the note on ${threadId} but named no message`, 1);
+  for (const args of [{ action: "tag", tag }, { action: "disable_auto_settle" }]) {
+    r = await step(() => session.call("t3_thread_organize", { threadId, ...args }));
+    if (r.closed) return r.closed;
+  }
+  r = await step(note);
+  if (r.closed) return r.closed;
+  if (r.out?.created !== false || r.out?.messageId !== messageId) {
+    throw new Refusal("review_unproven", `the note on ${threadId} did not read back as the one posted (created=${r.out?.created}, messageId=${r.out?.messageId ?? null})`, 1);
+  }
+  t = await readThreadOrNull(session, threadId);
+  if (!t || isArchived(t)) return closedOutcome(threadId, t);
+  requireReviewFields(t, threadId);
+  if (!t.tags.includes(tag) || t.autoSettleDisabled !== true) {
+    throw new Refusal("review_unproven", `thread ${threadId} reads tags ${JSON.stringify(t.tags)} and autoSettleDisabled ${t.autoSettleDisabled}, not the tag "${tag}" with automatic settling off`, 1);
+  }
+  return { ok: true, threadId, outcome: "published", messageId, tags: t.tags, autoSettleDisabled: true };
+}
+
+async function fence(flags) {
+  const threadId = need(flags, "thread");
+  const worktree = need(flags, "worktree");
+  if (!path.isAbsolute(worktree)) usage("--worktree must be an absolute path");
+  const label = need(flags, "label");
+  if (label.length > 256) usage("--label must be at most 256 characters");
+  const { session } = await verifiedSession(flags);
+  requireReviewSupport(session);
+  let t = await readThreadOrNull(session, threadId);
+  if (!t) return { ok: true, threadId, fenced: false, missing: true };
+  requireReviewFields(t, threadId);
+  const own = t.worktreePath ?? null;
+  if (own === null || realOrRaw(own) !== realOrRaw(worktree)) {
+    throw new Refusal("fence_mismatch", `thread ${threadId} works in ${own ?? "its project folder"}, not ${worktree}; nothing was fenced`, 4, { worktreePath: own });
+  }
+  const matches = (f) => f && f.label === label && f.worktreePath === own;
+  if (!matches(t.executionFence)) {
+    await session.call("t3_thread_organize", { threadId, action: "fence", fenceLabel: label, expectedWorktreePath: own });
+    t = await readThreadOrNull(session, threadId);
+    if (!t) return { ok: true, threadId, fenced: false, missing: true };
+    if (!matches(t.executionFence)) {
+      throw new Refusal("fence_unproven", `thread ${threadId} did not read back fenced with label "${label}" on ${own}`, 1, { executionFence: t.executionFence ?? null });
+    }
+  }
+  return { ok: true, threadId, fenced: true, executionFence: t.executionFence };
+}
+
 // One approval entry of T3's pending-request list or read, normalized to
 // what a supervisor decides on: detail is the command or file it asks for.
 function approvalEntry(e) {
@@ -2395,6 +2556,9 @@ const VERBS = {
   watch,
   archive,
   close,
+  "review-support": reviewSupport,
+  "review-publish": reviewPublish,
+  fence,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
   "crew-status": crewStatus,

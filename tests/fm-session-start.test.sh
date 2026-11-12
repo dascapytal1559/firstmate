@@ -1496,6 +1496,27 @@ EOF
   pass "tmux endpoint liveness is reported per task: alive for a live window, dead for a gone one"
 }
 
+# A finished T3 scout kept for the captain reads as healthy in the digest, and
+# one he closed reads as cleanup, never as a dead endpoint to relaunch.
+test_kept_t3_review_is_named_in_the_digest() {
+  local rec root home fakebin out
+  rec=$(new_world kept-review)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  printf '%s\n' window=fm-kept-open kind=scout backend=t3code t3_thread_id=mcp:open t3_review=waiting t3_review_target=mcp:open \
+    > "$home/state/kept-open.meta"
+  printf '%s\n' window=fm-kept-shut kind=scout backend=t3code t3_thread_id=mcp:shut t3_review=closed t3_review_target=mcp:shut \
+    > "$home/state/kept-shut.meta"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "kept review: finished and kept open for the captain in T3; never relaunch or clean it up" \
+    "the digest must name a kept review as healthy"
+  assert_contains "$out" "kept review: the captain closed its thread; never relaunch it - clean it up with bin/fm-teardown.sh kept-shut" \
+    "the digest must turn a closed review into its cleanup, not a relaunch"
+  pass "session start: a kept T3 review reads as healthy, and one he closed reads as cleanup"
+}
+
 test_endpoint_liveness_herdr() {
   local rec root home fakebin out
   rec=$(new_world liveness-herdr)
@@ -3238,6 +3259,7 @@ test_status_tail_bounding
 test_status_tail_line_cap
 test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
+test_kept_t3_review_is_named_in_the_digest
 test_endpoint_liveness_herdr
 test_endpoint_read_death_is_isolated_and_reported
 test_endpoint_read_hang_is_bounded_and_reported
