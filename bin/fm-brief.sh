@@ -466,7 +466,7 @@ INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
 # records, and result delivery), so an app restart cannot cut them and a worker
 # waiting on one does not hold the fleet busy.
 JOB_START="FM_HOME=$(shell_quote "$FM_HOME") $(shell_quote "$FM_ROOT/bin/fm-job.sh") start $(shell_quote "$ID") -- <command> [args...]"
-CREWMATE_PAUSE_INSTRUCTIONS+="   Run any command you expect to take more than a few minutes, such as a broad test sweep or a long build, as a detached job rather than in the foreground or a background shell: \`$JOB_START\` (the command runs with no shell, so wrap shell syntax in \`bash -c '...'\`; pass \`--timeout <secs>\` before \`--\` when it may outlast the default timeout that \`--help\` names).
+CREWMATE_PAUSE_INSTRUCTIONS+="   Run any command you expect to take more than a few minutes, such as a broad test sweep or a long build, as a detached job rather than in the foreground or a background shell: \`$JOB_START\` (the command runs with no shell, so wrap shell syntax in \`bash -c '...'\`; when it may outlast the default timeout that \`--help\` names, give it as \`start $(shell_quote "$ID") --timeout <secs> -- <command> [args...]\`, after the task and before \`--\`).
    It runs in your working copy outside your session's process tree, so an app restart does not stop it, and it prints the job number and log path.
    Then append \`$PAUSED_VERB [at=<epoch>]: job <n> ({what it runs}) - waiting for its result message\` and end your turn; its result (outcome, exit code, log path, and last log lines) arrives as a firstmate instruction that starts your next turn, so do not poll it.
    A no-mistakes run is not a detached job: run it exactly as the rest of this brief says.

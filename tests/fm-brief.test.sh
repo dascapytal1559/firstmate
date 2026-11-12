@@ -1101,6 +1101,8 @@ test_ship_and_scout_teach_detached_jobs() {
     brief="$home/data/$id/brief.md"
     assert_grep "FM_HOME='$home' '$ROOT/bin/fm-job.sh' start '$id' -- <command> [args...]" "$brief" \
       "$kind brief does not give its worker the exact detached-job launcher for its own task"
+    assert_grep "start '$id' --timeout <secs> -- <command> [args...]" "$brief" \
+      "$kind brief does not show the full form of a detached job with a timeout"
     assert_grep "Then append \`paused [at=<epoch>]: job <n>" "$brief" \
       "$kind brief does not tell the worker to declare its wait on the job and end its turn"
     assert_grep "A no-mistakes run is not a detached job" "$brief" \

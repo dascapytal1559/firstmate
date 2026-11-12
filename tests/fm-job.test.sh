@@ -150,6 +150,29 @@ test_timeout_stop_and_leftovers() {
   pass "a job is stopped at its timeout or on request, and leaves nothing running when it ends"
 }
 
+test_timer_ends_with_its_runner() {
+  local h r runner cpgid p kids timer i
+  h=$(new_home timer)
+  FM_JOB_TIMER_POLL=1 job "$h" start t1 --timeout 600 -- sleep 300 >/dev/null || fail "timer job did not start"
+  r=$(rec "$h" 1)
+  remember_runner "$r"
+  runner=$(field "$r" runner_pid)
+  cpgid=$(field "$r" command_pgid)
+  for ((i = 0; i < 50; i++)); do
+    kids=$(ps -axo pid=,ppid= | awk -v r="$runner" -v c="$cpgid" '$2 == r && $1 != c {print $1}')
+    [ -n "$kids" ] && break
+    sleep 0.1
+  done
+  [ -n "$kids" ] || fail "the runner has no timer process to check"
+  timer=$(printf '%s\n' "$kids" | head -n 1)
+  STARTED_PIDS+=("$timer")
+  kill -KILL "$runner" || fail "could not kill the runner"
+  for ((i = 0; i < 100; i++)); do kill -0 "$timer" 2>/dev/null || break; sleep 0.1; done
+  ! kill -0 "$timer" 2>/dev/null || fail "a timer must exit once its runner is gone, not wait out the timeout and signal a stale process group"
+  [ ! -e "$(dirname "$r")/timed-out" ] || fail "an orphaned timer must not mark the job timed out"
+  pass "a job's timeout timer exits when its runner is killed"
+}
+
 test_live_deliver_and_lost() {
   local h r out msg body
   h=$(new_home deliver)
@@ -243,6 +266,7 @@ test_unknown_task_refused() {
 trap 'cleanup_jobs; fm_test_cleanup' EXIT
 test_start_runs_detached_and_records_the_result
 test_timeout_stop_and_leftovers
+test_timer_ends_with_its_runner
 test_live_deliver_and_lost
 test_watcher_tick_delivers
 test_reap_stops_and_removes

@@ -22,6 +22,8 @@
 #          not stop it. The job is stopped after --timeout seconds (default
 #          FM_JOB_TIMEOUT, 7200). Prints the job number and log path, then the
 #          worker declares a paused wait naming the job and ends its turn.
+#          The timeout timer checks every FM_JOB_TIMER_POLL seconds (default
+#          5) that its runner still exists and exits when it does not.
 # status   Print one line per job of <task-id> (or just <job>): its number,
 #          outcome (running until it ends), exit code, start time, log path,
 #          and command.
@@ -71,6 +73,7 @@ SELF="$SCRIPT_DIR/fm-job.sh"
 
 JOB_TIMEOUT=${FM_JOB_TIMEOUT:-7200}
 KILL_GRACE=${FM_JOB_KILL_GRACE:-10}
+TIMER_POLL=${FM_JOB_TIMER_POLL:-5}
 TAIL_LINES=${FM_JOB_TAIL_LINES:-20}
 
 # shellcheck source=bin/fm-pr-lib.sh
@@ -220,8 +223,17 @@ cmd_run() {
   "${argv[@]}" < /dev/null >> "$log" 2>&1 &
   cpid=$!
   job_put "$rec" command_pgid "$cpid"
+  # The timer wakes every few seconds to confirm its runner still exists: a
+  # runner killed outright must not leave a timer that later signals a process
+  # group number the system may have given to an unrelated process.
   (
-    sleep "$timeout"
+    deadline=$(($(now) + timeout))
+    while :; do
+      left=$((deadline - $(now)))
+      [ "$left" -gt 0 ] || break
+      sleep "$((left < TIMER_POLL ? left : TIMER_POLL))"
+      runner_live "$rec" || exit 0
+    done
     : > "$dir/timed-out"
     kill -TERM -- "-$cpid" 2>/dev/null
     sleep "$KILL_GRACE"
