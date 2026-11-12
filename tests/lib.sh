@@ -453,6 +453,22 @@ fm_test_tmproot() {
   printf '%s\n' "$root"
 }
 
+# fm_test_write_codex_catalog <codex-home>: write a small fake Codex model
+# catalog (the shape of ${CODEX_HOME}/models_cache.json) and print nothing.
+# gpt-6.1-sol, gpt-6-astra and gpt-5.6-luna offer max; gpt-5 stops at high, so
+# a suite can assert an unsupported effort without depending on the real cache.
+fm_test_write_codex_catalog() {
+  mkdir -p "$1" || return 1
+  cat > "$1/models_cache.json" <<'JSON'
+{"models":[
+ {"slug":"gpt-6.1-sol","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]},
+ {"slug":"gpt-6-astra","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]},
+ {"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]},
+ {"slug":"gpt-5","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"}]}
+]}
+JSON
+}
+
 trap fm_test_cleanup EXIT
 trap 'fm_test_cleanup; exit 130' INT
 trap 'fm_test_cleanup; exit 143' TERM
