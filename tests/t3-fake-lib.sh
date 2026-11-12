@@ -127,7 +127,7 @@ for (const line of require("fs").readFileSync(process.argv[2], "utf8").split("\n
 # the gate, and dropped calls excluded).
 t3_fake_mutations() {
   node -e '
-const writes = new Set(["t3_project_create", "t3_thread_launch", "t3_thread_send", "t3_thread_interrupt", "t3_thread_organize", "t3_thread_update", "t3_objectives_set", "t3_routing_set", "t3_rules_set", "t3_decisions_set"]);
+const writes = new Set(["t3_project_create", "t3_thread_launch", "t3_thread_send", "t3_thread_interrupt", "t3_thread_organize", "t3_thread_note", "t3_thread_update", "t3_objectives_set", "t3_routing_set", "t3_rules_set", "t3_decisions_set"]);
 const out = [];
 for (const line of require("fs").readFileSync(process.argv[1], "utf8").split("\n")) {
   if (!line) continue;

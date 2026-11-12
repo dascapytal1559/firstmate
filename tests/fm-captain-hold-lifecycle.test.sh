@@ -737,6 +737,31 @@ EOF
   pass "report-only unresolved captain call is reproduced and completion refuses before loss"
 }
 
+# A finished T3 scout kept for the captain (bin/fm-t3-review.sh) keeps its
+# review independent of its real calls: completing, answering, and releasing
+# a call raised for it never touch the review record, and the completion gate
+# that let it be kept keeps passing.
+test_kept_review_is_independent_of_its_calls() {
+  local home id=kept-scout
+  home=$(make_home kept-review)
+  mkdir -p "$home/data/$id"
+  printf '# Kept report\n' > "$home/data/$id/report.md"
+  tasks_in "$home" add "$id" "Explore the print view" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the scout row"
+  write_origin_meta "$home" "$id"
+  printf '%s\n' backend=t3code t3_thread_id=mcp:kept t3_review=waiting t3_review_target=mcp:kept \
+    t3_review_revision=1 t3_review_request=req-1 >> "$home/state/$id.meta"
+  complete_through_sibling "$home" "$id" >/dev/null || fail "the kept scout's inventory should complete"
+  assert_grep 't3_review=waiting' "$home/state/$id.meta" "completing the inventory keeps the review"
+  printf 'Grid.\n' > "$home/decision.txt"
+  run_captain "$home" answer "$id-call" --decision-file "$home/decision.txt" >/dev/null \
+    || fail "the answer should be recorded"
+  assert_grep 't3_review=waiting' "$home/state/$id.meta" "answering the call never closes the exploration"
+  assert_grep 't3_review_target=mcp:kept' "$home/state/$id.meta" "the review stays bound to its thread"
+  run_captain "$home" verify "$id" >/dev/null || fail "the completion gate still passes after the answer"
+  pass "fm-captain-hold: a kept review survives completing, answering, and verifying its real calls untouched"
+}
+
 # The completion gate on the collapsed primitive: an origin with open keyed
 # status decisions refuses --none, refuses an inventory naming absent tasks,
 # attests a verified inventory of captain-held task ids, and transfers every
@@ -5189,6 +5214,7 @@ test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
+test_kept_review_is_independent_of_its_calls
 test_answer_records_and_closes
 test_release_frees_held_work
 test_release_is_attended_only

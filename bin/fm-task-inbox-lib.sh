@@ -40,6 +40,9 @@
 #   body-terminator=1          present on records written with a synthetic final newline
 #   delivery=fire-and-forget   present only when the re-ring ladder must ignore it
 #                              (it still gets one retry ring; see below)
+#   caused-by=<cause-json>     present only when the steer has a recorded T3
+#                              cause (bin/fm-t3-cause-lib.sh); every doorbell
+#                              for the record carries it to a T3 worker
 #   --
 #   <exact message text; newlines are legal; a marked secondmate request keeps
 #    its from-firstmate marker and corr token verbatim in this body>
@@ -205,8 +208,9 @@ fm_task_inbox_lock_acquire() {  # <lock-path>
 
 # Write one record into the next sequence slot: temp-write, then atomic
 # rename. Prints the record path. Caller must hold .seq.lock.
-_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
-  local dir=$1 text=$2 delivery_mode=${3:-} seq tmp rec status=0
+_fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode] [cause-json]
+  local dir=$1 text=$2 delivery_mode=${3:-} cause=${4:-} seq tmp rec status=0
+  case "$cause" in *$'\n'*) return 1 ;; esac
   seq=$(fm_task_inbox_next_seq "$dir")
   rec="$dir/$seq.msg"
   tmp=$(mktemp "$dir/.staging.XXXXXX") || return 1
@@ -218,6 +222,7 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
       *) printf 'body-terminator=1\n' ;;
     esac
     [ "$delivery_mode" != fire-and-forget ] || printf 'delivery=fire-and-forget\n'
+    [ -z "$cause" ] || printf 'caused-by=%s\n' "$cause"
     printf -- '--\n'
     case "$text" in
       *$'\n') printf '%s' "$text" ;;
@@ -230,13 +235,13 @@ _fm_task_inbox_write_record_locked() {  # <inbox-dir> <text> [delivery-mode]
 
 # Durably enqueue one steer: temp-write, then atomic rename into the next
 # sequence slot. Prints the record path. Fails without a partial record.
-fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock rec status=0
+fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode] [cause-json]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} cause=${5:-} dir lock rec status=0
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
   lock="$dir/.seq.lock"
   fm_task_inbox_lock_acquire "$lock" || return 1
-  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
+  rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$cause") || status=1
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
   printf '%s' "$rec"
@@ -253,8 +258,8 @@ fm_task_inbox_write() {  # <state-dir> <task-id> <text> [delivery-mode]
 # secondmate request embeds a per-request correlation token in its body. The
 # local plane keeps plain fm_task_inbox_write: its outcome is synchronous, so
 # a repeated identical local steer is a deliberate new instruction.
-fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode]
-  local state=$1 task=$2 text=$3 delivery_mode=${4:-} dir lock want have f rec='' status=0
+fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mode] [cause-json]
+  local state=$1 task=$2 text=$3 delivery_mode=${4:-} cause=${5:-} dir lock want have f rec='' status=0
   local first_line=${3%%$'\n'*} scan_dir
   dir=$(fm_task_inbox_dir "$state" "$task")
   mkdir -p "$dir/handled" || return 1
@@ -314,7 +319,7 @@ fm_task_inbox_write_idempotent() {  # <state-dir> <task-id> <text> [delivery-mod
     status=1
   fi
   if [ "$status" -eq 0 ] && [ -z "$rec" ]; then
-    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode") || status=1
+    rec=$(_fm_task_inbox_write_record_locked "$dir" "$text" "$delivery_mode" "$cause") || status=1
   fi
   fm_lock_release "$lock"
   [ "$status" -eq 0 ] || return 1
@@ -389,7 +394,7 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # rather than skipped; skipping it would block every later ring. On both paths
 # a lost first Enter gets one confirmed retry.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
-  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict errs rc
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
@@ -413,9 +418,18 @@ fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   # steps, so an agent exiting after the liveness check could leave a bare
   # shell only a suffix; the `: ` prefix protects complete lines only. Do not
   # add process-bound atomic delivery here unless an incident reopens this.
-  if ! verdict=$(fm_backend_send_text_submit "$backend" "$target" "$line" 2 0.4 0.3 "$label" 2>/dev/null); then
-    return 2
+  # The record's own cause, or none, rides the doorbell (never one inherited
+  # from the caller's environment), and of the send's diagnostics only T3
+  # refusing that cause is passed on.
+  errs=$(mktemp "${TMPDIR:-/tmp}/fm-inbox-ring.XXXXXX" 2>/dev/null) || errs=/dev/null
+  rc=0
+  verdict=$(FM_T3CODE_CAUSED_BY=$(fm_task_inbox_cause "$rec") \
+    fm_backend_send_text_submit "$backend" "$target" "$line" 2 0.4 0.3 "$label" 2>"$errs") || rc=$?
+  if [ "$errs" != /dev/null ]; then
+    grep '^error: T3 refused the cause' "$errs" >&2 || true
+    rm -f "$errs"
   fi
+  [ "$rc" -eq 0 ] || return 2
   # The verdict is read only to report a failed keystroke; every other value
   # (empty, pending, unknown, ...) is deliberately ignored, never proof.
   [ "$verdict" != send-failed ] || return 2
@@ -441,6 +455,18 @@ fm_task_inbox_composer_holds() {  # <backend> <target> <line> [expected-label]
   cap=$(fm_backend_capture "$1" "$2" "$FM_COMPOSER_CAPTURE_LINES" "${4:-}" 2>/dev/null) || return 1
   held=$(fm_composer_extract_selected_content styled=0 "$cap") || return 1
   [ -n "$held" ] && [ "$(printf '%s' "$held" | tr -d '[:space:]')" = "$(printf '%s' "$3" | tr -d '[:space:]')" ]
+}
+
+# The record's caused-by header, or nothing; a record already moved into
+# handled/ is read there.
+fm_task_inbox_cause() {  # <record-path>
+  local rec=$1
+  [ -f "$rec" ] || rec="${rec%/*}/handled/${rec##*/}"
+  [ -f "$rec" ] || return 0
+  awk '
+    $0 == "--" { exit }
+    index($0, "caused-by=") == 1 { print substr($0, 11); exit }
+  ' "$rec"
 }
 
 fm_task_inbox_is_fire_and_forget() {  # <record-path>

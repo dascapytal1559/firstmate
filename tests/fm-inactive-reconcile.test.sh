@@ -238,6 +238,18 @@ test_dead_agent_keeps_terminal_outcome() {
   pass "dead agent keeps the terminal outcome"
 }
 
+# A finished T3 scout kept for the captain (bin/fm-t3-review.sh) was handed
+# off before it was kept, so its idle done is never a suspicious outcome; the
+# same scout without the kept review is the control above.
+test_kept_review_is_never_a_terminal_outcome() {
+  make_world kept-review; write_child "$MAIN" child 'done: report written'
+  printf '%s\n' kind=scout backend=t3code t3_thread_id=mcp:kept t3_review=waiting t3_review_target=mcp:kept >> "$MAIN/state/child.meta"
+  age "$MAIN/state/child.meta"
+  FM_FAKE_CREW_STATE='done' FM_FAKE_PANE_CMD=zsh FM_FAKE_TASK_ID=child run_reconcile "$MAIN" --startup
+  assert_withheld "kept review"
+  pass "a finished scout kept for the captain is never reported as a suspicious terminal outcome"
+}
+
 # Away-posture regression: a branch-actor drain that consumes an
 # inactive-outcome check row must retire its terminal-outcome receipt exactly
 # like a main ack does. The 2026-09-25 away window on the supervision host
@@ -1424,6 +1436,7 @@ test_relaunched_idle_agent_withholds_terminal_outcome
 test_idle_finished_agent_keeps_terminal_outcome
 test_idle_agent_with_rewritten_meta_keeps_terminal_outcome
 test_dead_agent_keeps_terminal_outcome
+test_kept_review_is_never_a_terminal_outcome
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published
 test_local_done_head_is_pinned_before_parent_delivery

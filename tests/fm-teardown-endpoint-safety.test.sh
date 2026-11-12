@@ -1150,6 +1150,49 @@ test_reassigned_pool_slot_keeps_claimant_files_on_t3() {
   assert_reassigned_slot_left_alone "$dir" "$id" "$other" "T3 task on a reassigned slot with --force"
   pass "fm-teardown backend=t3code: a reassigned pool slot keeps its claimant's files while the task's own thread is archived"
 }
+# A kept T3 review the captain closed after its pool slot was handed on: the
+# thread is fenced on that slot so it can never run in the claimant's copy,
+# and the claimant's files stay untouched. While the review is still open,
+# even this records-only cleanup refuses.
+test_closed_review_on_reassigned_slot_is_fenced_and_left_alone() {
+  local dir id=kept-t3-task other=reassigned-task rc=0 mutations
+  local thread=mcp:1f2e3d4c-5b6a-4789-8a7b-6c5d4e3f2a1b
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+
+  dir=$(make_case slot-reassigned-kept-review)
+  mark_case_as_treehouse_pool "$dir"
+  mkdir -p "$dir/worktree/.claude"
+  printf '{"claimant":"%s"}\n' "$other" > "$dir/worktree/.claude/settings.local.json"
+  cp "$dir/worktree/.claude/settings.local.json" "$dir/other-settings.json"
+  t3_fake_start "$dir/t3-server"
+  t3_fake_case "$dir/t3-case" "{\"reviews\":true,\"threads\":{\"$thread\":{\"threadId\":\"$thread\",\"projectId\":\"proj-1\",\"status\":\"completed\",\"activeRunId\":null,\"archived\":false,\"worktreePath\":\"$dir/worktree\",\"pendingRequestCount\":0,\"items\":[],\"runs\":[]}}}"
+  t3_fake_credential "$dir/home/config/t3code-token"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+    backend=t3code "t3_thread_id=$thread" t3_project_id=proj-1 harness=claude \
+    t3_review=waiting "t3_review_target=$thread"
+  claim_pool_slot "$dir" "$other" "$dir/other-home"
+
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a kept review still open must refuse even a records-only cleanup"
+  assert_present "$dir/home/state/$id.meta" "the open review keeps its record"
+  [ -z "$(t3_fake_mutations)" ] || fail "the open review's thread must not be touched, got '$(t3_fake_mutations)'"
+
+  FM_T3_ID=$thread t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = true'
+  rc=0
+  run_case "$dir" "$id" > "$dir/stdout" 2> "$dir/stderr" || rc=$?
+  mutations=$(t3_fake_mutations)
+  t3_fake_stop
+
+  [ "$rc" -eq 0 ] || fail "cleanup of a closed review on a reassigned slot failed: $(cat "$dir/stderr")"
+  [ "$mutations" = "t3_thread_organize" ] || fail "the closed review's thread must be fenced, and nothing else sent, got '$mutations'"
+  assert_present "$dir/worktree/sentinel" "cleanup reset a pool slot another task had claimed"
+  cmp -s "$dir/other-settings.json" "$dir/worktree/.claude/settings.local.json" || fail "cleanup changed the other task's files"
+  assert_reassigned_slot_left_alone "$dir" "$id" "$other" "closed kept review on a reassigned slot"
+  pass "fm-teardown backend=t3code: a closed kept review on a reassigned slot is fenced there while the claimant's copy stays untouched"
+}
+
 # The reuse collision where BOTH records survive: the stale task's record still
 # names the slot the pool handed on, and the claimant's own record names it too.
 # The claim proves the stale record's teardown is records-only, so the record
@@ -1609,6 +1652,7 @@ test_cross_home_pool_slot_collision_refuses
 test_sole_slot_record_still_tears_down
 test_reassigned_pool_slot_finishes_own_cleanup_without_touching_the_slot
 test_reassigned_pool_slot_keeps_claimant_files_on_t3
+test_closed_review_on_reassigned_slot_is_fenced_and_left_alone
 test_stale_record_on_claimed_slot_retires_then_claimant_tears_down
 test_own_and_absent_slot_claims_still_tear_down
 test_recorded_endpoint_that_changed_directory_still_tears_down

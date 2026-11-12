@@ -103,7 +103,9 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
-| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds and current state |
+| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds, kept reviews, and current state |
+| `fm-t3-review.sh`        | Keep a finished T3 scout's thread and copy for the captain: publish the handoff note, notice his close, and gate cleanup on it |
+| `fm-t3-review-lib.sh`    | The one reader of a task's kept-review record, shared by the card, watcher, recovery, and cleanup |
 | `fm-t3-needs-me.sh`      | Keep the captain's T3 Bridge in line with his open captain calls, objectives file, model routing table, and rule inventory, and read a decision reply's task id |
 | `fm-rules.sh`            | Record the captain's answer to a rule on T3's Bridge and track the rule-file edit it still needs |
 | `fm-t3-main-pretool-check.sh` | PreToolUse credential seatbelt for a T3 home's main |
@@ -113,6 +115,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-procevent-quota.sh`  | Wake Firstmate when tracked quota drops below a threshold, is exhausted, or cannot be polled |
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
 | `fm-fleet-idle.sh`       | Exit 0 when no direct report of this home is mid-turn or running its own work, for a "do X when the fleet goes idle" watch |
+| `fm-job.sh`              | Run a worker's long command as a detached job that an app restart cannot stop, record it, deliver its result through the steering inbox, and stop it at cleanup |
 | `fm-gate-refuse-lib.sh`  | Shared gate-context lifecycle boundary for real and lab homes                      |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-codex-stop-park.sh`  | On an opted-in home, register verified native Codex sessions and park supervision in the asynchronous Stop hook, delivering wakes through the native thread queue |

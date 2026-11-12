@@ -1565,6 +1565,95 @@ t3_worker_ship_spawn() {
 
 # Teardown's kill stops a worker's delegated threads with Stop and refuses
 # the close on a server without Stop while one still runs.
+# t3_cause_world: the T3 Code fork's work causes (world causedBy), plus the
+# coordinator thread `coord` whose active turn run-c, begun a minute ago, came
+# from prompt msg-c.
+T3_CAUSE='{"threadId":"coord","runId":"run-c","messageId":"msg-c"}'
+t3_cause_world() {
+  t3_world_set '
+const at = new Date(Date.now() - 60000).toISOString();
+w.causedBy = true;
+w.threads.coord = { ...w.threads["thread-live"], threadId: "coord", status: "running", activeRunId: "run-c", latestRunId: "run-c",
+  items: [{ type: "user_message", status: "completed", text: "start it", runId: "run-c", messageId: "msg-c" }],
+  runs: [{ runId: "run-c", ordinal: 1, status: "running", requestedAt: at, startedAt: at, completedAt: null }] };'
+}
+
+# The adapter sends a cause it is handed and nothing else, and a cause T3
+# refuses is reported while the message still goes out without it.
+test_turn_start_carries_its_cause_and_never_drops_the_message() {
+  local thread=mcp:3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7 out err
+  t3_case cause-turn
+  t3_world "$(t3_thread_json "$thread" completed false)"
+  t3_cause_world
+  FM_T3CODE_CAUSED_BY=$T3_CAUSE t3_run 'fm_backend_t3code_turn_start "$1" "with cause"' "$thread" || fail "turn_start with a cause failed"
+  [ "$(t3_fake_calls t3_thread_send | tail -1 | node -e 'process.stdout.write(JSON.stringify(JSON.parse(require("fs").readFileSync(0, "utf8")).causedBy))')" = "$T3_CAUSE" ] \
+    || fail "the send must carry the cause it was handed"
+  FM_T3CODE_CAUSED_BY=off t3_run 'fm_backend_t3code_turn_start "$1" "no cause"' "$thread" || fail "turn_start without a cause failed"
+  assert_not_contains "$(t3_fake_calls t3_thread_send | tail -1)" causedBy "anything but a cause JSON sends none"
+  err="$CASE_DIR/refused.err"
+  out=$(FM_T3CODE_CAUSED_BY='{"threadId":"coord","messageId":"msg-nope"}' t3_run 'fm_backend_t3code_turn_start "$1" "refused cause"' "$thread" 2>"$err") \
+    || fail "a refused cause must not fail the message: $(cat "$err")"
+  assert_contains "$(cat "$err")" "error: T3 refused the cause" "the refused cause is reported"
+  [ "$(t3_item_count "$thread" "refused cause")" = 1 ] || fail "the message is delivered once without its cause"
+  assert_not_contains "$(t3_fake_calls t3_thread_send | tail -1)" causedBy "the resend carries no cause"
+  [ "$(t3_fake_calls t3_thread_send | tail -2 | node -e 'const ids = new Set(require("fs").readFileSync(0, "utf8").trim().split("\n").map((l) => JSON.parse(l).clientRequestId)); process.stdout.write(String(ids.size))')" = 1 ] \
+    || fail "the resend without the cause keeps the logical delivery's request id"
+  pass "t3code turn_start: a handed cause rides the send, and a refused one is reported while the message goes out without it"
+}
+
+# A spawn from inside a T3 turn records that turn's prompt and names it on the
+# worker's launch and its brief; a malformed explicit cause refuses first.
+test_spawn_records_and_sends_its_turns_cause() {
+  local id out rc meta
+  id=$(t3_uid t3cause-spawn)
+  t3_case spawn-cause
+  t3_worker_setup "$id"
+  t3_cause_world
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a spawn inside a T3 turn should succeed"$'\n'"$out"
+  meta="$CASE_DIR/state/$id.meta"
+  assert_grep "caused_by=$T3_CAUSE" "$meta" "the task record keeps the prompt that caused it"
+  [ "$(t3_launch_field 'JSON.stringify(a.causedBy)')" = "$T3_CAUSE" ] || fail "the worker's launch names its cause, got '$(t3_launch_field 'JSON.stringify(a.causedBy)')'"
+  [ "$(t3_request "$(t3_log_line_of 'r.tool === "t3_thread_send"')" 'JSON.stringify(r.arguments.causedBy)')" = "$T3_CAUSE" ] \
+    || fail "the brief names the same cause"
+  id=$(t3_uid t3cause-bad)
+  t3_case spawn-cause-bad
+  t3_worker_setup "$id"
+  out=$(FM_T3CODE_CAUSED_BY='{"threadId":"coord"}' t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  [ "$rc" -ne 0 ] || fail "a malformed explicit cause must refuse the spawn"$'\n'"$out"
+  assert_contains "$out" "FM_T3CODE_CAUSED_BY must be off or a JSON object" "the refusal names the variable"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused cause launches nothing, got '$(t3_dispatch_types)'"
+  assert_absent "$CASE_DIR/state/$id.meta" "a refused cause writes no task record"
+  pass "fm-spawn.sh --backend t3code: the turn's prompt is recorded and named on the launch and brief, and a malformed cause refuses first"
+}
+
+# A steer from inside a T3 turn keeps that turn's prompt in its inbox record,
+# and the record's doorbell carries it; a cause T3 refuses never stops the
+# doorbell.
+test_send_records_its_cause_and_rings_with_it() {
+  local id out rc rec thread=mcp:4f5a6b7c-8d9e-4fa0-b1c2-d3e4f5a6b7c8
+  id=$(t3_uid t3cause-send)
+  make_t3_control_task send-cause "$id" "$thread" completed
+  t3_cause_world
+  out=$(T3CODE_THREAD_ID=coord FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-send.sh" "$id" "also cover the edge case" 2>&1); rc=$?
+  expect_code 0 "$rc" "a steer inside a T3 turn should succeed"$'\n'"$out"
+  rec=$(find "$CTRL_STATE/$id.inbox" -maxdepth 1 -name '*.msg' | head -1)
+  assert_grep "caused-by=$T3_CAUSE" "$rec" "the steer's record keeps the prompt that caused it"
+  [ "$(bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_body "$2"' _ "$ROOT" "$rec")" = "also cover the edge case" ] \
+    || fail "the cause header leaves the message body exact"
+  [ "$(t3_request "$(t3_log_line_of 'r.tool === "t3_thread_send"')" 'JSON.stringify(r.arguments.causedBy)')" = "$T3_CAUSE" ] \
+    || fail "the doorbell carries the record's cause"
+  : > "$LOG"
+  out=$(FM_T3CODE_CAUSED_BY='{"threadId":"coord","messageId":"msg-gone"}' FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-send.sh" "$id" "and the docs" 2>&1); rc=$?
+  expect_code 0 "$rc" "a steer whose cause T3 refuses is still sent"$'\n'"$out"
+  assert_contains "$out" "error: T3 refused the cause" "the refused cause is reported"
+  [ "$(t3_fake_calls t3_thread_send | wc -l | tr -d ' ')" = 2 ] || fail "the doorbell is rung again without the cause"
+  assert_not_contains "$(t3_fake_calls t3_thread_send | tail -1)" causedBy "the second ring carries no cause"
+  pass "fm-send.sh to a T3 worker: the turn's prompt is kept in the steer's record and rides its doorbell, and a refused cause never stops the doorbell"
+}
+
 test_kill_stops_delegated_threads() {
   local call
   t3_case kill-children
@@ -2951,6 +3040,8 @@ test_t3_restart_recovery() {
   assert_grep 'doorbell=sent' "$RS_STATE/$wp.t3-restart" "the paused worker's marker records its ring"
   [ -n "$(find "$RS_STATE/$wp.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null)" ] || fail "the recovery steer is a durable inbox record"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "the T3 server restarted at" "the steer tells the worker what happened"
+  assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "fm-job.sh status" "the steer sends a worker to check its detached job, not rerun it"
+  assert_not_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "any command that was still running" "the steer no longer claims a detached job ended with the session"
 
   # The rung workers end their turns without answering, the case the marker
   # exists for: their threads read idle again.
@@ -3321,3 +3412,6 @@ test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease
 test_spawn_external_forge_codex_ship_carries_push_guard
 test_kill_stops_delegated_threads
+test_turn_start_carries_its_cause_and_never_drops_the_message
+test_spawn_records_and_sends_its_turns_cause
+test_send_records_its_cause_and_rings_with_it

@@ -222,6 +222,37 @@ assert_contains "$OUT" "active: w2 - its own work is still running (pid $SCRIPT_
 kill -9 "$SHELL_PID" "$SCRIPT_PID" 2>/dev/null
 pass "a dead endpoint's own pane shell does not hold the fleet active, other foreground shell work does"
 
+# A worker waiting only on a detached job (bin/fm-job.sh) is idle: the job's
+# runner is reparented to init, so restarting the app that hosts the worker
+# cannot stop it. A recorded runner still inside a caller's process tree is
+# not proven detached and keeps counting.
+H=$(new_home detached-job)
+WT3=$(mkdir -p "$TMP_ROOT/wt3" && cd -P "$TMP_ROOT/wt3" && pwd)
+add_task "$H" w1 ship "worktree=$WT3"; busy "$H" w1 idle
+job_field() { awk -v k="$2=" 'index($0, k) == 1 { v = substr($0, length(k) + 1) } END { print v }' "$1"; }
+FM_HOME="$H" bash "$ROOT/bin/fm-job.sh" start w1 --cwd "$WT3" -- sleep 60 >/dev/null \
+  || fail "the detached job fixture never started"
+REC="$H/state/w1.jobs/1/record"
+for _ in $(seq 1 50); do [ -n "$(job_field "$REC" command_pgid)" ] && break; sleep 0.1; done
+CMD_PID=$(job_field "$REC" command_pgid)
+wait_cwd "$CMD_PID" "$WT3" || fail "the detached job's command never reached the worktree"
+idle_rc "$H"; rc=$?
+assert_rc "$rc" 0 "a worker waiting only on its detached job is idle"
+# Started directly, not through $(...), so its parent stays this test shell.
+( cd "$WT3" && exec perl -e 'setpgrp(0, 0); exec @ARGV or die' sleep 60 ) >/dev/null 2>&1 &
+OWN_PID=$!
+wait_cwd "$OWN_PID" "$WT3" || fail "the undetached runner fixture never started"
+mkdir -p "$H/state/w1.jobs/2"
+printf 'task=w1\njob=2\nrunner_identity=%s\nrunner_pid=%s\n' \
+  "$(bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" "$OWN_PID")" "$OWN_PID" \
+  > "$H/state/w1.jobs/2/record"
+idle_rc "$H"; rc=$?
+assert_rc "$rc" 1 "a recorded runner that is not reparented to init still counts"
+assert_contains "$OUT" "active: w1 - its own work is still running (pid $OWN_PID" "the undetached runner is named"
+kill "$OWN_PID" 2>/dev/null; wait "$OWN_PID" 2>/dev/null
+FM_HOME="$H" bash "$ROOT/bin/fm-job.sh" reap w1 || fail "the detached job fixture could not be reaped"
+pass "a detached job does not hold its worker active, a runner still in a caller's tree does"
+
 OUT=$(FM_HOME="$TMP_ROOT/missing-home" bash "$IDLE" 2>&1); rc=$?
 assert_rc "$rc" 2 "an unavailable state directory is an error, not idle"
 pass "an unavailable state directory exits 2"

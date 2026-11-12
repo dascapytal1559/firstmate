@@ -658,6 +658,48 @@ test_watcher_brings_the_wait_back_when_the_run_ends() {
   pass "fm-watch.sh: a T3 run ending with the hold open brings the wait back at once"
 }
 
+kept_review() {  # <state> [kind] [target] -> w1 is a finished scout kept in that review state
+  worker_meta w1 "${2:-scout}" t3code "t3_review=$1" "t3_review_target=${3:-$THREAD}"
+  declares "done [at=$(date +%s)]: report written"
+}
+
+test_kept_review_waits_for_the_captain() {
+  local msg
+  make_home kept-review
+  kept_review waiting
+  cards sync || fail "sync should pass"
+  assert_equals "$WAITING" "$(card_of)" "a published kept review waits for the captain with no hold at all"
+  turn_is running
+  cards sync || fail "sync should pass"
+  assert_equals "" "$(card_of)" "the captain writing in the thread shows T3's Working"
+  turn_is settled
+  msg=$(inbox_message) || fail "could not write an inbox message"
+  cards sync || fail "sync should pass"
+  assert_equals "" "$(card_of)" "an unhandled steering-inbox message reads as work"
+  mkdir -p "${msg%/*}/handled" && mv "$msg" "${msg%/*}/handled/"
+  cards sync || fail "sync should pass"
+  assert_equals "$WAITING" "$(card_of)" "the review waits again once the turn ends"
+
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  assert_equals "$WAITING" "$(card_of)" "a real call on the review reads the same"
+  answer w1 --release || fail "the release should succeed"
+  assert_equals "$WAITING" "$(card_of)" "answering the call never closes the exploration"
+  assert_grep 't3_review=waiting' "$HOME_DIR/state/w1.meta" "the answer leaves the review kept"
+  [ -z "$(t3_fake_calls t3_thread_organize)" ] || fail "an answer must never archive or reorganize the kept thread"
+
+  kept_review pending
+  cards sync || fail "sync should pass"
+  assert_equals Ready "$(card_of)" "a handoff not yet published is plain finished work"
+  kept_review waiting ship
+  cards sync || fail "sync should pass"
+  assert_equals Ready "$(card_of)" "a ship never keeps its thread, even with a leftover review record"
+  kept_review waiting scout mcp:another-thread
+  cards sync || fail "sync should pass"
+  assert_equals Ready "$(card_of)" "a review kept on another thread counts for nothing here"
+  pass "fm-t3-crew-status: a published kept review reads Waiting for captain between turns, through answers, and only for its own scout thread"
+}
+
+test_kept_review_waits_for_the_captain
 test_wait_shows_only_between_turns
 test_inbox_delivery_drops_the_wait_at_once
 test_concurrent_syncs_end_on_the_latest_read

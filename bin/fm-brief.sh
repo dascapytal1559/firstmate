@@ -462,6 +462,15 @@ STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 # second mate's, runs only the append; the watcher capture is the backstop.
 STATUS_APPEND="echo \"{state} [at=<epoch>]: {one short line}\" >> $STATUS_FILE && { [ ! -e $(shell_quote "$CONFIG/fleet-ledger") ] || $(shell_quote "$FM_ROOT/bin/fm-fleet-ledger.sh") appended $(shell_quote "$CONFIG") $STATUS_FILE >/dev/null 2>&1 || true; }"
 INBOX_DIR=$(shell_quote "$STATE/$ID.inbox")
+# Long commands run as detached jobs (bin/fm-job.sh owns the launcher, its
+# records, and result delivery), so an app restart cannot cut them and a worker
+# waiting on one does not hold the fleet busy.
+JOB_START="FM_HOME=$(shell_quote "$FM_HOME") $(shell_quote "$FM_ROOT/bin/fm-job.sh") start $(shell_quote "$ID") -- <command> [args...]"
+CREWMATE_PAUSE_INSTRUCTIONS+="   Run any command you expect to take more than a few minutes, such as a broad test sweep or a long build, as a detached job rather than in the foreground or a background shell: \`$JOB_START\` (the command runs with no shell, so wrap shell syntax in \`bash -c '...'\`; when it may outlast the default timeout that \`--help\` names, give it as \`start $(shell_quote "$ID") --timeout <secs> -- <command> [args...]\`, after the task and before \`--\`).
+   It runs in your working copy outside your session's process tree, so an app restart does not stop it, and it prints the job number and log path.
+   Then append \`$PAUSED_VERB [at=<epoch>]: job <n> ({what it runs}) - waiting for its result message\` and end your turn; its result (outcome, exit code, log path, and last log lines) arrives as a firstmate instruction that starts your next turn, so do not poll it.
+   A no-mistakes run is not a detached job: run it exactly as the rest of this brief says.
+"
 
 # The receive-and-ack half of the steering-inbox contract, included in every
 # scaffold kind. The record format, doorbell line, and re-ring ladder are
@@ -754,6 +763,8 @@ This exception permits only that command, not direct metadata edits, another tas
 If any captain call remains, ask firstmate to register the inventory and attest completion before you report done.
 If the command refuses, report the refusal to firstmate and stop rather than bypassing the completion gate.
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
+After that, this conversation may stay open for the captain to read; if he then writes to you here directly, treat it as authoritative: do the bounded follow-up it asks for under this same task, add his exact words and what you found to the report, and append one status line naming the change so firstmate relays it.
+His direct message never answers a captain call or authorizes implementation by itself; firstmate records those.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 append_brief_include

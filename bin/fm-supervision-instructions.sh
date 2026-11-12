@@ -9,7 +9,11 @@
 # (docs/supervision-protocols/supervision-host.md, whose lines tagged
 # "{<harness>,...} " render only for the listed harnesses), and Grok's arm
 # command becomes the host; on a home that does not run it the output is
-# unchanged.
+# unchanged. A session holding the lock inside a T3 Code thread (T3 sets
+# T3CODE_THREAD_ID, on any harness) also gets docs/supervision-protocols/t3-thread.md,
+# which says when a wake turn flags its end to alert the captain; a secondmate
+# home never does, since a secondmate reaches the captain only through its
+# parent channel.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -21,6 +25,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$REPO_ROOT}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 DOC_DIR="$REPO_ROOT/docs/supervision-protocols"
+# shellcheck source=bin/fm-primary-scope-lib.sh
+. "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 
 HARNESS=
 READ_ONLY=0
@@ -336,5 +342,9 @@ render_snippet
 printf '\n'
 if [ -n "$HOST_SNIPPET" ]; then
   render_snippet "$HOST_SNIPPET"
+  printf '\n'
+fi
+if [ "$READ_ONLY" -eq 0 ] && [ -n "${T3CODE_THREAD_ID:-}" ] && ! fm_root_is_secondmate_home "$FM_ROOT"; then
+  render_snippet "$DOC_DIR/t3-thread.md"
   printf '\n'
 fi

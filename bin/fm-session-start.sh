@@ -382,6 +382,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 
 # One tasks-axi compatibility verdict per session start. The probe costs three
 # tasks-axi subprocesses and this digest needs the same answer twice - here for
@@ -999,6 +1001,10 @@ for meta in "$STATE"/*.meta; do
   else
     printf 'endpoint: unknown (no window recorded)\n'
   fi
+  case "$(fm_t3_review_state "$meta")" in
+    pending|waiting) printf 'kept review: finished and kept open for the captain in T3; never relaunch or clean it up until he archives or deletes its thread\n' ;;
+    closed) printf 'kept review: the captain closed its thread; never relaunch it - clean it up with bin/fm-teardown.sh %s\n' "$id" ;;
+  esac
 
   status="$STATE/$id.status"
   if [ -f "$status" ]; then

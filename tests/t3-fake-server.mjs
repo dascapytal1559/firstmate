@@ -93,8 +93,35 @@
 //     set it to stand for the captain's reply), a changed one loses it, and an
 //     identical list writes nothing. It answers {replyTo, decisions [{id,
 //     revision, answered}]} (world decisionsAnswer answers another value).
-//   - t3_thread_organize serves archive alone, the one action the helper
-//     sends, and refuses any other.
+//   - t3_thread_organize serves archive, and refuses any other action unless
+//     the T3 keeps threads for their reader (world reviews, the T3 Code
+//     fork). Such a T3 offers t3_thread_note, enumerates organize's actions
+//     in its schema, and serves tag and untag (exact-case, trimmed, allowed
+//     on archived threads), disable_auto_settle and enable_auto_settle
+//     (refused on an archived thread), and fence and unfence (fence refuses a
+//     worktree other than the thread's own, and a thread with an active run
+//     or a pending request; the same label and path keep fencedAt). Its
+//     t3_thread_read and t3_thread_list return tags and autoSettleDisabled,
+//     and the read returns executionFence while one is set. A note
+//     {threadId, text, clientRequestId} adds one run-less user_message item
+//     with note:true and answers {threadId, messageId, sequence, created}; the
+//     same id answers created:false with no new item, the same id with other
+//     text and a new id on an archived thread are refused as invalid_request.
+//     A fenced thread refuses t3_thread_send. World reviewsUnread reads the
+//     review fields back as an older T3 would, absent; archiveOnNote archives
+//     the thread right after a new note lands, as a captain's close racing
+//     publication; reviewActions replaces the review actions organize lists.
+//   - every prompt a launch or send makes is a user_message item carrying
+//     its messageId and runId, and t3_thread_read view "messages" keeps only
+//     message items at their timeline positions, as T3 does.
+//   - a T3 with work causes (world causedBy, the T3 Code fork) declares
+//     causedBy {threadId, runId?, messageId} on t3_thread_launch and
+//     t3_thread_send and checks it as the fork's verifyCause does (the thread
+//     exists, the message is a user_message of it, runId matches) with the
+//     fork's invalid_request messages before anything is created or sent; it
+//     stores the cause on a launched thread (world bindCause overrides what
+//     it stores) and on the prompt's item, and t3_thread_read reports both.
+//     Without it the argument is dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -105,6 +132,8 @@
 // edit the world between calls. World keys (all optional):
 //   tokens (accepted bearers; sign-in appends), environmentId, serverVersion,
 //   tools (array of names; default all), revoked (every /mcp call is 401),
+//   delayMethods ({<JSON-RPC method>: ms}: every /mcp call of that method
+//   is logged with delaying:true on arrival and answers that much later),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
@@ -146,7 +175,9 @@ const ALL_TOOLS = [
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
 const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.rulesTool ? ["t3_rules_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
-  w.restartStatus ? ["t3_restart_status"] : []);
+  w.restartStatus ? ["t3_restart_status"] : [], w.reviews ? ["t3_thread_note"] : []);
+const ORGANIZE_ACTIONS = ["archive", "unarchive", "settle", "unsettle", "snooze", "unsnooze", "pin", "unpin", "mark_read", "mark_unread"];
+const REVIEW_ACTIONS = ["tag", "untag", "disable_auto_settle", "enable_auto_settle", "fence", "unfence"];
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -156,7 +187,13 @@ const TOOL_SCHEMAS = {
   t3_thread_launch: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
-      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : [])].map((k) => [k, {}])),
+      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
+      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
+  }),
+  t3_thread_send: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "threadId", "message", "mode", "freshContext", "clientRequestId",
+      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -175,6 +212,14 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []),
       "clientRequestId"].map((k) => [k, {}])),
+  }),
+  t3_thread_organize: (w) => ({
+    type: "object",
+    properties: {
+      environmentId: {}, threadId: {},
+      action: { type: "string", enum: [...ORGANIZE_ACTIONS, ...(w.reviews ? (w.reviewActions ?? REVIEW_ACTIONS) : [])] },
+      ...(w.reviews ? { tag: {}, fenceLabel: {}, expectedWorktreePath: {} } : {}),
+    },
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -268,10 +313,15 @@ const pendingList = (w, t) => {
 };
 
 function detail(t) {
-  const { items, runs, runtimeRequests, modelSelection, environment, instructions, ...rest } = t;
+  const { items, runs, runtimeRequests, modelSelection, environment, instructions, notes, tags, autoSettleDisabled, executionFence, ...rest } = t;
   if (runtimeRequests) rest.pendingRequestCount = pendingRequests(t).length;
   return rest;
 }
+
+// The review fields a T3 that keeps threads for their reader returns.
+const reviewFields = (w, t, withFence) => (w.reviews && !w.reviewsUnread
+  ? { tags: t.tags ?? [], autoSettleDisabled: t.autoSettleDisabled === true, ...(withFence && t.executionFence ? { executionFence: t.executionFence } : {}) }
+  : {});
 
 // Runs newest first; a run without an ordinal ranks by its array position.
 const byOrdinal = (t) => (t.runs ?? []).map((r, i, all) => ({ r, o: r.ordinal ?? all.length - i })).sort((a, b) => b.o - a.o).map((x) => x.r);
@@ -284,7 +334,12 @@ function refreshThread(t) {
   t.status = active?.status ?? latestRun(t)?.status ?? "idle";
 }
 
-function startRun(t, text) {
+// A prompt's timeline item: its message and run ids, and its cause when it
+// has one.
+const promptItem = (text, runId, messageId, causedBy) =>
+  ({ type: "user_message", status: "completed", text, runId, messageId, ...(causedBy ? { causedBy } : {}) });
+
+function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefined) {
   const runId = `run:${randomUUID()}`;
   t.runs = t.runs ?? [];
   const ordinal = Math.max(0, ...byOrdinal(t).map((r, i, all) => r.ordinal ?? all.length - i)) + 1;
@@ -293,8 +348,18 @@ function startRun(t, text) {
   t.status = "running";
   t.latestRunId = runId;
   t.items = t.items ?? [];
-  t.items.push({ type: "user_message", status: "completed", text });
+  t.items.push(promptItem(text, runId, messageId, causedBy));
   return runId;
+}
+
+// The fork's verifyCause: null when <c> names a prompt, else its refusal.
+function causeProblem(threads, c) {
+  const t = threads[c.threadId];
+  if (!t || t.deleted) return err("invalid_request", `causedBy: thread ${c.threadId} was not found.`);
+  const m = (t.items ?? []).find((it) => it.type === "user_message" && it.messageId === c.messageId);
+  if (!m) return err("invalid_request", `causedBy: message ${c.messageId} is not a prompt in thread ${c.threadId}.`);
+  if (c.runId !== undefined && m.runId !== c.runId) return err("invalid_request", `causedBy: message ${c.messageId} is not part of run ${c.runId}.`);
+  return null;
 }
 
 function endRun(t, run, status) {
@@ -459,6 +524,11 @@ async function callTool(w, name, a) {
     case "t3_thread_launch": {
       const parent = w.crewLineage ? a.parentThreadId : undefined;
       if (parent !== undefined && !threads[parent]) return [notFound(parent), false];
+      const cause = w.causedBy ? a.causedBy : undefined;
+      if (cause !== undefined) {
+        const problem = causeProblem(threads, cause);
+        if (problem) return [problem, false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -482,23 +552,31 @@ async function callTool(w, name, a) {
         if (a.environment !== undefined || w.bindEnvironment !== undefined) n.environment = w.bindEnvironment ?? a.environment;
         if (a.instructions !== undefined || w.bindInstructions !== undefined) n.instructions = w.bindInstructions ?? a.instructions;
       }
+      if (cause !== undefined || w.bindCause !== undefined) n.causedBy = w.bindCause ?? cause;
       threads[id] = n;
-      if (a.message) startRun(n, a.message);
+      if (a.message) startRun(n, a.message, undefined, cause);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];
     }
     case "t3_thread_send": {
       if (!t) return [notFound(a.threadId), false];
       if (t.archived) return [err("thread_not_sendable", `Thread ${a.threadId} is archived and cannot receive messages.`), false];
+      if (t.executionFence) return [err("orchestration_error", `Thread ${a.threadId} is retired from running: its workspace went back to its owner.`), false];
       w.requestIds = w.requestIds ?? {};
       const key = `${a.threadId}|${a.clientRequestId}`;
       if (a.clientRequestId && w.requestIds[key]) return [ok(w.requestIds[key]), false];
+      const cause = w.causedBy ? a.causedBy : undefined;
+      if (cause !== undefined) {
+        const problem = causeProblem(threads, cause);
+        if (problem) return [problem, false];
+      }
+      const messageId = `msg:${randomUUID()}`;
       let delivery = "steered";
-      if (t.activeRunId) t.items.push({ type: "user_message", status: "completed", text: a.message });
+      if (t.activeRunId) t.items.push(promptItem(a.message, t.activeRunId, messageId, cause));
       else {
-        startRun(t, a.message);
+        startRun(t, a.message, messageId, cause);
         delivery = "started";
       }
-      const out = { threadId: t.threadId, messageId: `msg:${randomUUID()}`, runId: t.activeRunId, status: "running", delivery };
+      const out = { threadId: t.threadId, messageId, runId: t.activeRunId, status: "running", delivery };
       if (a.clientRequestId) w.requestIds[key] = out;
       return [ok(out), true];
     }
@@ -506,10 +584,12 @@ async function callTool(w, name, a) {
       if (!t) return [notFound(a.threadId), false];
       if ((a.limit ?? 0) > 100) return [err("invalid_request", "limit must be <= 100"), false];
       // T3 pages forward from afterPosition (exclusive), oldest first.
-      const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1));
+      const shown = (it) => a.view !== "messages" || ["user_message", "assistant_message", "proposed_plan"].includes(it.type);
+      const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1) && shown(it));
       const items = matching.slice(0, a.limit ?? 50);
       const thread = {
         ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}),
+        ...reviewFields(w, t, true),
       };
       return [ok({ thread, recentRuns: byOrdinal(t).slice(0, a.runLimit ?? 5), items, nextPosition: items.at(-1)?.position ?? null, hasMore: matching.length > items.length }), false];
     }
@@ -522,7 +602,7 @@ async function callTool(w, name, a) {
       const cursor = a.cursor ?? 0;
       const page = list.slice(cursor, cursor + (a.limit ?? 50));
       const nextCursor = cursor + page.length < list.length ? cursor + page.length : null;
-      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}) })), nextCursor, total: list.length }), false];
+      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}), ...reviewFields(w, x, false) })), nextCursor, total: list.length }), false];
     }
     case "t3_thread_configure": {
       if (w.coordinatorRestartNote && typeof a.coordinator === "boolean") {
@@ -572,8 +652,62 @@ async function callTool(w, name, a) {
       if (w.queueAfterInterrupt) run.queueAfterInterrupt = w.queueAfterInterrupt;
       return [ok({ threadId: t.threadId, runId: run.runId, status: "interrupt_requested" }), true];
     }
+    case "t3_thread_note": {
+      if (!t) return [notFound(a.threadId), false];
+      const text = typeof a.text === "string" ? a.text.trim() : "";
+      if (!text || text.length > 120000 || typeof a.clientRequestId !== "string" || !a.clientRequestId) return [err("invalid_params", "text and clientRequestId are required"), false];
+      t.notes = t.notes ?? {};
+      const known = t.notes[a.clientRequestId];
+      if (known) {
+        if (known.text !== text) return [err("invalid_request", `This request id already posted a different note to thread ${a.threadId}. Use a new id for new text.`), false];
+        return [ok({ threadId: t.threadId, messageId: known.messageId, sequence: known.sequence, created: false }), false];
+      }
+      if (t.archived) return [err("invalid_request", `Thread ${a.threadId} is archived and cannot receive messages.`), false];
+      w.sequence = (w.sequence ?? 100) + 1;
+      const messageId = `message:${randomUUID()}`;
+      t.notes[a.clientRequestId] = { text, messageId, sequence: w.sequence };
+      t.items = t.items ?? [];
+      t.items.push({ type: "user_message", status: "completed", text, note: true, runId: null, itemId: `turn-item:message:${messageId}` });
+      if (w.archiveOnNote) t.archived = true;
+      return [ok({ threadId: t.threadId, messageId, sequence: w.sequence, created: true }), true];
+    }
     case "t3_thread_organize": {
       if (!t) return [notFound(a.threadId), false];
+      if (w.reviews && REVIEW_ACTIONS.includes(a.action)) {
+        w.sequence = (w.sequence ?? 100) + 1;
+        const done = () => [ok({ sequence: w.sequence }), true];
+        switch (a.action) {
+          case "tag":
+          case "untag": {
+            const tag = typeof a.tag === "string" ? a.tag.trim() : "";
+            if (!tag) return [err("invalid_request", "This action needs `tag`."), false];
+            const tags = t.tags ?? [];
+            t.tags = a.action === "untag" ? tags.filter((x) => x !== tag) : tags.includes(tag) ? tags : [...tags, tag];
+            return done();
+          }
+          case "disable_auto_settle":
+          case "enable_auto_settle":
+            if (t.archived) return [err("orchestration_error", `Thread ${a.threadId} is archived.`), false];
+            t.autoSettleDisabled = a.action === "disable_auto_settle";
+            return done();
+          case "fence": {
+            if (typeof a.fenceLabel !== "string" || !a.fenceLabel) return [err("invalid_request", "This action needs `fenceLabel`."), false];
+            if (a.expectedWorktreePath === undefined) return [err("invalid_request", "This action needs `expectedWorktreePath`."), false];
+            if ((a.expectedWorktreePath ?? null) !== (t.worktreePath ?? null)) {
+              return [err("orchestration_error", `Thread ${a.threadId} works in ${t.worktreePath ?? "its project folder"}, not ${a.expectedWorktreePath}.`), false];
+            }
+            if (t.activeRunId || latestActiveRun(t) || pendingRequests(t).length) {
+              return [err("orchestration_error", `Thread ${a.threadId} still has a run, queued message or open request. Stop it first.`), false];
+            }
+            const same = t.executionFence && t.executionFence.label === a.fenceLabel && t.executionFence.worktreePath === (t.worktreePath ?? null);
+            if (!same) t.executionFence = { label: a.fenceLabel, worktreePath: t.worktreePath ?? null, fencedAt: now() };
+            return done();
+          }
+          case "unfence":
+            delete t.executionFence;
+            return done();
+        }
+      }
       if (a.action !== "archive") return [err("invalid_action", `unknown action ${a.action}`), false];
       t.archived = true;
       const run = latestActiveRun(t);
@@ -669,6 +803,10 @@ async function mcp(req, res) {
   if (w.revoked || !(w.tokens ?? []).includes(auth)) {
     log(w, { ...entry, status: 401 });
     return json(res, 401, { error: "invalid_token" });
+  }
+  if ((w.delayMethods ?? {})[msg.method] > 0) {
+    log(w, { ...entry, delaying: true });
+    await sleep(w.delayMethods[msg.method]);
   }
   if (msg.method === "tools/call" && (w.dropTools ?? {})[msg.params.name] > 0) {
     w.dropTools[msg.params.name]--;

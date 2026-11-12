@@ -25,6 +25,17 @@
 #                                        codex-native/<id>. Other efforts retain
 #                                        their adapter's existing policy. Native
 #                                        Codex validates model support at startup.
+#        fm-harness.sh codex-effort-check <model> <effort>
+#                                        Print supported, unsupported, or unknown for
+#                                        a Codex model and reasoning effort, read from
+#                                        the CLI's own model catalog
+#                                        (${CODEX_HOME:-~/.codex}/models_cache.json).
+#                                        unsupported means the catalog lists the model
+#                                        without that effort; unknown means no evidence.
+#        fm-harness.sh codex-effort-lacking <effort>
+#                                        Print a JSON array of the catalog models listed
+#                                        without the effort ([] without a catalog), the
+#                                        only models a profile check may refuse it for.
 #        fm-harness.sh ancestry [<pid>] print "<strength> <harness>" for the nearest
 #                                        harness process at or above <pid> (default this
 #                                        process), or nothing when the walk finds none.
@@ -680,8 +691,42 @@ validate_native_effort() {
   return 1
 }
 
+# The Codex model catalog the CLI itself caches. It is the one source of which
+# reasoning efforts a model offers, so no model name is hardcoded for an effort.
+codex_catalog_file() {
+  printf '%s' "${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+}
+
+# codex-effort-check <model> <effort>: print supported when the catalog lists
+# the model with that effort, unsupported when it lists the model without it,
+# and unknown when the catalog is absent, unreadable, or does not list the
+# model (or no model is named). The caller owns what each verdict means.
+codex_effort_check() {
+  local model=${1:-} effort=${2:-} file verdict
+  file=$(codex_catalog_file)
+  [ -n "$model" ] && [ -r "$file" ] || { echo unknown; return 0; }
+  verdict=$(jq -r --arg m "$model" --arg e "$effort" '
+    [.models[]? | select(.slug == $m)] | first // null
+    | if . == null then "unknown"
+      elif ([.supported_reasoning_levels[]?.effort] | index($e)) != null then "supported"
+      else "unsupported" end' "$file" 2>/dev/null) || verdict=
+  echo "${verdict:-unknown}"
+}
+
+# codex-effort-lacking <effort>: print a JSON array of the catalog slugs listed
+# without the effort (codex-effort-check's unsupported), `[]` when the catalog
+# is absent or unreadable.
+codex_effort_lacking() {
+  local effort=${1:-} file
+  file=$(codex_catalog_file)
+  [ -r "$file" ] || { echo '[]'; return 0; }
+  jq -c --arg e "$effort" '[.models[]? | select(([.supported_reasoning_levels[]?.effort] | index($e)) == null) | .slug]' "$file" 2>/dev/null || echo '[]'
+}
+
 case "${1:-}" in
   validate-native-effort) shift; validate_native_effort "$@" ;;
+  codex-effort-check) shift; codex_effort_check "$@" ;;
+  codex-effort-lacking) shift; codex_effort_lacking "$@" ;;
   ancestry)
     case "${2:-}" in
       ''|*[!0-9]*) [ -z "${2:-}" ] || { echo "error: ancestry takes a numeric pid" >&2; exit 2; } ;;

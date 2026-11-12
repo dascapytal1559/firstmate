@@ -282,6 +282,10 @@ WATCH_HOME_EXISTED=0
 # (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# A finished T3 scout kept for the captain is idle by design until he closes
+# its thread (bin/fm-t3-review-lib.sh reads that record).
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # The away-posture record (state/.afk-contract) is the posture in both the
 # attended and the afk session; bin/fm-afk-contract.sh owns its schema and its
 # away-or-quiet reading, which is all this watcher reads (away_record_present
@@ -3690,6 +3694,15 @@ event_wait_or_sleep() {
   esac
 }
 
+# Detached jobs (bin/fm-job.sh): hand each ended job's result to its worker
+# through the steering inbox. Silent and never a wake: the worker, not
+# firstmate, acts on the result. Off costs one glob.
+detached_job_tick() {
+  compgen -G "$STATE/*.jobs/*/record" >/dev/null || return 0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-job.sh" deliver </dev/null >/dev/null 2>&1 \
+    || triage_log "detached-job result delivery unavailable"
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -3987,6 +4000,8 @@ t3_present_sync_detached() {
   touch "$STATE/.t3-present-sync"
   {
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-t3-review.sh" reconcile
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-crew-status.sh" sync
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
@@ -4014,6 +4029,35 @@ t3_decisions_alert_tick() {
   fm_wake_append check t3-decisions "$reason" || return 1
   rm -f -- "$alert"
   wake "$reason"
+}
+
+# The captain closed a kept review's thread (bin/fm-t3-review.sh reconcile
+# leaves state/t3-review/<id>.closed): one durable check wake per close asks
+# firstmate for the guarded cleanup. A notice whose task is already cleaned up
+# is dropped.
+t3_review_alert_tick() {
+  local alert id reason queued
+  for alert in "$STATE"/t3-review/*.closed; do
+    [ -f "$alert" ] || continue
+    id=$(basename "$alert" .closed)
+    if [ ! -f "$STATE/$id.meta" ]; then
+      rm -f -- "$alert"
+      continue
+    fi
+    reason=$(head -n 1 "$alert" 2>/dev/null || true)
+    case "$reason" in
+      "check: t3-review $id: "*) ;;
+      *) rm -f -- "$alert"; continue ;;
+    esac
+    queued=$(fm_wake_queued_keys check)
+    if printf '%s\n' "$queued" | grep -Fx "t3-review-$id" >/dev/null 2>&1; then
+      rm -f -- "$alert"
+      continue
+    fi
+    fm_wake_append check "t3-review-$id" "$reason" || return 1
+    rm -f -- "$alert"
+    wake "$reason"
+  done
 }
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
@@ -4177,6 +4221,8 @@ while :; do
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
 
+  detached_job_tick
+
   # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the captain's
   # decisions (bin/fm-t3-needs-me.sh) are brought in line here as the
   # backstop: a label or decision that failed, a label T3 lost, or a run that
@@ -4188,6 +4234,10 @@ while :; do
   fi
   t3_decisions_alert_tick || {
     echo 'watcher: T3 decisions alert could not be queued' >&2
+    exit 1
+  }
+  t3_review_alert_tick || {
+    echo 'watcher: T3 review close notice could not be queued' >&2
     exit 1
   }
 
@@ -4555,6 +4605,14 @@ EOF
     # this guard: reaching it would require backlog reads for windows this gate
     # deliberately skips, putting that read on the ordinary poll hot path.
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
+      continue
+    fi
+    # A finished T3 scout kept for the captain idles by design until he closes
+    # its thread, and its pane changes whenever its handoff lands or he reads
+    # it, so it never enters the stale ladder: its own status lines, its
+    # steering inbox above, and the close notice (t3_review_alert_tick) carry
+    # everything firstmate must act on.
+    if [ "$kind" = scout ] && [ -n "$(fm_t3_review_state "$STATE/$task.meta")" ]; then
       continue
     fi
     watcher_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" || continue

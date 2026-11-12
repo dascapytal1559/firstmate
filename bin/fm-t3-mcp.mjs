@@ -65,7 +65,7 @@
 //   fm-t3-mcp.mjs launch --project <id> --title <title> --model-selection <json>
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
-//       [--parent <thread-id>]
+//       [--parent <thread-id>] [--caused-by <cause-json>]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
@@ -74,11 +74,15 @@
 //     for, sent as parentThreadId only where t3_thread_launch's tools/list
 //     schema declares it (T3 then lists the thread as that thread's crew);
 //     elsewhere the launch goes ahead without it, and the result's
-//     parentThreadId is null. Reads the thread and its configuration
+//     parentThreadId is null. --caused-by names the prompt that caused this
+//     work (see cause), sent as causedBy only where the launch schema
+//     declares it; elsewhere the result's causedBy is null. T3 checks the
+//     cause before it creates anything, so a cause it refuses exits 3
+//     (cause_refused) with no thread launched. Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
 //     read reports one), instance, model, every requested option value,
-//     the given environment and instructions, and, when a parent was sent,
+//     the given environment and instructions, the cause it was sent, and, when a parent was sent,
 //     relationshipToParent crew under exactly that parent; a refused
 //     thread that does not then read back archived with no active run exits
 //     1, because it may still be live. A read-back that fails also archives
@@ -87,9 +91,11 @@
 //     1 as well. A transport or unexpected failure of the
 //     gate, before t3_thread_launch is requested, exits 8: no thread was
 //     launched. Without --message-file the thread is created idle.
-//   fm-t3-mcp.mjs send --thread <id> --message-file <file> --client-request-id <id>
+//   fm-t3-mcp.mjs send --thread <id> --message-file <file> --client-request-id <id> [--caused-by <cause-json>]
 //     t3_thread_send mode auto: start an idle thread's next turn or steer the
-//     running one. T3 derives the message and command ids from the client
+//     running one. --caused-by rides as causedBy where the send schema
+//     declares it; T3 refusing that cause is exit 3 (cause_refused), proven
+//     non-delivery. T3 derives the message and command ids from the client
 //     request id within the auth session that sent it, so a retry with the
 //     same id under the same sign-in is the same delivery; after a fresh
 //     sign-in it is a new delivery and can duplicate. T3 commits a send
@@ -100,6 +106,29 @@
 //     typed refusal, is proven non-delivery for this attempt; exit 3 is only
 //     T3's refusal of the send itself, so a typed failure of the gate's reads
 //     exits 1.
+//   fm-t3-mcp.mjs cause --thread <caller-thread-id>
+//     The prompt that caused what the calling process is about to do: the one
+//     user-role message of <caller-thread-id>'s active turn, as a cause
+//     {threadId, runId, messageId} T3's causedBy takes. The caller passes
+//     the thread it runs in ($T3CODE_THREAD_ID, which T3 sets in each
+//     agent's environment). It answers causedBy null with a reason, and
+//     never guesses, when the thread is unknown or idle, when the turn
+//     received more than one prompt (a steer or a queued input joined it),
+//     or when this process did not start inside that turn: walking up its
+//     ancestors, the topmost one whose environment carries
+//     T3CODE_THREAD_ID=<caller-thread-id> is the agent T3 started, and the
+//     process just below it must have started no earlier than the turn did
+//     (one second of slack for ps's whole-second ages). A background job left
+//     over from an earlier turn, or one orphaned to init, therefore answers
+//     null rather than borrowing the current turn's prompt; so does an agent
+//     that runs commands in a shell older than the turn. The message pages
+//     it reads ask for one character of each item, so message text is never
+//     read. Changes nothing.
+//   fm-t3-mcp.mjs cause-check --json <text>
+//     Local, no T3 call: {causedBy} for <text>, a JSON object of exactly
+//     threadId, messageId, and optional runId, all non-empty strings, in any
+//     key order (the answer is in that order); anything else exits 2. T3 checks the ids themselves when the
+//     cause is sent.
 //   fm-t3-mcp.mjs state --thread <id>
 //     exists, archived, status, activeRunId, pendingRequestCount,
 //     worktreePath, and turnAt (the latest run's completion, else its start or
@@ -188,6 +217,37 @@
 //     declares stop (T3's Stop: the turn, the queue, and every delegated
 //     task), else the run alone with a plain interrupt, and the thread is
 //     then archived with archive's proof.
+//   fm-t3-mcp.mjs review-support
+//     Whether this T3 can keep a finished thread for its reader
+//     (docs/t3code-backend.md "Retained reviews"): it offers t3_thread_note
+//     and its t3_thread_organize schema, where it lists actions, lists tag,
+//     disable_auto_settle, and fence. Prints {supported, missing[]}; changes
+//     nothing.
+//   fm-t3-mcp.mjs review-publish --thread <id> --note-file <file> --request-id <id> --tag <tag>
+//     Publish a retained review's handoff into its thread in one session:
+//     one passive t3_thread_note (no run starts) under that stable request id,
+//     then the tag, then disable_auto_settle, then the read-back that proves
+//     each: the same note id posted again answers created:false with the same
+//     messageId, and the thread reads tags containing <tag> and
+//     autoSettleDisabled true. Prints outcome published (with messageId),
+//     closed (the thread reads archived, or the verified server no longer has
+//     it, at any step: a close wins over publication), or busy (a run, queued
+//     message, or pending request is open; nothing is posted, retry later).
+//     A read-back without the tags or autoSettleDisabled field is a T3 too
+//     old for this, never false: exit 4 (review_unsupported), as is a T3 that
+//     review-support refuses. A read-back that disagrees exits 1
+//     (review_unproven). Repeating the call is harmless.
+//   fm-t3-mcp.mjs fence --thread <id> --worktree <abs-path> --label <label>
+//     Retire a stopped thread from running before its worktree goes back to
+//     its owner: t3_thread_organize fence with that label, the thread's own
+//     worktreePath as expectedWorktreePath, which must be <worktree> by real
+//     path (else exit 4, fence_mismatch, nothing sent), then the read-back of
+//     executionFence with that label and path (else exit 1,
+//     fence_unproven). An already matching fence is the end state. A thread
+//     the verified server no longer has needs no fence (fenced:false,
+//     missing:true). A read without the tags field is a T3 too old for
+//     fences: exit 4 (review_unsupported). T3 refuses a fence while a run,
+//     queued message, or request is open, so close the thread first.
 //   fm-t3-mcp.mjs thread-for-root --root <abs-path>
 //     The one unarchived, worktree-less thread with an active run on the live
 //     project rooted at <root>, across every t3_thread_list page; a fork
@@ -1210,8 +1270,9 @@ const sameEnvironment = (a, b) =>
 // mode T3 runs the driver at, when it reports one), exactly the requested
 // instance, model, and option values, the thread environment and
 // instructions it was given, and the crew lineage under the parent it named.
-function bindingProblems(t, config, selection, worktree, environment, instructions, parent) {
+function bindingProblems(t, config, selection, worktree, environment, instructions, parent, cause) {
   const problems = [];
+  if (cause !== null && !sameCause(cause, t.causedBy)) problems.push(`causedBy ${t.causedBy ? "differs" : "not bound"}`);
   if (parent !== null && (t.relationshipToParent !== "crew" || t.parentThreadId !== parent)) {
     problems.push(`lineage ${t.relationshipToParent ?? "none"} under ${t.parentThreadId ?? "no parent"}`);
   }
@@ -1241,6 +1302,7 @@ async function launch(flags) {
   const environment = launchEnvironment(flags);
   const instructions = launchInstructions(flags);
   if (flags.parent !== undefined && !flags.parent) usage("--parent needs a thread id");
+  const wanted = causeFlag(flags);
   let session;
   let g;
   try {
@@ -1252,6 +1314,9 @@ async function launch(flags) {
   // A T3 without crew lineage drops an undeclared argument, so the parent
   // rides, and is proven, only where the launch schema declares it.
   const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
+  // An older T3 refuses an undeclared key, so the cause rides only where
+  // declared.
+  const cause = wanted !== null && toolOffers(session, "t3_thread_launch", "causedBy") ? wanted : null;
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1266,6 +1331,7 @@ async function launch(flags) {
     ...(instructions !== null ? { instructions } : {}),
     ...(message ? { message } : {}),
     ...(parent !== null ? { parentThreadId: parent } : {}),
+    ...(cause !== null ? { causedBy: cause } : {}),
   };
   let out;
   try {
@@ -1274,7 +1340,7 @@ async function launch(flags) {
     if (err instanceof Refusal && err.code === UNPROVEN_TOOL_ERROR) {
       throw new Refusal("launch_unconfirmed", `${err.message}, which can follow a created thread; inspect t3_thread_list before retrying`, 1);
     }
-    throw err;
+    throw causeRefusal(err, cause, "no thread was launched; FM_T3CODE_CAUSED_BY=off launches without a cause");
   }
   if (!out?.threadId) throw new Refusal("launch_unconfirmed", "t3_thread_launch returned no threadId; inspect t3_thread_list before retrying", 1);
   const archiveLaunched = () => archiveThread(session, out.threadId, ARCHIVE_TIMEOUT_MS).then((r) => r.archived === true, () => false);
@@ -1293,12 +1359,12 @@ async function launch(flags) {
       { threadId: out.threadId },
     );
   }
-  const problems = bindingProblems(t, config, selection, worktree, environment, instructions, parent);
+  const problems = bindingProblems(t, config, selection, worktree, environment, instructions, parent, cause);
   if (problems.length) {
     const archived = await archiveLaunched();
     throw new Refusal(
       "binding_mismatch",
-      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""}${parent !== null ? `, crew of ${parent}` : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
+      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""}${parent !== null ? `, crew of ${parent}` : ""}${cause !== null ? ", cause" : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
       archived ? 4 : 1,
       { threadId: out.threadId },
     );
@@ -1312,6 +1378,7 @@ async function launch(flags) {
     runId: out.runId ?? null,
     status: t.status ?? null,
     parentThreadId: parent,
+    causedBy: cause,
     environmentId: g.environmentId,
     origin: session.origin,
     serverVersion: g.serverVersion,
@@ -1320,6 +1387,7 @@ async function launch(flags) {
 
 async function send(flags) {
   const args = { threadId: need(flags, "thread"), message: readMessage(flags), mode: "auto", clientRequestId: need(flags, "client-request-id") };
+  const wanted = causeFlag(flags);
   let session;
   try {
     ({ session } = await verifiedSession(flags));
@@ -1329,6 +1397,8 @@ async function send(flags) {
     if (err instanceof Refusal && err.exit === 3) throw new Refusal(err.code, err.message, 1, err.extra);
     throw err;
   }
+  const cause = wanted !== null && toolOffers(session, "t3_thread_send", "causedBy") ? wanted : null;
+  if (cause !== null) args.causedBy = cause;
   let out;
   try {
     out = await session.call("t3_thread_send", args);
@@ -1336,7 +1406,9 @@ async function send(flags) {
     // A specific typed T3 refusal (3) or a refused credential (4) proves the
     // message was not taken; anything else happened after the request went
     // out.
-    if (err instanceof Refusal && (err.exit === 3 || err.exit === 4) && err.code !== UNPROVEN_TOOL_ERROR) throw err;
+    if (err instanceof Refusal && (err.exit === 3 || err.exit === 4) && err.code !== UNPROVEN_TOOL_ERROR) {
+      throw causeRefusal(err, cause, "the message was not sent");
+    }
     throw new Refusal(
       "delivery_unconfirmed",
       `the outcome of t3_thread_send on thread ${args.threadId} is unproven (${err.message}); T3 may have committed it, so retry only with client request id ${args.clientRequestId}`,
@@ -1344,7 +1416,160 @@ async function send(flags) {
       { threadId: args.threadId, clientRequestId: args.clientRequestId },
     );
   }
-  return { ok: true, threadId: args.threadId, clientRequestId: args.clientRequestId, delivery: out?.delivery ?? null, status: out?.status ?? null, runId: out?.runId ?? null, messageId: out?.messageId ?? null };
+  return {
+    ok: true, threadId: args.threadId, clientRequestId: args.clientRequestId, delivery: out?.delivery ?? null, status: out?.status ?? null,
+    runId: out?.runId ?? null, messageId: out?.messageId ?? null, causedBy: cause,
+  };
+}
+
+// --- causes -----------------------------------------------------------------
+// A cause is the prompt T3's causedBy names: {threadId, runId?, messageId}.
+
+// The first window, in timeline positions, the cause verb searches for its
+// turn's prompt.
+const CAUSE_READBACK_SPAN = 200;
+const CAUSE_KEYS = ["threadId", "runId", "messageId"];
+
+// A cause from JSON text: an object of exactly those string keys, threadId and
+// messageId required. Null for anything else.
+export function parseCause(text) {
+  let v;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  if (Object.keys(v).some((k) => !CAUSE_KEYS.includes(k))) return null;
+  if (Object.values(v).some((x) => typeof x !== "string" || !x)) return null;
+  if (!v.threadId || !v.messageId) return null;
+  return { threadId: v.threadId, ...(v.runId ? { runId: v.runId } : {}), messageId: v.messageId };
+}
+
+function causeFlag(flags) {
+  if (flags["caused-by"] === undefined) return null;
+  const cause = parseCause(flags["caused-by"]);
+  if (!cause) usage("a cause must be a JSON object of exactly threadId, messageId, and optional runId, each a non-empty string");
+  return cause;
+}
+
+const sameCause = (a, b) =>
+  Boolean(b) && typeof b === "object" && CAUSE_KEYS.every((k) => (k === "runId" && a.runId === undefined) || (a[k] ?? null) === (b[k] ?? null));
+
+// T3 refuses a cause it cannot verify with a typed error whose message starts
+// "causedBy:" (the T3 Code fork's threadAccess verifyCause), before anything
+// is created or sent.
+function causeRefusal(err, cause, consequence) {
+  if (cause === null || !(err instanceof Refusal) || err.exit !== 3 || !/causedBy:/.test(err.message)) return err;
+  return new Refusal("cause_refused", `T3 refused the cause ${JSON.stringify(cause)} (${err.message.replace(/^T3 \S+ failed: /, "")}); ${consequence}`, 3, err.extra);
+}
+
+// The messages view of <threadId> from timeline position <start> on, every
+// page, with no message text.
+async function readMessagesFrom(session, threadId, start) {
+  const read = (afterPosition) =>
+    session.call("t3_thread_read", { threadId, view: "messages", limit: READ_LIMIT_MAX, maxCharsPerItem: 1, runLimit: 1, ...(afterPosition >= 0 ? { afterPosition } : {}) });
+  let out = await read(start - 1);
+  const items = [...(out?.items ?? [])];
+  for (let page = 0; out?.hasMore && out.nextPosition !== null && page < 10_000; page++) {
+    out = await read(out.nextPosition);
+    items.push(...(out?.items ?? []));
+  }
+  return items;
+}
+
+// Every prompt (user_message) of run <runId> in <threadId>'s own timeline.
+// T3 pages forward only, so the window starts near the end and widens until
+// it reaches back past the run's first item or to the thread's start.
+async function runPrompts(session, threadId, runId, itemCount) {
+  for (let span = CAUSE_READBACK_SPAN; ; span *= 4) {
+    const start = Math.max(0, itemCount - span);
+    const local = (await readMessagesFrom(session, threadId, start)).filter((it) => (it.sourceThreadId ?? threadId) === threadId);
+    const first = local.findIndex((it) => it.runId === runId);
+    if (start === 0 || first > 0) return local.filter((it) => it.type === "user_message" && it.runId === runId && it.messageId);
+  }
+}
+
+// [[dd-]hh:]mm:ss, as ps prints etime.
+function etimeSeconds(text) {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(text.trim());
+  return m ? ((Number(m[1] ?? 0) * 24 + Number(m[2] ?? 0)) * 60 + Number(m[3])) * 60 + Number(m[4]) : null;
+}
+
+// One process's parent, age in seconds, and whether the environment it was
+// started with carries T3CODE_THREAD_ID=<threadId> (an environment this user
+// cannot read carries nothing); null when ps cannot read the process.
+function processFacts(pid, threadId) {
+  const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
+  let m;
+  try {
+    m = /^\s*(\d+)\s+(\S+)\s*$/.exec(execFileSync("ps", ["-o", "ppid=,etime=", "-p", String(pid)], quiet));
+  } catch {
+    return null;
+  }
+  const age = m ? etimeSeconds(m[2]) : null;
+  if (age === null) return null;
+  const mark = `T3CODE_THREAD_ID=${threadId}`;
+  let carries = false;
+  try {
+    carries = process.platform === "linux"
+      ? readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(mark)
+      : execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)], quiet).split(/\s+/).includes(mark);
+  } catch {
+    carries = false;
+  }
+  return { ppid: Number(m[1]), age, carries };
+}
+
+// Whether this process began inside <threadId>'s turn that started at
+// <runStartMs> (the cause verb's header owns the rule). {local, reason}.
+// Every ancestor is read, not only an unbroken run of carriers: a harness may
+// start its command shell with a reduced environment that the shell then
+// re-exports (Claude Code does), so a non-carrier can sit between this
+// process and the agent.
+function turnLocality(threadId, runStartMs) {
+  const chain = [];
+  let pid = process.pid;
+  for (let depth = 0; depth < 64 && pid > 1; depth++) {
+    const f = processFacts(pid, threadId);
+    if (!f) return { local: false, reason: `process ${pid} could not be read` };
+    chain.push(f);
+    pid = f.ppid;
+  }
+  if (pid > 1) return { local: false, reason: "the calling process tree is too deep to read" };
+  const agent = chain.findLastIndex((f) => f.carries);
+  if (agent < 1) return { local: false, reason: `the calling process does not run under thread ${threadId}'s agent` };
+  if (chain[agent].ppid <= 1) return { local: false, reason: "the calling process was orphaned from the agent that started it" };
+  // The process just below the agent began this call.
+  const began = Date.now() - chain[agent - 1].age * 1000;
+  if (began + 1000 < runStartMs) return { local: false, reason: "the calling process started before the thread's current turn" };
+  return { local: true, reason: null };
+}
+
+async function causeVerb(flags) {
+  const threadId = need(flags, "thread");
+  const { session } = await verifiedSession(flags);
+  const none = (reason) => ({ ok: true, threadId, causedBy: null, reason });
+  let head;
+  try {
+    head = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 5 });
+  } catch (err) {
+    if (isNotFound(err)) return none(`T3 has no thread ${threadId}`);
+    throw err;
+  }
+  const t = threadOf(head);
+  const runId = t.activeRunId ?? null;
+  if (!runId) return none(`thread ${threadId} has no active turn`);
+  const run = (head?.recentRuns ?? []).find((r) => r.runId === runId);
+  const startMs = Date.parse(run?.startedAt ?? run?.requestedAt ?? "");
+  if (!Number.isFinite(startMs)) return none(`turn ${runId} has no start time`);
+  const locality = turnLocality(threadId, startMs);
+  if (!locality.local) return none(locality.reason);
+  const prompts = await runPrompts(session, threadId, runId, t.itemCount ?? 0);
+  if (prompts.length !== 1) {
+    return none(prompts.length ? `turn ${runId} received ${prompts.length} prompts, so which one caused this is unknown` : `turn ${runId} shows no prompt`);
+  }
+  return { ok: true, threadId, causedBy: { threadId, runId, messageId: prompts[0].messageId }, reason: null };
 }
 
 async function read(flags) {
@@ -1523,6 +1748,136 @@ async function close(flags) {
 
 function threadOf(out) {
   return out?.thread ?? out ?? {};
+}
+
+// --- Retained reviews (docs/t3code-backend.md "Retained reviews") ---------
+
+const REVIEW_NOTE_TOOL = "t3_thread_note";
+const REVIEW_ACTIONS = ["tag", "disable_auto_settle", "fence"];
+
+// The action values a tool's tools/list schema enumerates, or null when it
+// does not enumerate them.
+function toolActions(session, tool) {
+  const action = session.toolSchemas?.get(tool)?.properties?.action;
+  const values = action?.enum ?? action?.anyOf?.flatMap((s) => (s?.const !== undefined ? [s.const] : s?.enum ?? []));
+  return Array.isArray(values) && values.length ? values : null;
+}
+
+function reviewMissing(session) {
+  const missing = [];
+  if (!session.toolSchemas?.has(REVIEW_NOTE_TOOL)) missing.push(REVIEW_NOTE_TOOL);
+  const actions = toolActions(session, "t3_thread_organize");
+  if (actions) for (const a of REVIEW_ACTIONS) if (!actions.includes(a)) missing.push(`t3_thread_organize ${a}`);
+  return missing;
+}
+
+function requireReviewSupport(session) {
+  const missing = reviewMissing(session);
+  if (missing.length) {
+    throw new Refusal("review_unsupported", `this T3 cannot keep a thread for its reader: it lacks ${missing.join(", ")}`, 4, { missing });
+  }
+}
+
+// A read that lacks the review fields comes from a T3 too old for them; it
+// never means "not tagged" or "not protected".
+function requireReviewFields(t, threadId) {
+  if (!Array.isArray(t.tags) || typeof t.autoSettleDisabled !== "boolean") {
+    throw new Refusal("review_unsupported", `T3 read thread ${threadId} back without tags or autoSettleDisabled, so it is too old to keep a thread for its reader`, 4);
+  }
+}
+
+async function reviewSupport(flags) {
+  const { session } = await verifiedSession(flags);
+  const missing = reviewMissing(session);
+  return { ok: true, supported: missing.length === 0, missing };
+}
+
+// One read of <threadId>: null when the verified server no longer has it.
+async function readThreadOrNull(session, threadId) {
+  try {
+    return threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+}
+
+const closedOutcome = (threadId, t) => ({ ok: true, threadId, outcome: "closed", ...(t ? { archived: true } : { missing: true }) });
+
+async function reviewPublish(flags) {
+  const threadId = need(flags, "thread");
+  const text = readFileSync(need(flags, "note-file"), "utf8").trim();
+  if (!text || text.length > 120_000) usage("--note-file must hold 1 to 120000 characters");
+  const clientRequestId = need(flags, "request-id");
+  if (clientRequestId.length > 256) usage("--request-id must be at most 256 characters");
+  const tag = need(flags, "tag").trim();
+  if (!tag || tag.length > 64 || /\n/.test(tag)) usage("--tag must be one line of 1 to 64 characters");
+  const { session } = await verifiedSession(flags);
+  requireReviewSupport(session);
+  let t = await readThreadOrNull(session, threadId);
+  if (!t || isArchived(t)) return closedOutcome(threadId, t);
+  requireReviewFields(t, threadId);
+  if ((t.activeRunId ?? null) !== null || (t.pendingRequestCount ?? 0) > 0) return { ok: true, threadId, outcome: "busy", activeRunId: t.activeRunId ?? null };
+  // Each step that fails re-reads the thread: an archive or delete that raced
+  // it is the captain's close, which wins over publication.
+  const step = async (fn) => {
+    try {
+      return { out: await fn() };
+    } catch (err) {
+      if (!(err instanceof Refusal) || err.exit === 2) throw err;
+      const now = await readThreadOrNull(session, threadId);
+      if (!now || isArchived(now)) return { closed: closedOutcome(threadId, now) };
+      throw err;
+    }
+  };
+  const note = () => session.call(REVIEW_NOTE_TOOL, { threadId, text, clientRequestId });
+  let r = await step(note);
+  if (r.closed) return r.closed;
+  const messageId = r.out?.messageId ?? null;
+  if (!messageId) throw new Refusal("review_unproven", `T3 accepted the note on ${threadId} but named no message`, 1);
+  for (const args of [{ action: "tag", tag }, { action: "disable_auto_settle" }]) {
+    r = await step(() => session.call("t3_thread_organize", { threadId, ...args }));
+    if (r.closed) return r.closed;
+  }
+  r = await step(note);
+  if (r.closed) return r.closed;
+  if (r.out?.created !== false || r.out?.messageId !== messageId) {
+    throw new Refusal("review_unproven", `the note on ${threadId} did not read back as the one posted (created=${r.out?.created}, messageId=${r.out?.messageId ?? null})`, 1);
+  }
+  t = await readThreadOrNull(session, threadId);
+  if (!t || isArchived(t)) return closedOutcome(threadId, t);
+  requireReviewFields(t, threadId);
+  if (!t.tags.includes(tag) || t.autoSettleDisabled !== true) {
+    throw new Refusal("review_unproven", `thread ${threadId} reads tags ${JSON.stringify(t.tags)} and autoSettleDisabled ${t.autoSettleDisabled}, not the tag "${tag}" with automatic settling off`, 1);
+  }
+  return { ok: true, threadId, outcome: "published", messageId, tags: t.tags, autoSettleDisabled: true };
+}
+
+async function fence(flags) {
+  const threadId = need(flags, "thread");
+  const worktree = need(flags, "worktree");
+  if (!path.isAbsolute(worktree)) usage("--worktree must be an absolute path");
+  const label = need(flags, "label");
+  if (label.length > 256) usage("--label must be at most 256 characters");
+  const { session } = await verifiedSession(flags);
+  requireReviewSupport(session);
+  let t = await readThreadOrNull(session, threadId);
+  if (!t) return { ok: true, threadId, fenced: false, missing: true };
+  requireReviewFields(t, threadId);
+  const own = t.worktreePath ?? null;
+  if (own === null || realOrRaw(own) !== realOrRaw(worktree)) {
+    throw new Refusal("fence_mismatch", `thread ${threadId} works in ${own ?? "its project folder"}, not ${worktree}; nothing was fenced`, 4, { worktreePath: own });
+  }
+  const matches = (f) => f && f.label === label && f.worktreePath === own;
+  if (!matches(t.executionFence)) {
+    await session.call("t3_thread_organize", { threadId, action: "fence", fenceLabel: label, expectedWorktreePath: own });
+    t = await readThreadOrNull(session, threadId);
+    if (!t) return { ok: true, threadId, fenced: false, missing: true };
+    if (!matches(t.executionFence)) {
+      throw new Refusal("fence_unproven", `thread ${threadId} did not read back fenced with label "${label}" on ${own}`, 1, { executionFence: t.executionFence ?? null });
+    }
+  }
+  return { ok: true, threadId, fenced: true, executionFence: t.executionFence };
 }
 
 // One approval entry of T3's pending-request list or read, normalized to
@@ -2385,6 +2740,8 @@ const VERBS = {
   "resolve-selection": resolveSelection,
   launch,
   send,
+  cause: causeVerb,
+  "cause-check": (flags) => ({ ok: true, causedBy: causeFlag({ "caused-by": need(flags, "json") }) }),
   read,
   capture,
   wait,
@@ -2395,6 +2752,9 @@ const VERBS = {
   watch,
   archive,
   close,
+  "review-support": reviewSupport,
+  "review-publish": reviewPublish,
+  fence,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
   "crew-status": crewStatus,

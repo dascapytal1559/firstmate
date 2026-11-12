@@ -534,6 +534,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/supervision-protocols/t3-thread.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/supervision-protocols/unknown.md",
       "audience": "agent-runtime"
     },
