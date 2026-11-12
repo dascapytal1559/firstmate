@@ -161,6 +161,8 @@ leave_close_wake() {  # <id> [what happened]
 }
 
 # publish_task <id>: see publish in the header. Prints one outcome line.
+# Returns 5 instead of 4 when it dropped the record because T3 cannot keep
+# threads; the publish and retain verbs exit 4 for it.
 publish_task() {
   local id=$1 meta="$STATE/$1.meta" state thread rev request handoff out rc=0 outcome message
   lock "$id" || die "cannot lock $id's record"
@@ -181,10 +183,14 @@ publish_task() {
   outcome=$(printf '%s' "$out" | json outcome || true)
   if [ "$rc" = 4 ] && [ "$(printf '%s' "$out" | json error.code || true)" = review_unsupported ]; then
     lock "$id" || die "cannot lock $id's record"
-    [ "$(fm_meta_get "$meta" t3_review_request)" != "$request" ] || set_fields "$meta" "${CLEARED_FIELDS[@]}" || die "cannot drop $id's review record"
+    rc=4
+    if [ "$(fm_meta_get "$meta" t3_review_request)" = "$request" ]; then
+      set_fields "$meta" "${CLEARED_FIELDS[@]}" || die "cannot drop $id's review record"
+      rc=5
+    fi
     release
     echo "t3-review: this T3 cannot keep $id's thread ($(head -n 1 "$WORK/mcp.err")); it is cleaned up as usual" >&2
-    return 4
+    return "$rc"
   fi
   [ "$rc" = 0 ] || { echo "t3-review: $id's handoff is not published yet ($(head -n 1 "$WORK/mcp.err" | grep . || echo "exit $rc")); it stays kept and is retried" >&2; return 1; }
   lock "$id" || die "cannot lock $id's record"
@@ -290,6 +296,7 @@ cmd_retain() {
   fi
   rc=0
   publish_task "$id" || rc=$?
+  [ "$rc" != 5 ] || rc=4
   refresh_cards
   return "$rc"
 }
@@ -304,7 +311,7 @@ reconcile_task() {
     lock "$id" try || return 0
     release
     ( trap release EXIT; publish_task "$id" ) >/dev/null 2>&1 || rc=$?
-    [ "$rc" != 4 ] || leave_close_wake "$id" "this T3 cannot keep the review thread"
+    [ "$rc" != 5 ] || leave_close_wake "$id" "this T3 cannot keep the review thread"
     return 0
   fi
   thread=$(fm_meta_get "$meta" t3_thread_id)
@@ -379,6 +386,7 @@ case "$VERB" in
     { [ "$#" = 1 ] && valid_id "$1"; } || usage
     rc=0
     publish_task "$1" || rc=$?
+    [ "$rc" != 5 ] || rc=4
     refresh_cards
     exit "$rc"
     ;;

@@ -240,7 +240,23 @@ test_reconcile_wakes_cleanup_when_t3_cannot_keep_it() {
       assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed" 2>/dev/null)" "bin/fm-teardown.sh s1" "the watcher's drop leaves a cleanup notice for firstmate"
     fi
   done
-  pass "fm-t3-review: a review an old T3 cannot keep is dropped, with a cleanup notice only from the watcher's pass"
+
+  # A new handoff recorded while the old T3 answers keeps its record, so the
+  # pass drops nothing and asks for no cleanup.
+  make_home dropped-renewed '{"reviews":false,"delayMethods":{"tools/list":1500}}'
+  fm_write_meta "$HOME_DIR/state/s1.meta" window=fm-s1 endpoint_task_id=s1 kind=scout harness=claude backend=t3code \
+    "t3_thread_id=$THREAD" t3_project_id=proj-1 "worktree=$HOME_DIR/copy" spawn_gen=gen-1 decisions_reviewed=1 \
+    "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-s1
+  printf 'handoff\n' > "$HOME_DIR/data/s1/handoff-r1.md"
+  local renew
+  ( sleep 0.7; sed -i.bak 's/^t3_review_request=fm-review-s1$/t3_review_request=fm-review-s1-r2/' "$HOME_DIR/state/s1.meta" ) &
+  renew=$!
+  review reconcile
+  wait "$renew"
+  assert_equals fm-review-s1-r2 "$(meta t3_review_request)" "the renewed handoff was recorded while T3 answered"
+  assert_equals pending "$(meta t3_review)" "a record renewed meanwhile is not dropped"
+  assert_absent "$HOME_DIR/state/t3-review/s1.closed" "a pass that dropped nothing leaves no cleanup notice"
+  pass "fm-t3-review: a review an old T3 cannot keep is dropped, with a cleanup notice only from the watcher's pass and only when it dropped the record"
 }
 
 test_retain_refuses_an_option_without_its_value() {

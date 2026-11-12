@@ -132,6 +132,8 @@
 // edit the world between calls. World keys (all optional):
 //   tokens (accepted bearers; sign-in appends), environmentId, serverVersion,
 //   tools (array of names; default all), revoked (every /mcp call is 401),
+//   delayMethods ({<JSON-RPC method>: ms}: every /mcp call of that method
+//   answers that much later),
 //   sse (SSE replies), expiresIn (seconds), bindWorktree, bindInstance,
 //   bindRuntimeMode, bindModel, bindOptions, bindEnvironment,
 //   bindInstructions, bindEffectiveRuntimeMode, bindParent, bindRelationship
@@ -802,6 +804,7 @@ async function mcp(req, res) {
     log(w, { ...entry, status: 401 });
     return json(res, 401, { error: "invalid_token" });
   }
+  if ((w.delayMethods ?? {})[msg.method] > 0) await sleep(w.delayMethods[msg.method]);
   if (msg.method === "tools/call" && (w.dropTools ?? {})[msg.params.name] > 0) {
     w.dropTools[msg.params.name]--;
     saveWorld(w);
