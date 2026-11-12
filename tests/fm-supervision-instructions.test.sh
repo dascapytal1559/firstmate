@@ -7,6 +7,29 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-supervision-instructions)
 RENDER="$ROOT/bin/fm-supervision-instructions.sh"
+# A run inside a T3 Code thread inherits its id; only the test that wants the
+# T3 thread protocol sets it.
+unset T3CODE_THREAD_ID
+
+# A session holding the lock inside a T3 thread, on any harness, learns when a
+# wake turn flags its end to alert; outside T3, or read-only, nothing changes.
+test_t3_thread_alert_protocol_only_in_a_locked_t3_session() {
+  local harness out plain
+  for harness in claude codex pi grok unknown; do
+    plain=$("$RENDER" --harness "$harness")
+    assert_not_contains "$plain" 'alert_when_done' "$harness: a session outside T3 rendered the T3 alert protocol"
+    out=$(T3CODE_THREAD_ID='mcp:test-thread' "$RENDER" --harness "$harness")
+    assert_contains "$out" 't3_thread_update' "$harness: a T3 session did not name the alert tool"
+    assert_contains "$out" 'action: "alert_when_done"' "$harness: a T3 session did not name the alert action"
+    assert_contains "$out" 'Captain, shipshape.' "$harness: the T3 alert protocol did not exclude the no-op reply"
+    assert_contains "$out" 'older T3' "$harness: the T3 alert protocol did not say to skip an older T3"
+    [ "$(printf '%s\n' "$out" | head -n "$(printf '%s\n' "$plain" | wc -l)")" = "$plain" ] \
+      || fail "$harness: the T3 alert protocol changed the block it should only append to"
+    out=$(T3CODE_THREAD_ID='mcp:test-thread' "$RENDER" --harness "$harness" --read-only 1)
+    assert_not_contains "$out" 'alert_when_done' "$harness: a read-only T3 session rendered the T3 alert protocol"
+  done
+  pass "renderer appends the T3 alert protocol only for a locked session inside a T3 thread"
+}
 
 test_selected_harness_block_only() {
   local out
@@ -397,6 +420,7 @@ test_literal_paths_in_rendered_snippets() {
 }
 
 test_literal_paths_in_rendered_snippets
+test_t3_thread_alert_protocol_only_in_a_locked_t3_session
 test_supervision_host_protocol_on_a_claude_home_unless_off
 test_supervision_host_protocol_on_every_arm_owner
 test_selected_harness_block_only

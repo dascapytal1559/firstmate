@@ -381,6 +381,7 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
 
 - **Pinning.** Every `recover` pins the home's own thread (the one the away daemon would find) as its project's coordinator where the server advertises `coordinatorRestartNote`, so the note reaches it after every start, even one that cut no crew run.
   The note is an ordinary user turn, not Firstmate operational input, so a main follows it whatever agent runs it, and Firstmate adds no hook of its own on the main.
+  On the fork a pinned coordinator's notification-started turns end without an alert; the [T3 thread protocol](supervision-protocols/t3-thread.md), rendered into the session-start block of a main running as a T3 thread, owns when such a turn asks to alert.
 - **Recovery.** When `serverStartedAt` differs from the one the home last handled, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens an idle session or steers a resumed run, and the digest lists them under `T3 RESTART`.
   A worker whose current claim is stamped after the restart has already resumed and said where it stands, so it gets no steer; a busy resumed run without such a line is still steered, since being busy does not show it checked what the restart took.
   Workers with an open decision, a captain-held wait, or a terminal line are left alone, and an archived thread is reported rather than rung.

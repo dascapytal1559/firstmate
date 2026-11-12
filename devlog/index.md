@@ -1145,3 +1145,26 @@ What was built:
 The remote job queue that already exists was looked at first and not reused: it serves only tracked Firstmate scripts with bounded output and short timeouts, which a long test sweep is not.
 
 The evidence is the regression suites: a new suite for the launcher (detachment, outcomes, timeout, stop, leftovers, delivery including a lost job and the watcher's own cycle, cleanup), the idle check with a detached job and with a runner still inside a caller's tree, the cleanup suite with a job working outside the copy, and the brief scaffold.
+
+## 45. Pings only for turns that need the captain (12 November 2026)
+
+![Which FirstMate turns ping: a turn the captain starts pings as before; an automatic turn ending with a PR, finding or blocker calls alert_when_done and pings; an automatic turn ending shipshape or routine stays quiet](media/t3-alert-when-done.svg)
+
+The ask:
+
+> I think T3 code at the moment still pings me, like plays the ping sound whenever a worker of first mate finishes their work. I think the desired result is only when top level threads finishes the turn I should get that ping sound.
+
+And then:
+
+> Yeah, I agree. First Mate should only ping me when a turn has finished. And I guess especially a turn that needs my attention, not the shipshape turns. That would be the ideal solution.
+
+The T3 half landed in the T3 fork first: on a pinned coordinator thread, a turn that a notification started ends quietly, and an agent that needs the user calls `t3_thread_update` with `action: "alert_when_done"` during the turn to make its end ping as usual.
+Turns the captain starts with his own message still ping.
+
+This is FirstMate's half.
+A FirstMate session holding the helm inside a T3 thread now gets a short T3 thread protocol in its session-start block, on whichever model runs it.
+It says to make that call once in an automatic turn that ends with something the captain must hear at once (work ready for review or landed, finished findings, a decision, a real blocker or failure, a credential need), never for a "shipshape" or routine supervision turn, and to skip it on a T3 that does not offer the action.
+The call names no thread, which T3 reads as the caller's own, so no lookup is needed.
+Outside T3, and in a read-only session, the block is unchanged.
+
+The evidence is the supervision-instructions suite: across five harnesses the protocol appears only for a locked session inside a T3 thread, and it appends to the block without changing it.

@@ -9,7 +9,9 @@
 # (docs/supervision-protocols/supervision-host.md, whose lines tagged
 # "{<harness>,...} " render only for the listed harnesses), and Grok's arm
 # command becomes the host; on a home that does not run it the output is
-# unchanged.
+# unchanged. A session holding the lock inside a T3 Code thread (T3 sets
+# T3CODE_THREAD_ID, on any harness) also gets docs/supervision-protocols/t3-thread.md,
+# which says when a wake turn flags its end to alert the captain.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -336,5 +338,9 @@ render_snippet
 printf '\n'
 if [ -n "$HOST_SNIPPET" ]; then
   render_snippet "$HOST_SNIPPET"
+  printf '\n'
+fi
+if [ "$READ_ONLY" -eq 0 ] && [ -n "${T3CODE_THREAD_ID:-}" ]; then
+  render_snippet "$DOC_DIR/t3-thread.md"
   printf '\n'
 fi
