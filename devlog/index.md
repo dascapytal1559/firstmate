@@ -1113,3 +1113,35 @@ What was built:
 
 The evidence is the regression suites against the fake T3 server: the T3 client (publish, race, old T3, fence), a new suite for the helper including the watcher's close notice and a stale-alarm control, the crew card, the Bridge, the hold lifecycle, cleanup and its slot-safety cases, the inactive-outcome sweep, and the session-start digest.
 No live thread was touched; the first real kept review is the integrated check.
+
+## 44. Long test runs that a T3 restart cannot cut (12 November 2026)
+
+![Before: a worker's 29-suite test run counted as busy, so a staged T3 restart waited about 50 minutes. After: the run is handed to fm-job.sh outside T3's process tree, the fleet reads idle, T3 restarts at once, and the run's result reaches the worker's inbox when it ends](media/detached-jobs.svg)
+
+The ask:
+
+> I have an intention to keep day to day changes built pretty fast so I can not stop T three code from restarting. I guess we can also consider an approach of running the testing or yeah, running the testing in a like separate terminal so it frees up T3 code restart. How will we do it most elegantly?
+
+A T3 restart stops every process T3 started, and a worker's background test run is one of them, so since a quiet restart cut such a run on 7 November the idle check has counted a worker busy while its own run is going.
+That kept the staged restart waiting on every long run, about 50 minutes for one worker's 29-suite run.
+After the design below was laid out, the answer was:
+
+> Yeah, this sounds good actually. Let's start it.
+
+What was built:
+
+- A launcher, `bin/fm-job.sh start`, that a worker hands a long command to.
+  It starts the command through a double fork and a new session, so the run is reparented to init and no longer belongs to the worker or to T3, with its output in a log.
+- A small record per job under the task's state: the command, the runner's process and identity, the log, and, once it ends, the exit code and an outcome of passed, failed, timed out, stopped, or lost.
+  A job has a timeout, and when it ends anything it left running in its process group is stopped too.
+- The watcher sends each ended job's result to its worker through the durable steering inbox: outcome, exit code, run time, log path, and the log's last lines.
+  The record waits there through a restart, and its doorbell starts the worker's next turn.
+  A job whose runner vanished, as after a reboot, is reported as lost rather than waited on forever.
+- The idle check leaves a job's processes out, but only while its runner is the recorded process and its parent is init, which is the proof that a restart cannot reach it.
+  A worker waiting only on its job reads idle, so the staged restart can go at once.
+- Cleanup stops any job still running and removes its records, even a job working outside the task's copy.
+- Every generated worker brief now says to run anything longer than a few minutes this way, declare a `paused:` wait naming the job, and end the turn; a no-mistakes run is left as it was.
+
+The remote job queue that already exists was looked at first and not reused: it serves only tracked Firstmate scripts with bounded output and short timeouts, which a long test sweep is not.
+
+The evidence is the regression suites: a new suite for the launcher (detachment, outcomes, timeout, stop, leftovers, delivery including a lost job and the watcher's own cycle, cleanup), the idle check with a detached job and with a runner still inside a caller's tree, the cleanup suite with a job working outside the copy, and the brief scaffold.

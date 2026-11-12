@@ -3694,6 +3694,15 @@ event_wait_or_sleep() {
   esac
 }
 
+# Detached jobs (bin/fm-job.sh): hand each ended job's result to its worker
+# through the steering inbox. Silent and never a wake: the worker, not
+# firstmate, acts on the result. Off costs one glob.
+detached_job_tick() {
+  compgen -G "$STATE/*.jobs/*/record" >/dev/null || return 0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-job.sh" deliver </dev/null >/dev/null 2>&1 \
+    || triage_log "detached-job result delivery unavailable"
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -4211,6 +4220,8 @@ while :; do
   # repost after grace, and escalate once if the recovery turn is also missed.
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
+
+  detached_job_tick
 
   # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the captain's
   # decisions (bin/fm-t3-needs-me.sh) are brought in line here as the

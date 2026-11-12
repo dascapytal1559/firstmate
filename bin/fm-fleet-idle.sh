@@ -31,7 +31,14 @@
 #     counted either, so the prompt left behind by an exited agent does not
 #     keep its worker active. So a paused wait with nothing running (captain
 #     feedback, a PR maintainer) reads idle, and a paused wait on the
-#     worker's own background job does not. The process listing comes from
+#     worker's own background job does not. A detached job the worker started
+#     with bin/fm-job.sh is the exception: its runner and every process under
+#     it are left out while the runner is the recorded live process and its
+#     parent is init (or a systemd user manager), which proves it is no longer
+#     a descendant of the agent or the app hosting it, so restarting that app
+#     cannot stop it. A worker waiting only on such a job reads idle, and a job
+#     whose runner is still inside the agent's tree counts as before. The
+#     process listing comes from
 #     /proc where it exists, else lsof;
 #     when neither can list working directories this exits 2 rather than
 #     guess.
@@ -157,13 +164,15 @@ cwd_table() {
   '
 }
 
-# running_work <worktrees-file> [pane-pids]: for each "<id><TAB><worktree>"
-# line, print "<id><TAB><pid> <command>" for the first process working inside
-# that worktree that is not the agent, in the agent's process group, one of
-# the agent's parents, or a shell among the space-separated pane-pids of dead
-# endpoints. Returns 2 when processes cannot be listed.
+# running_work <worktrees-file> [pane-pids] [job-runner-pids]: for each
+# "<id><TAB><worktree>" line, print "<id><TAB><pid> <command>" for the first
+# process working inside that worktree that is not the agent, in the agent's
+# process group, one of the agent's parents, a shell among the space-separated
+# pane-pids of dead endpoints, or a detached job: a process at or under one of
+# the space-separated job-runner-pids whose runner's parent is init or a
+# systemd user manager. Returns 2 when processes cannot be listed.
 running_work() {
-  local wts=$1 panes=" ${2-} " tmp candidates agents agent_groups skip_pids id pid ppid pgid comm
+  local wts=$1 panes=" ${2-} " runners=${3-} tmp candidates agents agent_groups skip_pids id pid ppid pgid comm
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-fleet-idle.XXXXXX") || return 2
   if ! LC_ALL=C ps -axo pid=,ppid=,pgid=,comm= > "$tmp/ps" 2>/dev/null \
     || ! cwd_table > "$tmp/cwd" || [ ! -s "$tmp/cwd" ]; then
@@ -202,9 +211,18 @@ running_work() {
   done <<EOF
 $candidates
 EOF
-  printf '%s\n' "$candidates" | awk -F '\t' -v agents="$agents" -v groups="$agent_groups" -v panes="$skip_pids" '
-    FILENAME == ARGV[1] { split($0, f, " "); parent[f[1]] = f[2]; next }
+  printf '%s\n' "$candidates" | awk -F '\t' -v agents="$agents" -v groups="$agent_groups" -v panes="$skip_pids" -v runners="$runners" '
+    FILENAME == ARGV[1] {
+      split($0, f, " "); parent[f[1]] = f[2]
+      c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); comm[f[1]] = c
+      next
+    }
     FNR == 1 {
+      n = split(runners, r, " ")
+      for (i = 1; i <= n; i++) {
+        pp = parent[r[i]]
+        if (pp == 1 || comm[pp] ~ /(^|\/)systemd$/) detached[r[i]] = 1
+      }
       n = split(panes, s, " ")
       for (i = 1; i <= n; i++) skip[s[i]] = 1
       n = split(agents, a, " ")
@@ -216,7 +234,14 @@ EOF
       for (i = 1; i <= n; i++) group[g[i]] = 1
     }
     $2 == "" || ($2 in skip) || ($4 in group) || ($1 in seen) { next }
-    { seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $5 }
+    {
+      p = $2
+      for (hop = 0; p != "" && p > 1 && hop < 64; hop++) {
+        if (p in detached) next
+        p = parent[p]
+      }
+      seen[$1] = 1; printf "%s\t%s %s\n", $1, $2, $5
+    }
   ' "$tmp/ps" -
   rm -rf "$tmp"
   return 0
@@ -247,7 +272,11 @@ done
 if [ -n "$idle_worktrees" ]; then
   wts_file=$(mktemp "${TMPDIR:-/tmp}/fm-fleet-idle-wts.XXXXXX") || { printf 'error: cannot stage the worktree list\n' >&2; exit 2; }
   printf '%s' "$idle_worktrees" > "$wts_file"
-  if ! running=$(running_work "$wts_file" "$dead_panes"); then
+  job_runners=''
+  if compgen -G "$STATE/*.jobs/*/record" >/dev/null; then
+    job_runners=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" bash "$SCRIPT_DIR/fm-job.sh" live 2>/dev/null | cut -f2 | tr '\n' ' ')
+  fi
+  if ! running=$(running_work "$wts_file" "$dead_panes" "$job_runners"); then
     rm -f "$wts_file"
     printf 'error: cannot list running processes and their working directories (needs /proc or lsof)\n' >&2
     exit 2

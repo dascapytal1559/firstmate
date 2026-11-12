@@ -5521,6 +5521,37 @@ test_leaked_tasktmp_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's per-task tasktmp is reaped by teardown too"
 }
 
+test_detached_job_is_stopped_and_its_records_removed() {
+  local case_dir rc runner pgid
+  case_dir=$(make_case detached-job-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  mkdir -p "$case_dir/elsewhere"
+
+  # A job working outside the worktree, which the cwd-based reap cannot see.
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" FM_JOB_KILL_GRACE=1 \
+    "$ROOT/bin/fm-job.sh" start task-x1 --cwd "$case_dir/elsewhere" -- sleep 300 >/dev/null \
+    || fail "detached-job-reap: the job did not start"
+  runner=$(sed -n 's/^runner_pid=//p' "$case_dir/state/task-x1.jobs/1/record")
+  for _ in $(seq 1 50); do
+    pgid=$(sed -n 's/^command_pgid=//p' "$case_dir/state/task-x1.jobs/1/record")
+    [ -z "$pgid" ] || break
+    sleep 0.1
+  done
+  kill -0 -- "-$pgid" 2>/dev/null || fail "detached-job-reap: the job's command is not running"
+
+  rc=0
+  FM_JOB_KILL_GRACE=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "detached-job-reap: teardown should succeed"
+  if kill -0 -- "-$pgid" 2>/dev/null; then
+    kill -KILL -- "-$pgid" "$runner" 2>/dev/null || true
+    fail "detached-job-reap: the job's command survived teardown"
+  fi
+  assert_absent "$case_dir/state/task-x1.jobs" "detached-job-reap: teardown left the job records behind"
+  pass "teardown stops a task's detached job, wherever it works, and removes its records"
+}
+
 test_lsof_absent_reaps_tmux_process_group() {
   local case_dir rc pid path_without_lsof
   case_dir=$(make_case lsof-absent-process-group-reap)
@@ -6775,6 +6806,7 @@ test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
+test_detached_job_is_stopped_and_its_records_removed
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed

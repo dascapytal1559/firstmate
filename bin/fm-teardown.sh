@@ -329,6 +329,13 @@
 #     root still exists, so the account's healthy LaunchAgent worker and every
 #     live remote secondmate worker are out of scope. Best effort: a sweep
 #     failure never blocks this teardown.
+#   Fix 4 - stop the task's detached jobs. A job started with bin/fm-job.sh
+#     runs in its own session reparented to init, so neither the endpoint
+#     close nor Fix 2 can be relied on to reach it (its command may work
+#     outside the worktree). Just before Fix 2, `fm-job.sh reap` stops every
+#     job of this task that is still running and removes its job records;
+#     a job whose process group survives KILL refuses cleanup with the
+#     records kept, like a Fix 2 survivor.
 # After Fix 1 and Fix 2, when config/pipeline-spend opts this home in, a ship
 # task whose local copy this teardown owns has its no-mistakes pipeline spend
 # recorded by bin/fm-pipeline-spend.sh, which owns the attribution and the
@@ -3984,6 +3991,12 @@ if [ "$BACKEND" = herdr ]; then
   fi
 fi
 
+if [ "$KIND" != secondmate ]; then
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-job.sh" reap "$ID" || {
+    echo "REFUSED: a detached job of $ID could not be stopped; preserving its records for retry." >&2
+    exit 1
+  }
+fi
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   reap_task_worktree_processes worktree "$WT" "$TASK_TMP"
 elif [ "$KIND" != secondmate ]; then
