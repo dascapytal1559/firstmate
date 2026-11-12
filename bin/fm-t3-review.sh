@@ -20,8 +20,8 @@
 #     The request id is derived from this home, the task, its spawn
 #     generation, the report, and the note, so running retain again with the
 #     same words is the same publication, and a revised report or handoff is
-#     a new revision with a new note. Exit 4 without writing anything when
-#     the task is not a T3 scout, the gate fails, the captain already closed
+#     a new revision with a new note. Exit 4, keeping no record, when the
+#     task is not a T3 scout, the gate fails, the captain already closed
 #     the review, or T3 cannot keep threads (then clean up as usual). An
 #     unreachable T3 still records the handoff, which the watcher retries.
 #   fm-t3-review.sh publish <task-id>
