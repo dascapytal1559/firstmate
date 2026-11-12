@@ -1630,10 +1630,161 @@ test_fence_retires_a_closed_thread() {
   pass "fm-t3-mcp fence: retires a stopped thread on exactly its worktree, proven, idempotent, and refused where T3 cannot"
 }
 
+iso_in() {  # <seconds from now, negative for the past> -> ISO timestamp
+  FM_IN="$1" node -e 'process.stdout.write(new Date(Date.now() + Number(process.env.FM_IN) * 1000).toISOString())'
+}
+
+# t3_coordinator <turn-start-iso> [steers]: thread `coord`, whose finished
+# turn run-old came from prompt msg-old and whose active turn run-c, started
+# at <turn-start-iso>, came from prompt msg-c, followed by 250 activity items
+# (so the prompt lies before the newest 200 positions) and <steers> more
+# prompts steered into run-c.
+# shellcheck disable=SC2016  # ${...} belongs to the JavaScript snippet.
+t3_coordinator() {
+  FM_AT="$1" FM_STEERS="${2:-0}" t3_fake_set '
+const prompt = (id, run) => ({ type: "user_message", status: "completed", text: "private words", runId: run, messageId: id });
+const items = [prompt("msg-old", "run-old"), { type: "assistant_message", status: "completed", text: "ok", runId: "run-old", messageId: "msg-old-reply" },
+  prompt("msg-c", "run-c")];
+for (let i = 0; i < 250; i++) items.push({ type: "command_execution", status: "completed", text: "ls", runId: "run-c" });
+for (let i = 0; i < Number(process.env.FM_STEERS); i++) items.push(prompt(`msg-steer-${i}`, "run-c"));
+const run = (runId, ordinal, status, at, done) => ({ runId, ordinal, status, requestedAt: at, startedAt: at, completedAt: done });
+w.threads = { ...(w.threads || {}), coord: { threadId: "coord", projectId: "proj-c", title: "coord", status: "running", activeRunId: "run-c",
+  latestRunId: "run-c", archived: false, worktreePath: null, pendingRequestCount: 0, providerInstanceId: "claudeAgent", runtimeMode: "full-access", items,
+  runs: [run("run-old", 1, "completed", "2026-11-12T00:00:00.000Z", "2026-11-12T00:01:00.000Z"), run("run-c", 2, "running", process.env.FM_AT, null)] } };'
+}
+
+# in_agent <thread-id> <verb> [args...]: the helper run as a command that the
+# agent of <thread-id> started: its parent bash stands for the agent, the one
+# process here whose environment T3 gave T3CODE_THREAD_ID.
+# shellcheck disable=SC2016  # $@ and $rc belong to the bash -c snippet.
+in_agent() {
+  local errf="$TMP_ROOT/stderr" thread=$1
+  shift
+  OUT=$(env T3CODE_THREAD_ID="$thread" bash -c 'node "$@"; rc=$?; exit "$rc"' _ "$HELPER" "$@" --token-file "$CRED" 2>"$errf")
+  RC=$?
+  ERR=$(cat "$errf")
+}
+
+test_cause_names_the_one_prompt_of_the_callers_turn() {
+  fresh_case cause '{"causedBy":true}'
+  t3_coordinator "$(iso_in -60)"
+  in_agent coord cause --thread coord
+  expect_code 0 "$RC" "cause should answer: $ERR"
+  assert_equals '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' "$(field "$OUT" causedBy)" \
+    "the cause is the one prompt of the caller's active turn, found behind a turn longer than the first window"
+  assert_equals true "$(field "$OUT" offered)" "a T3 with causes says it takes them"
+  assert_equals "" "$(t3_fake_mutations)" "cause changes nothing"
+  assert_equals "" "$(t3_fake_calls t3_thread_read | node -e '
+for (const l of require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean)) {
+  const a = JSON.parse(l);
+  if (a.view === "messages" && a.maxCharsPerItem !== 1) console.log(l);
+}')" "the message pages ask for no message text"
+  fresh_case cause-upstream
+  t3_coordinator "$(iso_in -60)"
+  in_agent coord cause --thread coord
+  assert_equals msg-c "$(field "$OUT" causedBy.messageId)" "a T3 that takes no cause still answers which prompt it was"
+  assert_equals false "$(field "$OUT" offered)" "and says it takes none"
+  pass "fm-t3-mcp cause: the caller's active turn's one prompt, read without its text"
+}
+
+# shellcheck disable=SC2016  # the stale job's positional parameters belong to its bash -c snippets.
+test_cause_answers_null_rather_than_guess() {
+  local bg
+  fresh_case cause-null '{"causedBy":true}'
+  t3_coordinator "$(iso_in -60)" 1
+  in_agent coord cause --thread coord
+  expect_code 0 "$RC" "an ambiguous turn is an answer, not a failure: $ERR"
+  assert_equals "" "$(field "$OUT" causedBy)" "a turn that received a steer has no single cause"
+  assert_contains "$(field "$OUT" reason)" "received 2 prompts" "the reason names the ambiguity"
+  t3_coordinator "$(iso_in 60)"
+  in_agent coord cause --thread coord
+  assert_equals "" "$(field "$OUT" causedBy)" "a process older than the turn has no cause from it"
+  assert_contains "$(field "$OUT" reason)" "started before the thread's current turn" "the reason says so"
+  t3_coordinator "$(iso_in -60)"
+  mcp cause --thread coord
+  assert_equals "" "$(field "$OUT" causedBy)" "a process no agent of that thread started has no cause"
+  assert_contains "$(field "$OUT" reason)" "does not run under thread coord's agent" "the reason says so"
+  in_agent coord cause --thread missing
+  assert_equals "" "$(field "$OUT" causedBy)" "a thread T3 lacks has no cause"
+  assert_contains "$(field "$OUT" reason)" "no thread missing" "the reason names the thread"
+  t3_fake_set 'w.threads.coord.activeRunId = null; w.threads.coord.status = "completed"'
+  in_agent coord cause --thread coord
+  assert_contains "$(field "$OUT" reason)" "no active turn" "an idle thread has no cause"
+  # A job an earlier turn left running (the inner bash, started now) calls
+  # later, inside a turn that began after it: that turn did not cause it.
+  t3_coordinator "$(iso_in 2.5)"
+  bg="$TMP_ROOT/stale-job"
+  env T3CODE_THREAD_ID=coord bash -c 'bash -c "sleep 4; node \"\$0\" cause --thread coord --token-file \"\$1\"; exit \$?" "$1" "$2" > "$3"; rc=$?; exit "$rc"' \
+    _ "$HELPER" "$CRED" "$bg"
+  assert_equals "" "$(field "$(cat "$bg")" causedBy)" "a job older than the turn borrows nothing from it"
+  assert_contains "$(field "$(cat "$bg")" reason)" "started before the thread's current turn" "the reason says so"
+  pass "fm-t3-mcp cause: null with a reason for a steered turn, a stale or foreign process, an unknown thread, and an idle one"
+}
+
+test_launch_and_send_carry_the_cause() {
+  local project cause thread before
+  cause='{"threadId":"coord","runId":"run-c","messageId":"msg-c"}'
+  printf brief > "$TMP_ROOT/brief.txt"
+  printf refused > "$TMP_ROOT/refused.txt"
+  fresh_case cause-carry '{"causedBy":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by "$cause"
+  expect_code 0 "$RC" "a launch with a cause T3 takes succeeds: $ERR"
+  thread=$(field "$OUT" threadId)
+  assert_equals "$cause" "$(field "$OUT" causedBy)" "the result names the cause T3 bound"
+  assert_equals "$cause" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" causedBy)" "the launch carries the cause"
+  mcp send --thread "$thread" --message-file "$TMP_ROOT/brief.txt" --client-request-id req-1 --caused-by "$cause"
+  expect_code 0 "$RC" "a send with a cause succeeds: $ERR"
+  assert_equals "$cause" "$(field "$(t3_fake_calls t3_thread_send | tail -1)" causedBy)" "the send carries the cause"
+  assert_equals recorded "$(field "$OUT" cause)" "the send reads its message back with that cause"
+  before=$(node -e 'process.stdout.write(String(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads).length))' "$T3_FAKE_WORLD")
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by '{"threadId":"coord","messageId":"msg-old-reply"}'
+  expect_code 3 "$RC" "a cause T3 refuses fails the launch"
+  assert_equals cause_refused "$(field "$OUT" error.code)" "the refusal is typed as the cause's"
+  assert_contains "$ERR" "is not a prompt in thread coord" "the refusal carries T3's reason"
+  assert_contains "$ERR" "no thread was launched" "and says nothing was launched"
+  assert_equals "$before" "$(node -e 'process.stdout.write(String(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads).length))' "$T3_FAKE_WORLD")" \
+    "T3 created no thread"
+  mcp send --thread "$thread" --message-file "$TMP_ROOT/refused.txt" --client-request-id req-2 --caused-by '{"threadId":"coord","runId":"run-old","messageId":"msg-c"}'
+  expect_code 3 "$RC" "a cause T3 refuses fails the send"
+  assert_equals cause_refused "$(field "$OUT" error.code)" "the send refusal is typed as the cause's"
+  assert_equals 0 "$(t3_fake_items "$thread" refused)" "the refused message was not taken"
+  t3_fake_set "w.bindCause = {threadId: 'coord', messageId: 'msg-old'}"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by "$cause"
+  expect_code 4 "$RC" "a thread that reads back another cause is refused"
+  assert_contains "$ERR" "causedBy differs" "the refusal names the cause"
+  assert_contains "$(t3_fake_calls t3_thread_organize)" '"action":"archive"' "the mis-bound thread is archived"
+  fresh_case cause-upstream-carry
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by "$cause"
+  expect_code 0 "$RC" "a T3 without causes launches without one: $ERR"
+  thread=$(field "$OUT" threadId)
+  assert_equals "" "$(field "$OUT" causedBy)" "and says none bound"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" causedBy)" "an undeclared cause is never sent"
+  mcp send --thread "$thread" --message-file "$TMP_ROOT/brief.txt" --client-request-id req-3 --caused-by "$cause"
+  expect_code 0 "$RC" "a T3 without causes takes the send without one: $ERR"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_send | tail -1)" causedBy)" "an undeclared cause is never sent on a send"
+  assert_equals none "$(field "$OUT" cause)" "the send reports no cause"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --caused-by '{"threadId":"coord"}'
+  expect_code 2 "$RC" "a cause without its message is invalid use"
+  mcp cause-check --json '{"messageId":"m","runId":"r","threadId":"t"}'
+  assert_equals '{"threadId":"t","runId":"r","messageId":"m"}' "$(field "$OUT" causedBy)" "cause-check puts the keys in order"
+  mcp cause-check --json '{"threadId":"t","messageId":"m","device":"phone"}'
+  expect_code 2 "$RC" "cause-check refuses any other key"
+  pass "fm-t3-mcp launch/send: the cause rides only where declared, reads back, and a refused cause is a typed failure with nothing created"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_review_publish_posts_once_and_proves_it
 test_review_publish_waits_yields_and_refuses
 test_fence_retires_a_closed_thread
+test_cause_names_the_one_prompt_of_the_callers_turn
+test_cause_answers_null_rather_than_guess
+test_launch_and_send_carry_the_cause
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
 test_login_refuses_other_ceilings

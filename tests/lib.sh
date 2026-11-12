@@ -98,6 +98,12 @@ unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 # can find the CLI; a case that verifies detection sets these itself.
 unset REX_SESSION REX_BLOCK
 
+# Clear the T3 thread identity T3 Code exports into each agent it runs, and any
+# explicit work cause. Run inside a T3 agent, every spawn, steer, and note in a
+# fixture would otherwise look up that real thread's prompt
+# (bin/fm-t3-cause-lib.sh); a case that verifies causes sets these itself.
+unset T3CODE_THREAD_ID FM_T3CODE_CAUSED_BY
+
 # Write the tracked default backlog configuration into a fixture home. Never copy
 # "$ROOT/.tasks.toml": an operator's primary checkout keeps a gitignored override
 # there (for example a beads backend at its live backlog), so a copy points the

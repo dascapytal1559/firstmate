@@ -112,6 +112,23 @@ The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else th
 It is sent as `parentThreadId` only where the `t3_thread_launch` schema declares it, and the launch read-back must then show `relationshipToParent` `crew` under exactly that parent, or the thread is archived and refused like any other mis-binding.
 A T3 without crew lineage, a firstmate not running in T3, or a home with several live threads launches the thread with no parent, which changes only how T3 groups it; lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
 
+### Work causes
+
+T3 Code's Usage page counts a worker's tokens to the phone or computer prompt that started it by following `causedBy`, the prompt a launch or a message names as its cause.
+Firstmate names that prompt at its durable boundaries, and [`bin/fm-t3-cause-lib.sh`](../bin/fm-t3-cause-lib.sh) is the one owner of how:
+
+- A spawn records it in the task record as `caused_by=` and sends it on the worker's launch and its brief; a relaunch keeps the recorded one.
+- A steer through `fm-send.sh` keeps it in the steer's inbox record, and every doorbell for that record carries it.
+- A note written with `fm-inbox.sh note` from inside a T3 turn keeps the prompt that made the agent write it, and `drain` shows it.
+
+The cause is the one prompt of the current T3 turn of the agent running the command, which T3 names in each agent's environment as `T3CODE_THREAD_ID`.
+Firstmate records nothing rather than guess: when that turn received more than one prompt (a steer or queued input joined it), when the command did not start inside that turn (a background job left over from an earlier turn), or when T3 cannot be read.
+`bin/fm-t3-mcp.mjs cause` owns the exact rule, and it never reads message text.
+Set `FM_T3CODE_CAUSED_BY` to `off` for no cause, or to a cause JSON (`{"threadId", "runId"?, "messageId"}`) to name one explicitly, such as the prompt a note recorded or one of several prompts a turn received.
+
+`causedBy` is sent only where T3's `tools/list` schema declares it, so an older T3 keeps working without it.
+A launch reads the thread back and refuses one that did not bind the cause; a cause T3 refuses fails the launch with nothing created, while a message whose cause T3 refuses is reported and sent again without it, so a steer never waits on its accounting.
+
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.
 
 ## Worker environment and channel statement
@@ -494,6 +511,7 @@ If a task's thread no longer reads back, release the task by hand:
 - Request-id deduplication holds within one T3 auth session only: every sign-in starts a new session, so resending an unconfirmed send, or retrying a frozen away-mode digest, after the captain signs in again can deliver it twice; verify such a message in T3 Code first.
 - Shell typing and Ctrl-U are unsupported; runtime Escape and Ctrl-C still interrupt the turn.
 - A Firstmate main session in a T3 thread is verified only for Claude; a Codex supervisor has no away mode on this backend because it has no tracked background tool for `start-native`, and T3 has no terminal for `start` to create.
+- A [work cause](#work-causes) is established only for a command an agent runs inside its own T3 turn on the same machine; an agent that runs commands in a shell older than its turn, a remote secondmate's steer, and a turn that received several prompts record none.
 - T3 checkpoints each turn as hidden refs under `refs/t3/orchestration-v2/checkpoints/` in the project clone; they are never pushed and do not affect the landed-work test.
 
 ## Regression entry points

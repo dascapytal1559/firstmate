@@ -122,6 +122,13 @@
 # without creating a reply expectation; its delivery id makes uncertain retries
 # idempotent while allowing a later identical instruction to be distinct.
 #
+# Work cause: a text send to a local target first settles the T3 prompt that
+# caused it (bin/fm-t3-cause-lib.sh owns that, FM_T3CODE_CAUSED_BY included,
+# and a malformed explicit value refuses with nothing sent). The inbox plane
+# keeps it in the steer's record, whose every doorbell then carries it to a T3
+# worker; the typed plane carries it on the T3 send. A remote target's steer
+# carries none.
+#
 # Remote secondmate delivery: the send crosses fm-on.sh to a host-local leg
 # (bin/fm-remote-secondmate-control.sh cmd_send_stdin) that writes the message as a
 # durable record into the remote home's steering inbox and rings the remote
@@ -279,6 +286,8 @@ fi
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-t3-cause-lib.sh
+. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
 
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the requested message WILL still be sent.' "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -942,6 +951,14 @@ else
   # The pre-marker answer text, kept for the closing resolved note so the
   # durable ledger records the plain answer without marker or corr bytes.
   RESOLVE_ANSWER_TEXT=$MESSAGE
+  # The T3 prompt that caused this steer (bin/fm-t3-cause-lib.sh), settled
+  # before anything is recorded so a malformed explicit cause refuses with
+  # nothing sent. A remote secondmate's inbox lives in another home and T3
+  # environment, so its steer records none.
+  SEND_CAUSE=
+  if [ "$TARGET_BACKEND" != remote ]; then
+    SEND_CAUSE=$(fm_t3_cause_resolve "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token" "this steer") || exit 1
+  fi
   if [ "$MARK_FROM_FIRSTMATE" = 1 ] && [ -n "$FIRE_AND_FORGET_ID" ]; then
     fm_message_mark_from_firstmate "$MESSAGE" MESSAGE
     MESSAGE="${FM_FROMFIRST_MARK}delivery=${FIRE_AND_FORGET_ID} ${MESSAGE#"$FM_FROMFIRST_MARK"}"
@@ -1166,10 +1183,10 @@ else
     fi
     if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
       INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
+        "${FIRE_AND_FORGET_ID:+fire-and-forget}" "$SEND_CAUSE") || inbox_write_rc=$?
     else
       INBOX_RECORD=$(fm_task_inbox_write "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
+        "${FIRE_AND_FORGET_ID:+fire-and-forget}" "$SEND_CAUSE") || inbox_write_rc=$?
     fi
     if [ "${inbox_write_rc:-0}" -ne 0 ]; then
       fm_lock_release "$INBOX_META_LOCK"
@@ -1270,7 +1287,8 @@ else
   # block: remote text rides the inbox leg above, and remote --key exits
   # earlier.
   send_rc=0
-  if verdict=$(fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
+  if verdict=$(FM_T3CODE_CAUSED_BY=$SEND_CAUSE \
+    fm_backend_send_text_submit "$TARGET_BACKEND" "$T" "$MESSAGE" "$retries" "$sleep_s" "$settle" "$EXPECTED_LABEL"); then
     :
   else
     send_rc=$?

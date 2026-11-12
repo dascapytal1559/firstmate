@@ -1168,3 +1168,27 @@ The call names no thread, which T3 reads as the caller's own, so no lookup is ne
 Outside T3, and in a read-only session, the block is unchanged.
 
 The evidence is the supervision-instructions suite: across five harnesses the protocol appears only for a locked session inside a T3 thread, and it appends to the block without changing it.
+
+## 46. Which message started each worker (12 November 2026)
+
+The ask, on 11 November:
+
+> I want to see my phone prompts and works ... that initiated directly from my phone. So I would probably need some sort of association of which worker started from which prompt.
+
+Asked whether to build usage by phone, computer and agent in both stages, he answered "Yes."
+The first stage gave T3's Usage page a "By origin" table, which found that over the last 30 days 38% of Claude tokens went to FirstMate worker threads and 17% to agent-started runs, none of it traceable to a device.
+T3 then learned to take a cause on a launch or a message and to follow those causes in Usage, so a worker's tokens count back to the phone or computer message that started it.
+This is FirstMate's half: it now tells T3 which message caused each worker and each steer.
+
+- **The cause is the turn's one prompt.**
+  When FirstMate spawns a worker, steers one, or an agent leaves it a note, the cause is the prompt that started the turn the command runs in, read from T3 by its ids, never its text.
+- **Nothing rather than a guess.**
+  A turn that received more than one prompt, such as a steer that joined it, records no cause, and neither does a background job left over from an earlier turn: it must have started inside the current turn to borrow that turn's prompt.
+  An explicit cause can still be given for those cases, such as the prompt a note recorded.
+- **Kept where the work is recorded.**
+  The worker's task record, each steer's inbox record, and each note keep their cause, so the association outlives T3's own view of it.
+- **Sent only where T3 takes it.**
+  An older T3 keeps working without causes.
+  A launch is checked by reading the thread back; a cause T3 refuses stops the launch with nothing created, while a steer goes out without it and says so, because a message should never wait on its accounting.
+
+The evidence is the T3 client, T3 backend, and inbox regression suites, run against a fake T3 that checks causes the way the fork does: the turn's prompt found behind a long turn, no cause for a steered turn or a stale background job, the cause carried on the launch, the brief, and every doorbell, and a refused cause reported without losing the message.

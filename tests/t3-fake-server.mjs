@@ -111,6 +111,17 @@
 //     review fields back as an older T3 would, absent; archiveOnNote archives
 //     the thread right after a new note lands, as a captain's close racing
 //     publication; reviewActions replaces the review actions organize lists.
+//   - every prompt a launch or send makes is a user_message item carrying
+//     its messageId and runId, and t3_thread_read view "messages" keeps only
+//     message items at their timeline positions, as T3 does.
+//   - a T3 with work causes (world causedBy, the T3 Code fork) declares
+//     causedBy {threadId, runId?, messageId} on t3_thread_launch and
+//     t3_thread_send and checks it as the fork's verifyCause does (the thread
+//     exists, the message is a user_message of it, runId matches) with the
+//     fork's invalid_request messages before anything is created or sent; it
+//     stores the cause on a launched thread (world bindCause overrides what
+//     it stores) and on the prompt's item, and t3_thread_read reports both.
+//     Without it the argument is dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -174,7 +185,13 @@ const TOOL_SCHEMAS = {
   t3_thread_launch: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
-      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : [])].map((k) => [k, {}])),
+      "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
+      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
+  }),
+  t3_thread_send: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "threadId", "message", "mode", "freshContext", "clientRequestId",
+      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -315,7 +332,12 @@ function refreshThread(t) {
   t.status = active?.status ?? latestRun(t)?.status ?? "idle";
 }
 
-function startRun(t, text) {
+// A prompt's timeline item: its message and run ids, and its cause when it
+// has one.
+const promptItem = (text, runId, messageId, causedBy) =>
+  ({ type: "user_message", status: "completed", text, runId, messageId, ...(causedBy ? { causedBy } : {}) });
+
+function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefined) {
   const runId = `run:${randomUUID()}`;
   t.runs = t.runs ?? [];
   const ordinal = Math.max(0, ...byOrdinal(t).map((r, i, all) => r.ordinal ?? all.length - i)) + 1;
@@ -324,8 +346,18 @@ function startRun(t, text) {
   t.status = "running";
   t.latestRunId = runId;
   t.items = t.items ?? [];
-  t.items.push({ type: "user_message", status: "completed", text });
+  t.items.push(promptItem(text, runId, messageId, causedBy));
   return runId;
+}
+
+// The fork's verifyCause: null when <c> names a prompt, else its refusal.
+function causeProblem(threads, c) {
+  const t = threads[c.threadId];
+  if (!t || t.deleted) return err("invalid_request", `causedBy: thread ${c.threadId} was not found.`);
+  const m = (t.items ?? []).find((it) => it.type === "user_message" && it.messageId === c.messageId);
+  if (!m) return err("invalid_request", `causedBy: message ${c.messageId} is not a prompt in thread ${c.threadId}.`);
+  if (c.runId !== undefined && m.runId !== c.runId) return err("invalid_request", `causedBy: message ${c.messageId} is not part of run ${c.runId}.`);
+  return null;
 }
 
 function endRun(t, run, status) {
@@ -490,6 +522,11 @@ async function callTool(w, name, a) {
     case "t3_thread_launch": {
       const parent = w.crewLineage ? a.parentThreadId : undefined;
       if (parent !== undefined && !threads[parent]) return [notFound(parent), false];
+      const cause = w.causedBy ? a.causedBy : undefined;
+      if (cause !== undefined) {
+        const problem = causeProblem(threads, cause);
+        if (problem) return [problem, false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -513,8 +550,9 @@ async function callTool(w, name, a) {
         if (a.environment !== undefined || w.bindEnvironment !== undefined) n.environment = w.bindEnvironment ?? a.environment;
         if (a.instructions !== undefined || w.bindInstructions !== undefined) n.instructions = w.bindInstructions ?? a.instructions;
       }
+      if (cause !== undefined || w.bindCause !== undefined) n.causedBy = w.bindCause ?? cause;
       threads[id] = n;
-      if (a.message) startRun(n, a.message);
+      if (a.message) startRun(n, a.message, undefined, cause);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];
     }
     case "t3_thread_send": {
@@ -524,13 +562,19 @@ async function callTool(w, name, a) {
       w.requestIds = w.requestIds ?? {};
       const key = `${a.threadId}|${a.clientRequestId}`;
       if (a.clientRequestId && w.requestIds[key]) return [ok(w.requestIds[key]), false];
+      const cause = w.causedBy ? a.causedBy : undefined;
+      if (cause !== undefined) {
+        const problem = causeProblem(threads, cause);
+        if (problem) return [problem, false];
+      }
+      const messageId = `msg:${randomUUID()}`;
       let delivery = "steered";
-      if (t.activeRunId) t.items.push({ type: "user_message", status: "completed", text: a.message });
+      if (t.activeRunId) t.items.push(promptItem(a.message, t.activeRunId, messageId, cause));
       else {
-        startRun(t, a.message);
+        startRun(t, a.message, messageId, cause);
         delivery = "started";
       }
-      const out = { threadId: t.threadId, messageId: `msg:${randomUUID()}`, runId: t.activeRunId, status: "running", delivery };
+      const out = { threadId: t.threadId, messageId, runId: t.activeRunId, status: "running", delivery };
       if (a.clientRequestId) w.requestIds[key] = out;
       return [ok(out), true];
     }
@@ -538,7 +582,8 @@ async function callTool(w, name, a) {
       if (!t) return [notFound(a.threadId), false];
       if ((a.limit ?? 0) > 100) return [err("invalid_request", "limit must be <= 100"), false];
       // T3 pages forward from afterPosition (exclusive), oldest first.
-      const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1));
+      const shown = (it) => a.view !== "messages" || ["user_message", "assistant_message", "proposed_plan"].includes(it.type);
+      const matching = (t.items ?? []).map((it, position) => ({ ...it, position })).filter((it) => it.position > (a.afterPosition ?? -1) && shown(it));
       const items = matching.slice(0, a.limit ?? 50);
       const thread = {
         ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}),

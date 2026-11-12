@@ -749,6 +749,11 @@
 #   identity is owned by the parent home that holds its task metadata, while the
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
+# The T3 prompt that caused the task, as bin/fm-t3-cause-lib.sh settles it
+# (FM_T3CODE_CAUSED_BY overrides; a malformed value refuses before anything is
+# leased), is recorded as caused_by=<cause-json> and, on the t3code backend,
+# sent as causedBy on the worker's launch and its brief. A relaunch keeps the
+# recorded cause unless FM_T3CODE_CAUSED_BY is set. No cause writes no line.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -976,6 +981,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
+# shellcheck source=bin/fm-t3-cause-lib.sh
+. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-remote-herdr-identity-lib.sh
@@ -2207,6 +2214,15 @@ fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id" >&2
   exit 2
 }
+# The T3 prompt that caused this task (bin/fm-t3-cause-lib.sh), settled before
+# anything is leased or written. A relaunch is the same task, so it keeps the
+# recorded cause unless FM_T3CODE_CAUSED_BY says otherwise; it never borrows
+# the prompt of whatever turn relaunches it.
+if [ "$RELAUNCH" -eq 1 ] && [ -z "${FM_T3CODE_CAUSED_BY:-}" ]; then
+  SPAWN_CAUSE=$(fm_meta_get "$STATE/$ID.meta" caused_by)
+else
+  SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token" "the launch of $ID") || exit 1
+fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ]; then
   BRANCH="$BRANCH_PREFIX$ID"
   if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
@@ -6397,7 +6413,7 @@ require("fs").writeFileSync(file, JSON.stringify(env), { mode: 0o600 });
   T3CODE_CREATE_UNCERTAIN=1
   T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$title" \
     "$(git -C "$branch_dir" branch --show-current 2>/dev/null || true)" "$worktree" "$T3CODE_MODEL_SELECTION" \
-    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD") || rc=$?
+    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD" "$SPAWN_CAUSE") || rc=$?
   rm -f "$env_file" "$instructions_file"
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 1 ] || T3CODE_CREATE_UNCERTAIN=0
@@ -7351,7 +7367,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential", keys, " ")
+      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential caused_by", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -7383,6 +7399,7 @@ preserve_relaunch_meta() {
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+  [ -z "$SPAWN_CAUSE" ] || printf 'caused_by=%s\n' "$SPAWN_CAUSE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
   # non-opencode or undetectable task record stays byte-identical.
@@ -7993,7 +8010,7 @@ if [ "$BACKEND" = t3code ]; then
   # staged for a shell to source.
   T3CODE_BRIEF_TEXT=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || exit 1
   SPAWN_LAUNCH_SENT=1
-  fm_backend_t3code_turn_start "$T" "$T3CODE_BRIEF_TEXT" "$T3CODE_MODEL_SELECTION" || {
+  FM_T3CODE_CAUSED_BY=$SPAWN_CAUSE fm_backend_t3code_turn_start "$T" "$T3CODE_BRIEF_TEXT" "$T3CODE_MODEL_SELECTION" || {
     if [ "$?" -ne 7 ]; then
       echo "error: T3 refused the launch turn for $ID on thread $T; inspect the thread in T3 Code" >&2
       exit 1

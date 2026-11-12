@@ -636,6 +636,7 @@ A backend spawn refusal from a missing dependency, version gate, or unauthentica
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
 
 - Every new task records `endpoint_task_id=` as the cleanup binding between the metadata filename and its opaque runtime endpoint.
+- A task spawned from inside a T3 turn records `caused_by=` with the prompt that caused it, on any backend; a task with no established cause records none ([Work causes](t3code-backend.md#work-causes)).
 
 - A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`.
 
