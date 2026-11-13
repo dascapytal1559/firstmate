@@ -282,6 +282,30 @@ test_firstmate_archive_never_closes_a_decision() {
   pass "fm-t3-captain-sync.sh: FirstMate's own archive of a worker's thread never closes a decision on its card"
 }
 
+test_stale_thread_archive_after_a_move_never_closes_a_decision() {
+  local out own
+  make_home teardown-moved
+  FM_T3_W=$WORKER_THREAD t3_fake_set 'w.threads[process.env.FM_T3_W] = { threadId: process.env.FM_T3_W, projectId: "proj-fm", title: "Worker",
+    status: "completed", activeRunId: null, archived: false, worktreePath: "/tmp/wt", items: [], runs: [] }'
+  printf 'kind=ship\nbackend=t3code\nt3_thread_id=%s\n' "$WORKER_THREAD" > "$HOME_DIR/state/w2.meta"
+  captain hold w1 --origin w2 --reason "Grid or list?" >/dev/null 2>&1 || fail "hold should succeed"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_kill t3code "$2"' _ "$ROOT" "$WORKER_THREAD" >/dev/null 2>&1 \
+    || fail "the worker's thread should close"
+  add_action '{"seq":1,"commandId":"c1","itemId":"w1","revision":1,"type":"thread-archived","at":"2026-11-13T01:00:00.000Z"}'
+  # The record goes and a push moves the decision to its own thread before
+  # T3's action for the worker's card is applied.
+  rm -f "$HOME_DIR/state/w2.meta"
+  home_env "$ROOT/bin/fm-t3-needs-me.sh" sync >/dev/null 2>&1 || fail "the push should succeed"
+  own=$(jq -r '.w1 // ""' "$HOME_DIR/state/t3-needs-me/threads.json" 2>/dev/null)
+  [ -n "$own" ] && [ "$own" != "$WORKER_THREAD" ] || fail "the decision should move to a thread of its own"
+  out=$(sync_cmd apply-pending 2>&1) || fail "the stale archive should settle: $out"
+  assert_equals '"applied"' "$(world '[.acks[] | select(.seq == 1)][0].outcome')" "it is acknowledged"
+  assert_not_contains "$(body_of w1)" "not pursued" "an archive of a thread the item left never closes it"
+  assert_equals "{\"id\":\"$own\",\"finished\":true}" "$(item w1 .thread)" "and it stays on its own thread"
+  pass "fm-t3-captain-sync.sh apply: a thread-archived for a card the item has left changes nothing"
+}
+
 test_actions_on_one_item_apply_in_order() {
   local real out
   make_home order
@@ -390,6 +414,7 @@ test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive
 test_migration_keeps_an_open_decision_a_decision
 test_promoted_scout_is_no_kept_review
 test_firstmate_archive_never_closes_a_decision
+test_stale_thread_archive_after_a_move_never_closes_a_decision
 test_actions_on_one_item_apply_in_order
 test_archive_on_a_kept_card_archives_its_thread
 test_listener_rides_out_t3_down

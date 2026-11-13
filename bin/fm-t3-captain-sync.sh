@@ -47,7 +47,9 @@
 #     Archive on a decision on a worker still running (its card not
 #     finished) also leaves one wake, state/t3-captain-sync/<worker>.wake,
 #     asking firstmate to wind the worker down through its normal safe
-#     cleanup; the thread itself stays. A thread FirstMate archived itself
+#     cleanup; the thread itself stays. thread-archived acts only while the
+#     item's current thread reads archived or gone, since T3's action names
+#     no thread and the item may have moved since. A thread FirstMate archived itself
 #     (fm_backend_t3code_kill in bin/backends/t3code.sh, or the retirement
 #     of an item's own thread in bin/fm-t3-mcp.mjs decisions, marks it
 #     first) is never the captain's: its
@@ -195,9 +197,20 @@ cmd_apply() {
       ;;
     unsnooze) out=$(hold unsnooze "$id" 2>&1) || rc=$? ;;
     archive|thread-archived)
-      if [ "$type" = thread-archived ] && [ -n "$thread" ] && archived_by_firstmate "$thread"; then
-        echo "FirstMate archived $id's thread itself, so $id stays open"
-        return 0
+      if [ "$type" = thread-archived ]; then
+        if [ -n "$thread" ]; then
+          out=$(mcp state --thread "$thread" 2>"$WORK/state.err") \
+            || { echo "$id's thread could not be read: $(head -n 1 "$WORK/state.err")" >&2; return 1; }
+        fi
+        if [ -z "$thread" ] || { [ "$(printf '%s' "$out" | jq -r '.exists')" != false ] \
+          && [ "$(printf '%s' "$out" | jq -r '.archived')" != true ]; }; then
+          echo "$id no longer rides an archived thread, so it stays as it is"
+          return 0
+        fi
+        if archived_by_firstmate "$thread"; then
+          echo "FirstMate archived $id's thread itself, so $id stays open"
+          return 0
+        fi
       fi
       worker=''
       [ -z "$thread" ] || worker=$(thread_task "$thread") || worker=''
