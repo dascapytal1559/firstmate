@@ -115,8 +115,8 @@
 //     same id answers created:false with no new item, the same id with other
 //     text and a new id on an archived thread are refused as invalid_request.
 //     A fenced thread refuses t3_thread_send. World reviewsUnread reads the
-//     review fields back as an older T3 would, absent; archiveOnNote archives
-//     the thread right after a new note lands, as a captain's close racing
+//     review fields back as an older T3 would, absent; archiveOnTag archives
+//     the thread right after a tag lands, as a captain's close racing
 //     publication; reviewActions replaces the review actions organize lists.
 //   - every prompt a launch or send makes is a user_message item carrying
 //     its messageId and runId, and t3_thread_read view "messages" keeps only
@@ -693,7 +693,6 @@ async function callTool(w, name, a) {
       t.notes[a.clientRequestId] = { text, messageId, sequence: w.sequence };
       t.items = t.items ?? [];
       t.items.push({ type: "user_message", status: "completed", text, note: true, runId: null, itemId: `turn-item:message:${messageId}` });
-      if (w.archiveOnNote) t.archived = true;
       return [ok({ threadId: t.threadId, messageId, sequence: w.sequence, created: true }), true];
     }
     case "t3_thread_organize": {
@@ -708,6 +707,7 @@ async function callTool(w, name, a) {
             if (!tag) return [err("invalid_request", "This action needs `tag`."), false];
             const tags = t.tags ?? [];
             t.tags = a.action === "untag" ? tags.filter((x) => x !== tag) : tags.includes(tag) ? tags : [...tags, tag];
+            if (a.action === "tag" && w.archiveOnTag) t.archived = true;
             return done();
           }
           case "disable_auto_settle":

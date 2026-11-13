@@ -218,27 +218,31 @@ The T3 project of a torn-down secondmate home stays in T3 Code pointing at the r
 
 ### Retained reviews
 
-A finished T3 scout keeps its thread and its worker copy until the captain closes the thread, so he can read Firstmate's handoff where the exploration happened and keep asking there.
+A finished T3 scout keeps its thread and its worker copy until the captain closes the thread, so its card waits for him where the exploration happened.
 Ships, and scouts on every other backend, keep the cleanup above.
 [`bin/fm-t3-review.sh`](../bin/fm-t3-review.sh) owns the record and its transitions, [`bin/fm-t3-review-lib.sh`](../bin/fm-t3-review-lib.sh) is its one reader, and `bin/fm-t3-mcp.mjs` (`review-support`, `review-publish`, `fence`) owns the T3 calls; exact commands are in their headers.
 
-- **Handoff.** After reading the report and passing the captain-call completion gate, Firstmate runs `retain` with its summary and its fuller explanation.
-  The script composes one note in a fixed order, the summary, then the full explanation, then a link to `data/<id>/report.md` by absolute path, and saves it as `data/<id>/handoff-r<n>.md` before anything is sent.
-- **Publication.** The note is posted with `t3_thread_note`, which starts no worker turn, then the thread gets the exact tag `waiting for captain` and automatic settling switched off, and a read-back proves each.
-  The note's request id is derived from the home, task, spawn generation, report, and note, so a retry or a restart posts nothing twice, and a revised report or handoff appends a new note instead of rewriting the old one.
+- **Handoff.** After reading the report and passing the captain-call completion gate, Firstmate runs `retain` with its summary and its fuller explanation, and relays them in chat.
+  The script composes them in a fixed order, the summary, then the full explanation, then a link to `data/<id>/report.md` by absolute path, and saves that as `data/<id>/handoff-r<n>.md`, Firstmate's own record; nothing is posted into the thread.
+- **Publication.** The thread gets the exact tag `waiting for captain` and automatic settling switched off, and a read-back proves each; no worker turn starts.
+  The handoff's key is derived from the home, task, spawn generation, report, and handoff, so a retry or a restart changes nothing, and a revised report or handoff is recorded as a new revision.
   A busy thread waits for its turn to end, a failure stays kept for the watcher to retry, and nothing is archived as a fallback.
+- **Replies.** What the captain types on a kept card goes to FirstMate's thread, not the worker's, as one user message: a first line `**Reply · <card title>**`, a second line `kept-thread: <the card's thread id>`, a blank line, then his words.
+  `bin/fm-t3-needs-me.sh reply-task` reads the task behind that thread, and FirstMate treats his words as captain input on it; the card stays open until he archives it.
+- **Archive as park.** Archiving or deleting the card is his "done, not pursuing this": every captain call still open that was held from the review (`hold --origin`) or inventoried by its completion gate is closed as parked, recorded as his decision through `bin/fm-captain-hold.sh answer`, once, when the close is first noticed, so it leaves his open decisions.
+  A card that carried no open call just closes, and nothing is deleted: the report, the handoff, and the task's data stay.
 - **Old T3.** A T3 without these tools, or one whose reads lack `tags` or `autoSettleDisabled`, cannot keep threads; `retain` (or `publish`) then exits 4, dropping any handoff it had recorded, and the scout is cleaned up as usual. When the watcher's pass is the one to find this out, it drops the record and wakes firstmate with a `check: t3-review` cleanup notice.
   A missing read-back field always means "too old", never "not set".
 - **Card.** A published review reads `Waiting for captain` (see [Crew card status](#crew-card-status)); a real decision still appears on the Bridge exactly as before, and answering it never closes the exploration.
 - **Watcher and recovery.** An idle kept review never enters the stale alarms or the inactive-outcome sweep, and the session-start digest names it as kept, so nothing relaunches or steers it.
-  The watcher's minute pass reads each kept thread; an archived or deleted one is recorded as closed and wakes Firstmate once with a `check: t3-review <id>` notice, even when the old endpoint is gone.
-  A thread he reopens is kept again; Firstmate never unarchives, steers, or revives one.
+  The watcher's minute pass reads each kept thread; an archived or deleted one is recorded as closed, parks its open calls, and wakes Firstmate once with a `check: t3-review <id>` notice naming them, even when the old endpoint is gone.
+  A thread he reopens is tagged and kept again on the next pass; Firstmate never unarchives, steers, or revives one.
 - **Cleanup.** Teardown refuses a kept review, `--force` included, until T3 reads its thread archived or deleted, and an unreadable T3 refuses too.
   A close racing publication wins.
   Once closed, the review passes every ordinary gate; after the stop-and-archive proof above, the thread must also read back fenced on its recorded worktree, so a reopened thread can never run in a slot another task takes, and only then is the copy returned.
   A deleted thread needs no fence; a fence T3 cannot prove keeps the lease and the records.
 
-The T3 Code fork's `fork/README.md` "Threads kept for a reader" owns the note, tag, auto-settle, and fence contract.
+The T3 Code fork's `fork/README.md` "Threads kept for a reader" owns the tag, auto-settle, fence, and kept-card reply contract.
 A kept review holds one Treehouse lease for as long as the captain keeps the thread open, so it counts against the pool's capacity.
 
 ### Crew card status
@@ -250,7 +254,7 @@ The label says what only Firstmate knows about a live T3 ship or scout, first ma
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | A captain hold is open on the worker's own task or was raised for it with `--origin`, or the worker is a finished scout whose handoff was published into its kept thread ([Retained reviews](#retained-reviews)), and the worker is between turns. |
+| `Waiting for captain` | A captain hold is open on the worker's own task or was raised for it with `--origin`, or the worker is a finished scout whose thread is kept for the captain ([Retained reviews](#retained-reviews)), and the worker is between turns. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
 | `Waiting` | Between turns, the worker waits on something other than the captain: an open decision firstmate settles, a blocker, or a declared pause. |
 | `Ready` | Between turns, the worker's work is done. |

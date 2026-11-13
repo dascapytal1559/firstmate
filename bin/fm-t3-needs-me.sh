@@ -17,9 +17,13 @@
 #     the backstop. One pass, one T3 session, and one more each when the
 #     objectives, the routing table or the rules changed.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
-#     Prints the task id a captain reply from the Bridge names on its
-#     `needs-me-task: <task-id>` line (stdin without a file). Exit 1 when the
-#     message names none, 2 when it names more than one or a malformed id.
+#     Prints the task id a captain reply names (stdin without a file): a reply
+#     from the Bridge names it on its `needs-me-task: <task-id>` line, and one
+#     typed on a kept card names the card's thread on its
+#     `kept-thread: <thread-id>` line, whose task is the one record in
+#     state/*.meta with that t3_thread_id. Exit 1 when the message names
+#     none, or a thread no task records; 2 when it names more than one, a
+#     malformed id, or a thread more than one task records.
 #
 # Wanted state, per task: a live or aged hold is listed until it is answered
 # or closed, however long it waits; a dated hold (--until) is listed with
@@ -101,7 +105,7 @@ BACKOFF_SECONDS=900
 ALERT_AFTER=3
 
 usage() {
-  sed -n '13,22p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '13,26p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -121,8 +125,31 @@ slug_ok() {
   case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
 }
 
+# kept_thread_task <thread-id>: the task ids whose record names that thread,
+# one per line.
+kept_thread_task() {
+  local meta id
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    id=$(basename "$meta" .meta)
+    slug_ok "$id" || continue
+    [ "$(sed -n 's/^t3_thread_id=//p' "$meta" | tail -n 1)" = "$1" ] && printf '%s\n' "$id"
+  done
+  return 0
+}
+
 if [ "$VERB" = reply-task ]; then
-  ids=$(sed -n 's/^[[:space:]>]*needs-me-task:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' ${1:+"$1"} | sort -u)
+  message=$(cat ${1:+"$1"}) || exit 1
+  ids=$(printf '%s\n' "$message" | sed -n 's/^[[:space:]>]*needs-me-task:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' | sort -u)
+  threads=$(printf '%s\n' "$message" | sed -n 's/^[[:space:]>]*kept-thread:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' | sort -u)
+  if [ -n "$threads" ]; then
+    [ -z "$ids" ] || { echo "reply names both a task and a kept thread" >&2; exit 2; }
+    [ "$(printf '%s\n' "$threads" | wc -l | tr -d ' ')" = 1 ] || { echo "reply names more than one kept thread: $(printf '%s' "$threads" | tr '\n' ' ')" >&2; exit 2; }
+    case "$threads" in *[!A-Za-z0-9:._-]*) echo "reply names a malformed thread id: $threads" >&2; exit 2 ;; esac
+    ids=$(kept_thread_task "$threads")
+    [ -n "$ids" ] || { echo "no task records kept thread $threads" >&2; exit 1; }
+    [ "$(printf '%s\n' "$ids" | wc -l | tr -d ' ')" = 1 ] || { echo "kept thread $threads is recorded by more than one task: $(printf '%s' "$ids" | tr '\n' ' ')" >&2; exit 2; }
+  fi
   [ -n "$ids" ] || exit 1
   [ "$(printf '%s\n' "$ids" | wc -l | tr -d ' ')" = 1 ] || { echo "reply names more than one task: $(printf '%s' "$ids" | tr '\n' ' ')" >&2; exit 2; }
   slug_ok "$ids" || { echo "reply names a malformed task id: $ids" >&2; exit 2; }

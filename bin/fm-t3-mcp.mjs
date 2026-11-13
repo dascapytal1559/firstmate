@@ -220,22 +220,22 @@
 //   fm-t3-mcp.mjs review-support
 //     Whether this T3 can keep a finished thread for its reader
 //     (docs/t3code-backend.md "Retained reviews"): it offers t3_thread_note
-//     and its t3_thread_organize schema, where it lists actions, lists tag,
+//     (nothing posts one any more, but it marks the fork that ships the
+//     review actions, even from a schema that does not list its actions) and
+//     its t3_thread_organize schema, where it lists actions, lists tag,
 //     disable_auto_settle, and fence. Prints {supported, missing[]}; changes
 //     nothing.
-//   fm-t3-mcp.mjs review-publish --thread <id> --note-file <file> --request-id <id> --tag <tag>
-//     Publish a retained review's handoff into its thread in one session:
-//     one passive t3_thread_note (no run starts) under that stable request id,
-//     then the tag, then disable_auto_settle, then the read-back that proves
-//     each: the same note id posted again answers created:false with the same
-//     messageId, and the thread reads tags containing <tag> and
-//     autoSettleDisabled true. Prints outcome published (with messageId),
-//     closed (the thread reads archived, or the verified server no longer has
-//     it, at any step: a close wins over publication), or busy (a run, queued
-//     message, or pending request is open; nothing is posted, retry later).
-//     A read-back without the tags or autoSettleDisabled field is a T3 too
-//     old for this, never false: exit 4 (review_unsupported), as is a T3 that
-//     review-support refuses. A read-back that disagrees exits 1
+//   fm-t3-mcp.mjs review-publish --thread <id> --tag <tag>
+//     Keep a retained review's thread for its reader in one session: the
+//     tag, then disable_auto_settle, then the read-back that proves both (the
+//     thread reads tags containing <tag> and autoSettleDisabled true). It
+//     posts nothing into the thread and starts no run. Prints outcome
+//     published, closed (the thread reads archived, or the verified server
+//     no longer has it, at any step: a close wins over publication), or busy
+//     (a run, queued message, or pending request is open; nothing is changed,
+//     retry later). A read-back without the tags or autoSettleDisabled field
+//     is a T3 too old for this, never false: exit 4 (review_unsupported), as
+//     is a T3 that review-support refuses. A read-back that disagrees exits 1
 //     (review_unproven). Repeating the call is harmless.
 //   fm-t3-mcp.mjs fence --thread <id> --worktree <abs-path> --label <label>
 //     Retire a stopped thread from running before its worktree goes back to
@@ -1882,10 +1882,6 @@ const closedOutcome = (threadId, t) => ({ ok: true, threadId, outcome: "closed",
 
 async function reviewPublish(flags) {
   const threadId = need(flags, "thread");
-  const text = readFileSync(need(flags, "note-file"), "utf8").trim();
-  if (!text || text.length > 120_000) usage("--note-file must hold 1 to 120000 characters");
-  const clientRequestId = need(flags, "request-id");
-  if (clientRequestId.length > 256) usage("--request-id must be at most 256 characters");
   const tag = need(flags, "tag").trim();
   if (!tag || tag.length > 64 || /\n/.test(tag)) usage("--tag must be one line of 1 to 64 characters");
   const { session } = await verifiedSession(flags);
@@ -1906,19 +1902,9 @@ async function reviewPublish(flags) {
       throw err;
     }
   };
-  const note = () => session.call(REVIEW_NOTE_TOOL, { threadId, text, clientRequestId });
-  let r = await step(note);
-  if (r.closed) return r.closed;
-  const messageId = r.out?.messageId ?? null;
-  if (!messageId) throw new Refusal("review_unproven", `T3 accepted the note on ${threadId} but named no message`, 1);
   for (const args of [{ action: "tag", tag }, { action: "disable_auto_settle" }]) {
-    r = await step(() => session.call("t3_thread_organize", { threadId, ...args }));
+    const r = await step(() => session.call("t3_thread_organize", { threadId, ...args }));
     if (r.closed) return r.closed;
-  }
-  r = await step(note);
-  if (r.closed) return r.closed;
-  if (r.out?.created !== false || r.out?.messageId !== messageId) {
-    throw new Refusal("review_unproven", `the note on ${threadId} did not read back as the one posted (created=${r.out?.created}, messageId=${r.out?.messageId ?? null})`, 1);
   }
   t = await readThreadOrNull(session, threadId);
   if (!t || isArchived(t)) return closedOutcome(threadId, t);
@@ -1926,7 +1912,7 @@ async function reviewPublish(flags) {
   if (!t.tags.includes(tag) || t.autoSettleDisabled !== true) {
     throw new Refusal("review_unproven", `thread ${threadId} reads tags ${JSON.stringify(t.tags)} and autoSettleDisabled ${t.autoSettleDisabled}, not the tag "${tag}" with automatic settling off`, 1);
   }
-  return { ok: true, threadId, outcome: "published", messageId, tags: t.tags, autoSettleDisabled: true };
+  return { ok: true, threadId, outcome: "published", tags: t.tags, autoSettleDisabled: true };
 }
 
 async function fence(flags) {

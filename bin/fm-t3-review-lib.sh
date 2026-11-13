@@ -10,8 +10,8 @@
 #   backend=t3code    other backends keep today's cleanup;
 #   t3_review=<state> pending (the handoff is persisted, its publication not
 #                     yet proven), waiting (published and proven: the thread
-#                     carries the handoff note, the tag, and automatic
-#                     settling off), or closed (the captain archived or
+#                     carries the tag and automatic settling off; no
+#                     note is posted), or closed (the captain archived or
 #                     deleted the thread; cleanup may now run);
 #   t3_review_target= the thread the review was kept on, equal to the
 #                     record's t3_thread_id, so a record bound to another

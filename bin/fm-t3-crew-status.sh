@@ -13,8 +13,8 @@
 #
 # Labels, first match wins:
 #   Waiting for captain  a hold counts for the worker, or it is a finished
-#                        scout whose handoff was published into its kept
-#                        thread (bin/fm-t3-review-lib.sh reads t3_review
+#                        scout whose thread is proven kept for the
+#                        captain (bin/fm-t3-review-lib.sh reads t3_review
 #                        waiting), and it is between turns.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while

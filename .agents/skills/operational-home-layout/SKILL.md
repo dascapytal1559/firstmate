@@ -86,7 +86,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
-  <id>/handoff-r<n>.md  firstmate's exact handoff note for a kept T3 review, one per revision; bin/fm-t3-review.sh writes it and survives teardown
+  <id>/handoff-r<n>.md  firstmate's handoff record for a kept T3 review (never posted to T3), one per revision; bin/fm-t3-review.sh writes it and survives teardown
   needs-me/<id>.json the words Firstmate raised and updated a captain call with, for its T3 Bridge decision; written only by bin/fm-captain-hold.sh context, which owns the schema
   rules/inventory.json  every standing captain rule the T3 Bridge lists, with its approval or Firstmate's recommendation, and the rule-file edits his answers still need; kept by Firstmate, answers recorded with bin/fm-rules.sh, schema owned by bin/fm-t3-mcp.mjs rules-payload
   <id>/status.log <id>/status.<N>.log <id>/children/<child>/...  optional teardown archives; see docs/architecture.md "Task status archives"

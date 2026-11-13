@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # tests/fm-t3-review.test.sh - bin/fm-t3-review.sh, which keeps a finished T3
-# scout's thread for the captain: the handoff is recorded before anything is
-# published, published once as a passive note with the tag and automatic
-# settling off, retried rather than given up, and the captain's close is
-# noticed even when the thread is gone. Driven against the fake T3 server and
-# the real bin/fm-captain-hold.sh completion gate, with no live service.
+# scout's thread for the captain: firstmate's handoff is recorded locally and
+# nothing is posted into the thread, which gets the tag and automatic settling
+# off, retried rather than given up; the captain's close is noticed even when
+# the thread is gone, and parks the open calls the card carried. Driven
+# against the fake T3 server and the real bin/fm-captain-hold.sh, with no live
+# service.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -60,25 +61,20 @@ notes() {
   node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((w.threads[process.argv[2]].items || []).filter((i) => i.note).length))' "$T3_FAKE_WORLD" "$THREAD"
 }
 
-note_text() {  # [n] -> the nth note's text (default the last)
-  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const n = (w.threads[process.argv[2]].items || []).filter((i) => i.note); process.stdout.write(n.at(Number(process.argv[3] || -1))?.text ?? "")' "$T3_FAKE_WORLD" "$THREAD" "${1:-}"
-}
-
 thread_set() {  # <js on t>
   FM_T3_ID=$THREAD t3_fake_set "const t = w.threads[process.env.FM_T3_ID]; $1"
 }
 
-test_retain_publishes_one_handoff_in_three_levels() {
-  local text report
+test_retain_keeps_the_thread_and_posts_no_note() {
+  local report
   make_home publish
   retain
   expect_code 0 "$RC" "retain should keep and publish: $OUT"
   assert_equals waiting "$(meta t3_review)" "a proven publication waits for the captain"
   assert_equals "$THREAD" "$(meta t3_review_target)" "the review is bound to its own thread"
   assert_equals 1 "$(meta t3_review_revision)" "the first handoff is revision 1"
-  [ -n "$(meta t3_review_message)" ] || fail "the published note's id is recorded"
-  assert_equals 1 "$(notes)" "exactly one note"
-  text=$(note_text)
+  assert_equals 0 "$(notes)" "no Firstmate note is posted into the thread"
+  [ -z "$(t3_fake_calls t3_thread_note)" ] || fail "retain never calls the note tool"
   report="$(cd "$HOME_DIR/data/s1" && pwd -P)/report.md"
   assert_equals "**Firstmate summary**
 
@@ -90,8 +86,8 @@ The whole reasoning.
 
 With tradeoffs.
 
-[Full report (Markdown)]($report)" "$text" "the note holds the summary, then the fuller body, then the report link, in that order"
-  cmp -s <(printf '%s\n' "$text") "$HOME_DIR/data/s1/handoff-r1.md" || fail "the published words are exactly the persisted handoff"
+[Full report (Markdown)]($report)" "$(cat "$HOME_DIR/data/s1/handoff-r1.md")" \
+    "firstmate's handoff record holds the summary, then the fuller body, then the report link, in that order"
   node -e 'const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads[process.argv[2]];
 if (JSON.stringify(t.tags) !== JSON.stringify([process.argv[3]])) { console.error("tags " + JSON.stringify(t.tags)); process.exit(1); }
 if (t.autoSettleDisabled !== true || t.archived || (t.runs || []).length) { console.error("thread " + JSON.stringify(t)); process.exit(1); }' "$T3_FAKE_WORLD" "$THREAD" "$TAG" \
@@ -99,16 +95,17 @@ if (t.autoSettleDisabled !== true || t.archived || (t.runs || []).length) { cons
 
   retain
   expect_code 0 "$RC" "a repeat of the same handoff is harmless: $OUT"
-  assert_equals '1 1' "$(notes) $(meta t3_review_revision)" "a repeat posts nothing and keeps the revision"
+  assert_equals 1 "$(meta t3_review_revision)" "a repeat keeps the revision"
   printf 'A revised answer.\n' > "$HOME_DIR/summary.md"
   retain
   expect_code 0 "$RC" "a revised handoff publishes: $OUT"
-  assert_equals '2 2 waiting' "$(notes) $(meta t3_review_revision) $(meta t3_review)" "a revision appends a second note rather than rewriting the first"
+  assert_equals '2 waiting' "$(meta t3_review_revision) $(meta t3_review)" "a revision is recorded and the thread is kept again"
   assert_present "$HOME_DIR/data/s1/handoff-r1.md" "the earlier handoff stays as it was"
+  assert_present "$HOME_DIR/data/s1/handoff-r2.md" "the revised handoff is recorded beside it"
   printf '# Report\nRevised findings.\n' > "$HOME_DIR/data/s1/report.md"
   retain
-  assert_equals '3 3' "$(notes) $(meta t3_review_revision)" "a revised report is a new revision even with the same words"
-  pass "fm-t3-review retain: one note with summary, body and report link, the exact tag, automatic settling off, and a new note only per revision"
+  assert_equals '3 0' "$(meta t3_review_revision) $(notes)" "a revised report is a new revision even with the same words, and still posts nothing"
+  pass "fm-t3-review retain: the handoff is recorded for firstmate with summary, body and report link, and the thread gets the exact tag and automatic settling off but no note"
 }
 
 test_retain_refuses_what_it_must_not_keep() {
@@ -143,9 +140,9 @@ test_failures_retry_and_close_wins() {
   expect_code 75 "$RC" "a busy thread defers publication: $OUT"
   assert_equals pending "$(meta t3_review)" "the handoff is recorded before anything is published"
   assert_present "$HOME_DIR/data/s1/handoff-r1.md" "the handoff is persisted"
-  assert_equals 0 "$(notes)" "nothing is posted while the worker runs"
+  assert_equals '' "$(t3_fake_calls t3_thread_organize)" "nothing changes on the thread while the worker runs"
   thread_set 't.status = "completed"; t.activeRunId = null; t.runs[0].status = "completed";'
-  t3_fake_set 'w.failTools = { t3_thread_note: { code: "orchestration_error", message: "boom" } }'
+  t3_fake_set 'w.failTools = { t3_thread_organize: { code: "orchestration_error", message: "boom" } }'
   review publish s1
   expect_code 1 "$RC" "a failed publication is a failure"
   assert_equals pending "$(meta t3_review)" "a failed publication stays kept for retry, never archived"
@@ -153,9 +150,9 @@ test_failures_retry_and_close_wins() {
   t3_fake_set 'delete w.failTools'
   review reconcile
   expect_code 0 "$RC" "the watcher's pass retries: $OUT"
-  assert_equals '1 waiting' "$(notes) $(meta t3_review)" "the retry publishes exactly once"
+  assert_equals '0 waiting' "$(notes) $(meta t3_review)" "the retry keeps the thread, still with no note"
 
-  make_home race '{"archiveOnNote":true}'
+  make_home race '{"archiveOnTag":true}'
   retain
   expect_code 0 "$RC" "a close racing publication is no failure: $OUT"
   assert_equals closed "$(meta t3_review)" "the captain's close wins over publication"
@@ -187,8 +184,10 @@ test_reconcile_notices_his_close_and_reopen() {
   assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "bin/fm-teardown.sh s1" "the notice asks for the guarded cleanup"
   thread_set 't.archived = false;'
   review reconcile
-  assert_equals waiting "$(meta t3_review)" "a thread he reopens is kept again, not revived by firstmate"
+  assert_equals pending "$(meta t3_review)" "a thread he reopens is kept again, not revived by firstmate"
   assert_absent "$HOME_DIR/state/t3-review/s1.closed" "a reopen withdraws the close notice"
+  review reconcile
+  assert_equals waiting "$(meta t3_review)" "the next pass marks the reopened thread kept again"
   FM_T3_ID=$THREAD t3_fake_set 'delete w.threads[process.env.FM_T3_ID]'
   review reconcile
   assert_equals closed "$(meta t3_review)" "a deleted thread is his close even with the endpoint gone"
@@ -199,23 +198,91 @@ test_reconcile_notices_his_close_and_reopen() {
   pass "fm-t3-review reconcile: his archive or delete is recorded once with a notice, a reopen is kept again, and nothing is revived or steered"
 }
 
-# A pending record that cannot be published (its handoff is gone) fails only
-# itself: the same pass still notices his close of a review listed after it.
+# A pending record that cannot be published (T3 refuses to mark its thread)
+# fails only itself: the same pass still notices his close of a review listed
+# after it.
 test_reconcile_survives_a_record_it_cannot_publish() {
+  local other='mcp:00000000-0000-4000-8000-0000000000a0'
   make_home survive
   retain
   assert_equals waiting "$(meta t3_review)" "published first: $OUT"
+  FM_T3_ID=$other t3_fake_set 'w.threads[process.env.FM_T3_ID] = { threadId: process.env.FM_T3_ID, projectId: "proj-1", title: "a0",
+    status: "completed", activeRunId: null, archived: false, worktreePath: null, items: [], runs: [] };
+    w.failTools = { t3_thread_organize: { code: "orchestration_error", message: "boom" } };'
   fm_write_meta "$HOME_DIR/state/a0.meta" window=fm-a0 endpoint_task_id=a0 kind=scout harness=claude backend=t3code \
-    "t3_thread_id=$THREAD" "t3_review_target=$THREAD" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-a0
+    "t3_thread_id=$other" "t3_review_target=$other" t3_review=pending t3_review_revision=1 t3_review_request=fm-review-a0
   thread_set 't.archived = true;'
   review reconcile
-  assert_equals closed "$(meta t3_review)" "a review after one whose handoff is missing is still reconciled"
+  assert_equals closed "$(meta t3_review)" "a review after one that cannot publish is still reconciled"
   assert_present "$HOME_DIR/state/t3-review/s1.closed" "and leaves its close notice"
   assert_equals pending "$(sed -n 's/^t3_review=//p' "$HOME_DIR/state/a0.meta")" "the unpublishable record stays kept for retry"
   review publish a0
   expect_code 1 "$RC" "publishing it directly still fails on its own: $OUT"
-  assert_contains "$OUT" "handoff" "the failure names the missing handoff"
+  assert_contains "$OUT" "retried" "the failure says it is retried"
   pass "fm-t3-review reconcile: one record that cannot publish never stops the pass for the others"
+}
+
+# park_home <name>: a home with a published review s1 and four captain calls:
+# c1 held with --origin s1, c2 inventoried by s1's completion gate with no
+# origin, c3 another task's call, and c4 held from s1 and already answered.
+park_home() {
+  make_home "$1"
+  local fakebin
+  fakebin=$(fm_fakebin "$HOME_DIR")
+  fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
+  captain hold c1 --title "Pick the layout" --reason "Layout A or B?" --origin s1 >/dev/null 2>&1 || fail "hold c1"
+  captain hold c2 --title "Buy the camera" --reason "Buy it?" >/dev/null 2>&1 || fail "hold c2"
+  captain hold c3 --title "Elsewhere" --reason "Unrelated call" >/dev/null 2>&1 || fail "hold c3"
+  captain hold c4 --title "Earlier call" --reason "Answered already" --origin s1 >/dev/null 2>&1 || fail "hold c4"
+  printf 'Go with A.\n' > "$HOME_DIR/answer.txt"
+  captain answer c4 --decision-file "$HOME_DIR/answer.txt" >/dev/null 2>&1 || fail "answer c4"
+  printf 'decision_keys=c2\n' >> "$HOME_DIR/state/s1.meta"
+  retain
+  assert_equals waiting "$(meta t3_review)" "published first: $OUT"
+}
+
+captain() {  # <hold-args...>
+  env PATH="$HOME_DIR/fakebin:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
+    FM_CONFIG_OVERRIDE="$HOME_DIR/config" "$ROOT/bin/fm-captain-hold.sh" "$@"
+}
+
+row_state() {  # <task-id> -> open (held for the captain and not done) or closed
+  if captain open "$1" >/dev/null 2>&1; then echo open; else echo closed; fi
+}
+
+assert_parked() {  # <task-id> <label>
+  local body today
+  today=$(date -u +%Y-%m-%d)
+  assert_equals closed "$(row_state "$1")" "$2: the call leaves his open decisions"
+  body=$(cd "$HOME_DIR" && tasks-axi show "$1" --full 2>/dev/null)
+  assert_contains "$body" "Archived the card in T3 on $today: parked, not pursued." "$2: the archive is recorded as his decision"
+}
+
+test_archiving_the_card_parks_its_open_calls() {
+  park_home park-watch
+  thread_set 't.archived = true;'
+  review reconcile
+  assert_equals closed "$(meta t3_review)" "his archive is his close"
+  assert_parked c1 "a call held from the review"
+  assert_parked c2 "a call the review's gate inventoried"
+  assert_equals open "$(row_state c3)" "another task's call stays open"
+  assert_not_contains "$(cd "$HOME_DIR" && tasks-axi show c4 --full 2>/dev/null)" "parked, not pursued" "an answered call keeps his answer"
+  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "its open calls c1 c2 were recorded as parked" "the close notice names what was parked"
+  assert_present "$HOME_DIR/data/s1/report.md" "the report is never deleted"
+  assert_present "$HOME_DIR/data/s1/handoff-r1.md" "the handoff is never deleted"
+
+  captain hold c5 --title "A later call" --reason "Raised after the archive" --origin s1 >/dev/null 2>&1 || fail "hold c5"
+  review reconcile
+  assert_equals open "$(row_state c5)" "a call raised after the close is not parked by a later pass"
+
+  park_home park-cleanup
+  thread_set 't.archived = true;'
+  review check-close s1
+  expect_code 0 "$RC" "cleanup may run once he archived it: $OUT"
+  assert_parked c1 "cleanup noticing the archive first"
+  assert_parked c2 "cleanup noticing the archive first, inventoried call"
+  assert_equals open "$(row_state c3)" "cleanup leaves another task's call open"
+  pass "fm-t3-review: archiving a kept card parks the open calls it carried, once, as his decision, and deletes nothing"
 }
 
 # A pending handoff a T3 too old to keep threads refuses is dropped. Found by
@@ -339,12 +406,13 @@ test_watcher_never_calls_an_idle_kept_review_stale() {
   pass "fm-watch.sh: an idle kept review never enters the stale alarms, while an ordinary finished scout still does"
 }
 
-test_retain_publishes_one_handoff_in_three_levels
+test_retain_keeps_the_thread_and_posts_no_note
 test_watcher_wakes_once_when_he_closes_it
 test_watcher_never_calls_an_idle_kept_review_stale
 test_retain_refuses_what_it_must_not_keep
 test_failures_retry_and_close_wins
 test_reconcile_notices_his_close_and_reopen
 test_reconcile_survives_a_record_it_cannot_publish
+test_archiving_the_card_parks_its_open_calls
 test_reconcile_wakes_cleanup_when_t3_cannot_keep_it
 test_retain_refuses_an_option_without_its_value

@@ -1563,60 +1563,47 @@ notes_on() {  # <thread-id> -> how many note items the thread holds
   node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((w.threads[process.argv[2]].items || []).filter((i) => i.note).length))' "$T3_FAKE_WORLD" "$1"
 }
 
-test_review_publish_posts_once_and_proves_it() {
-  local note="$TMP_ROOT/review-note" first
+test_review_publish_keeps_the_thread_without_a_note() {
   fresh_case review-publish '{"reviews":true}'
   review_thread scout completed
-  printf '**Firstmate summary**\nShort.\n' > "$note"
   mcp review-support
   expect_code 0 "$RC" "review-support reads the gate: $ERR"
   assert_equals 'true' "$(field "$OUT" supported)" "the fork keeps threads for their reader"
-  mcp review-publish --thread scout --note-file "$note" --request-id req-r1 --tag 'waiting for captain'
+  mcp review-publish --thread scout --tag 'waiting for captain'
   expect_code 0 "$RC" "publication succeeds on an idle thread: $ERR"
-  assert_equals published "$(field "$OUT" outcome)" "the handoff is published"
-  first=$(field "$OUT" messageId)
-  [ -n "$first" ] || fail "publication names the note's message"
+  assert_equals published "$(field "$OUT" outcome)" "the thread is kept"
   assert_equals '["waiting for captain"]' "$(field "$OUT" tags)" "the read-back carries the exact tag"
-  assert_equals 1 "$(notes_on scout)" "exactly one note lands"
+  assert_equals 0 "$(notes_on scout)" "nothing is posted into the thread"
+  [ -z "$(t3_fake_calls t3_thread_note)" ] || fail "publication never calls the note tool"
   node -e 'const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads.scout;
-if ((t.runs || []).length || t.activeRunId || t.status !== "completed") { console.error("a note started a run"); process.exit(1); }
+if ((t.runs || []).length || t.activeRunId || t.status !== "completed") { console.error("publication started a run"); process.exit(1); }
 if (t.autoSettleDisabled !== true) { console.error("automatic settling stayed on"); process.exit(1); }' "$T3_FAKE_WORLD" \
     || fail "publication must start no run and switch automatic settling off"
   assert_equals 'tag disable_auto_settle' "$(t3_fake_calls t3_thread_organize | while read -r c; do field "$c" action; printf ' '; done | sed 's/ $//')" \
     "publication tags the thread and protects it from automatic settling, nothing else"
-  mcp review-publish --thread scout --note-file "$note" --request-id req-r1 --tag 'waiting for captain'
+  mcp review-publish --thread scout --tag 'waiting for captain'
   expect_code 0 "$RC" "a repeat is harmless: $ERR"
-  assert_equals "published $first" "$(field "$OUT" outcome) $(field "$OUT" messageId)" "a repeat answers the same note"
-  assert_equals 1 "$(notes_on scout)" "a repeat posts nothing new"
+  assert_equals published "$(field "$OUT" outcome)" "a repeat is published again"
   assert_equals '["waiting for captain"]' "$(field "$OUT" tags)" "a repeat adds no second tag"
-  printf '**Firstmate summary**\nRevised.\n' > "$note"
-  mcp review-publish --thread scout --note-file "$note" --request-id req-r2 --tag 'waiting for captain'
-  expect_code 0 "$RC" "a revised handoff publishes: $ERR"
-  assert_equals 2 "$(notes_on scout)" "a new revision gets its own note"
-  mcp review-publish --thread scout --note-file "$note" --request-id req-r1 --tag 'waiting for captain'
-  expect_code 3 "$RC" "an old request id with new text is refused, not posted"
-  assert_equals 2 "$(notes_on scout)" "the refused note posts nothing"
-  pass "fm-t3-mcp review-publish: one passive note, the exact tag, and automatic settling off, proven by read-back and harmless on a repeat"
+  pass "fm-t3-mcp review-publish: the exact tag and automatic settling off, proven by read-back, with no note, and harmless on a repeat"
 }
 
 test_review_publish_waits_yields_and_refuses() {
-  local note="$TMP_ROOT/review-note"
-  printf 'Summary.\n' > "$note"
   fresh_case review-busy '{"reviews":true}'
   review_thread busy running
   review_thread shut completed true
-  mcp review-publish --thread busy --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread busy --tag 'waiting for captain'
   expect_code 0 "$RC" "a busy thread is no failure: $ERR"
   assert_equals busy "$(field "$OUT" outcome)" "a running thread waits for its turn to end"
-  mcp review-publish --thread shut --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread shut --tag 'waiting for captain'
   assert_equals 'closed true' "$(field "$OUT" outcome) $(field "$OUT" archived)" "an archived thread is closed"
-  mcp review-publish --thread gone --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread gone --tag 'waiting for captain'
   assert_equals 'closed true' "$(field "$OUT" outcome) $(field "$OUT" missing)" "a deleted thread is closed"
-  assert_equals '' "$(t3_fake_mutations)" "nothing is posted to a busy, archived, or deleted thread"
+  assert_equals '' "$(t3_fake_mutations)" "nothing changes on a busy, archived, or deleted thread"
 
-  fresh_case review-race '{"reviews":true,"archiveOnNote":true}'
+  fresh_case review-race '{"reviews":true,"archiveOnTag":true}'
   review_thread raced completed
-  mcp review-publish --thread raced --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread raced --tag 'waiting for captain'
   expect_code 0 "$RC" "a close racing publication is no failure: $ERR"
   assert_equals closed "$(field "$OUT" outcome)" "the captain's close wins over publication"
 
@@ -1625,17 +1612,17 @@ test_review_publish_waits_yields_and_refuses() {
   mcp review-support
   assert_equals false "$(field "$OUT" supported)" "an upstream T3 cannot keep threads"
   assert_contains "$(field "$OUT" missing)" t3_thread_note "the probe names what is missing"
-  mcp review-publish --thread old --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread old --tag 'waiting for captain'
   expect_code 4 "$RC" "an upstream T3 is refused before anything is sent"
   assert_equals review_unsupported "$(field "$OUT" error.code)" "the refusal says the T3 is too old"
   assert_equals '' "$(t3_fake_mutations)" "an old T3 gets no call"
 
   fresh_case review-unread '{"reviews":true,"reviewsUnread":true}'
   review_thread unread completed
-  mcp review-publish --thread unread --note-file "$note" --request-id r --tag 'waiting for captain'
+  mcp review-publish --thread unread --tag 'waiting for captain'
   expect_code 4 "$RC" "a read-back without the review fields is a T3 too old, not false"
   assert_equals review_unsupported "$(field "$OUT" error.code)" "missing fields read as unsupported"
-  assert_equals 0 "$(notes_on unread)" "nothing is posted when the read cannot prove it"
+  assert_equals '' "$(t3_fake_mutations)" "nothing changes when the read cannot prove it"
   pass "fm-t3-mcp review-publish: waits out a busy thread, yields to the captain's close, and refuses a T3 too old to prove it"
 }
 
@@ -1822,7 +1809,7 @@ test_launch_and_send_carry_the_cause() {
 }
 
 t3_fake_start "$TMP_ROOT/server"
-test_review_publish_posts_once_and_proves_it
+test_review_publish_keeps_the_thread_without_a_note
 test_review_publish_waits_yields_and_refuses
 test_fence_retires_a_closed_thread
 test_cause_names_the_one_prompt_of_the_callers_turn

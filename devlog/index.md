@@ -1307,3 +1307,26 @@ Asked how to take it:
 The evidence is the park suite: a trusted comment restarts the worker, while a passer-by's comment, an unlisted bot, a thread opened by an untrusted author, and GitLab notes each leave it stopped and are reported once.
 The new cases fail against upstream's unchanged code.
 Park on review stays off in this home.
+
+## 51. A finished card takes a reply or an archive (13 November 2026)
+
+On finished scout cards waiting for him in T3:
+
+> Let's remove the first mate summary. Let's add back the input box where we can essentially reply to this ... but it gets forwarded to first mate, so first mate fully coordinates it ... instead of settling the button here is archive ... if the thing is needs like some action where there's some decision for me to make and I can choose to archive as well. And I think in that case it probably needs to communicate to first mate that I have like archived this
+>
+> — 13 November 2026
+
+This is FirstMate's half; the card's input box and Archive button are the T3 fork's.
+
+- **No summary note.**
+  A kept scout's thread is still tagged `waiting for captain` with automatic settling off, but nothing is posted into it.
+  FirstMate keeps its summary, explanation, and report link as its own handoff record and relays them in chat.
+- **His reply reaches FirstMate.**
+  What he types on a card arrives in FirstMate's thread as one message: `**Reply · <card title>**`, then `kept-thread: <thread id>`, then his words, the same shape as a Bridge decision reply.
+  `fm-t3-needs-me.sh reply-task` now reads either line, so FirstMate knows which task he means and treats his words as his input on it.
+- **Archive means done.**
+  On a card with no open decision, archiving just closes it.
+  On a card that still carries one, archiving records "Archived the card in T3 on <date>: parked, not pursued" as his decision on each open call held from that review, once, when the close is first noticed, so it leaves his open decisions; the wake FirstMate gets names what was parked.
+  Nothing is deleted: the report and the task's records stay.
+
+The evidence is the review, needs-me, and T3 helper suites: the thread is tagged with no note, a kept-card reply names its task and refuses anything ambiguous, and archiving parks the calls the card carried while leaving another task's call, an already answered call, and a call raised after the archive alone, on both the watcher's pass and cleanup's.

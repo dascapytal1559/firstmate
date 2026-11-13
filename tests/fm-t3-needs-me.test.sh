@@ -187,6 +187,47 @@ test_reply_marker() {
   pass "fm-t3-needs-me.sh reply-task: reads exactly one needs-me-task line"
 }
 
+# A reply typed on a kept card names the card's thread; its task is the one
+# record that keeps that thread.
+test_reply_on_a_kept_card() {
+  local state="$TMP_ROOT/kept-reply/state" f="$TMP_ROOT/kept-reply/reply.txt" out rc
+  local kept='mcp:7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d' other='mcp:00000000-0000-4000-8000-0000000000b2'
+  mkdir -p "$state"
+  fm_write_meta "$state/s1.meta" kind=scout backend=t3code "t3_thread_id=$kept" t3_review=waiting "t3_review_target=$kept"
+  fm_write_meta "$state/w9.meta" kind=ship backend=t3code "t3_thread_id=$other"
+  reply() {  # <message> -> OUT, RC
+    printf '%s' "$1" > "$f"
+    OUT=$(FM_STATE_OVERRIDE="$state" "$NEEDS_ME" reply-task "$f" 2>&1)
+    RC=$?
+  }
+  reply "**Reply · Camera options**
+kept-thread: $kept
+
+Looks good, but check the lens too.
+"
+  expect_code 0 "$RC" "a kept-card reply names its task: $OUT"
+  assert_equals s1 "$OUT" "the task is the one keeping that thread"
+  reply "**Reply · Camera options**
+kept-thread: mcp:00000000-0000-4000-8000-00000000dead
+
+Hello.
+"
+  expect_code 1 "$RC" "a thread no task records names no task: $OUT"
+  assert_contains "$OUT" "no task records" "the refusal says the thread is unknown"
+  reply "kept-thread: $kept
+needs-me-task: w2
+"
+  expect_code 2 "$RC" "a reply naming both a task and a thread is ambiguous: $OUT"
+  reply "kept-thread: mcp:../s1
+"
+  expect_code 2 "$RC" "a malformed thread id is refused: $OUT"
+  fm_write_meta "$state/s2.meta" kind=scout backend=t3code "t3_thread_id=$kept"
+  reply "kept-thread: $kept
+"
+  expect_code 2 "$RC" "a thread two records name is ambiguous: $OUT"
+  pass "fm-t3-needs-me.sh reply-task: a kept-card reply names the task that keeps its thread, and nothing ambiguous"
+}
+
 # --- sync ------------------------------------------------------------------
 
 test_unsupported_t3_or_no_credential_does_nothing() {
@@ -954,6 +995,7 @@ test_objectives_clear_once_and_back_off
 test_context_raise_update_and_guards
 test_context_starts_over_on_a_new_hold
 test_reply_marker
+test_reply_on_a_kept_card
 test_unsupported_t3_or_no_credential_does_nothing
 test_secondmate_home_takes_no_part
 test_list_carries_every_open_call
