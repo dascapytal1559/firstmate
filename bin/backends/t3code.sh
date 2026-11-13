@@ -466,8 +466,12 @@ fm_backend_t3code_kill() {  # <thread-id>
   local out mark
   mark=$(fm_backend_t3code_archive_mark "$1")
   { mkdir -p "${mark%/*}" && : > "$mark"; } || { echo "error: could not mark T3 thread $1 as archived by FirstMate" >&2; return 1; }
-  out=$(fm_backend_t3code_mcp close --thread "$1") || return 1
-  [ "$(printf '%s' "$out" | fm_backend_t3code_json_get closed)" = true ]
+  if out=$(fm_backend_t3code_mcp close --thread "$1") \
+    && [ "$(printf '%s' "$out" | fm_backend_t3code_json_get closed)" = true ]; then
+    return 0
+  fi
+  rm -f -- "$mark"
+  return 1
 }
 
 # fm_backend_t3code_home_env_cleanup: remove the link to the primary's

@@ -158,13 +158,14 @@ else
     || date +%s)
 fi
 case "$SNAPSHOT_EPOCH" in ''|*[!0-9]*) SNAPSHOT_EPOCH=$(date +%s) ;; esac
-# The observation date gates captain-hold deferral: a `hold-until` date still in
-# the future keeps a captain hold out of captain_actionable until it is due
-# (tasks-axi's own contract: the hold is inactive on and after that date).
-SNAPSHOT_TODAY=${SNAPSHOT_NOW%%T*}
+# The observation's local date gates captain-hold deferral: a `hold-until` date
+# still in the future keeps a captain hold out of captain_actionable until it is
+# due (tasks-axi's own contract: the hold is inactive from that date's local
+# midnight on).
+SNAPSHOT_TODAY=$(perl -e 'my @t = localtime($ARGV[0]); printf("%04d-%02d-%02d", $t[5] + 1900, $t[4] + 1, $t[3])' "$SNAPSHOT_EPOCH" 2>/dev/null)
 case "$SNAPSHOT_TODAY" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
-  *) SNAPSHOT_TODAY=$(date -u +%Y-%m-%d) ;;
+  *) SNAPSHOT_TODAY=$(date +%Y-%m-%d) ;;
 esac
 
 # Cross-home bounds are explicit so one broken or unexpectedly large home cannot

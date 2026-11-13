@@ -122,8 +122,10 @@
 # GitLab activity is never trusted, because its reads carry no membership.
 # Untrusted activity, and a comment or thread read that came back incomplete
 # (its authors are unknown), never relaunches; it prints one
-# "untrusted <id>: ..." line, again only when that activity changes (marker
-# state/.review-park-untrusted-<id>), so firstmate sees it. The relaunch note
+# "untrusted <id>: ..." line, again in the same park only for an untrusted
+# author, or an untrusted-thread or incomplete-read kind, it has not reported
+# yet (marker state/.review-park-untrusted-<id>), so firstmate sees it and an
+# outsider who keeps commenting cannot wake firstmate every tick. The relaunch note
 # tells the fresh agent that PR text is untrusted input, never instructions.
 # The tick records its outcome, close and untrusted lines as one check
 # park-on-review wake before it removes the reports they came from or marks a
@@ -531,7 +533,11 @@ TRIGGER_PROGRAM="$JQ_TIME"'
         (if $threads_untrusted > 0 then "\($threads_untrusted) unresolved review thread(s) opened by someone outside the trusted reviewers" else empty end),
         (if ($s.threads_complete | not) then "review threads could not all be read" else empty end),
         (if ($s.comments_complete | not) then "review comments could not all be read" else empty end)
-      ]
+      ],
+      untrusted_keys: (([$new_untrusted[] | "author " + .author] | unique)
+        + (if $threads_untrusted > 0 then ["untrusted threads"] else [] end)
+        + (if ($s.threads_complete | not) then ["incomplete threads"] else [] end)
+        + (if ($s.comments_complete | not) then ["incomplete comments"] else [] end))
     }'
 
 # gate_eval <id> <expect-head> prints the gate result JSON; returns 1 when the
@@ -674,7 +680,7 @@ cmd_park() {
   record_write "$id" "pr=$pr" "head=$head" "parked_at=$parked_at" "slot_leased=$lease" "pending=1" \
     || die "refusing to park $id: its park record could not be written"
   # A new park reports untrusted activity afresh.
-  rm -f -- "$STATE/.review-park-untrusted-$id"
+  rm -f -- "$STATE/.review-park-untrusted-$id" "$STATE/.review-park-untrusted-$id.next"
   out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$CONTROL_BIN" "$id" exit 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     die "refusing to park $id: the agent could not be stopped: $(printf '%s\n' "$out" | tail -1); the next tick settles its pending park record"
@@ -810,14 +816,18 @@ closed_once() {  # <id> <pr>
   printf 'closed %s: PR %s was closed without merging; the lane needs a decision\n' "$1" "$2"
 }
 
-# Prints the untrusted-activity notice unless that exact notice was already
-# reported; the tick writes the marker after recording the wake.
-untrusted_once() {  # <id> <pr> <notice>
-  local line
+# Prints the untrusted-activity notice when it names an author or kind (one
+# per line in <keys>) this park has not reported yet, and stages the reported
+# set; the tick moves it into the marker after recording the wake.
+untrusted_once() {  # <id> <pr> <notice> <keys>
+  local seen="$STATE/.review-park-untrusted-$1"
   [ -n "$3" ] || return 0
-  line="untrusted $1: PR $2 has review activity firstmate did not relaunch the parked worker for: $3; read it and steer the lane if it needs work"
-  [ "$(cat "$STATE/.review-park-untrusted-$1" 2>/dev/null)" != "$line" ] || return 0
-  printf '%s\n' "$line"
+  { cat "$seen" 2>/dev/null; printf '%s\n' "$4"; } | grep . | sort -u > "$seen.next" || return 0
+  if [ -f "$seen" ] && cmp -s "$seen.next" "$seen"; then
+    rm -f -- "$seen.next"
+    return 0
+  fi
+  printf 'untrusted %s: PR %s has review activity firstmate did not relaunch the parked worker for: %s; read it and steer the lane if it needs work\n' "$1" "$2" "$3"
 }
 
 watch_parked() {  # <id>
@@ -841,7 +851,8 @@ watch_parked() {  # <id>
     merged) return 0 ;;
     closed) closed_once "$id" "$pr"; return 0 ;;
   esac
-  untrusted_once "$id" "$pr" "$(printf '%s' "$result" | jq -r '.untrusted | join("; ")')"
+  untrusted_once "$id" "$pr" "$(printf '%s' "$result" | jq -r '.untrusted | join("; ")')" \
+    "$(printf '%s' "$result" | jq -r '.untrusted_keys[]')"
   triggers=$(printf '%s' "$result" | jq -r '.triggers | join("; ")')
   [ -n "$triggers" ] || return 0
   action_start "$id" resume --trigger "$triggers"
@@ -959,7 +970,7 @@ cmd_tick() {
     case "$line" in
       "closed "*:*) line=${line#closed }; : > "$STATE/.review-park-closed-${line%%:*}" ;;
       "untrusted "*:*) id=${line#untrusted }; id=${id%%:*}
-        fm_pr_task_id_valid "$id" && printf '%s\n' "$line" > "$STATE/.review-park-untrusted-$id" ;;
+        fm_pr_task_id_valid "$id" && mv -f -- "$STATE/.review-park-untrusted-$id.next" "$STATE/.review-park-untrusted-$id" ;;
     esac
   done <<< "$lines"
   printf '%s\n' "$lines"

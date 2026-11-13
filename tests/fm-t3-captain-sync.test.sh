@@ -169,6 +169,12 @@ test_apply_snooze_to_a_time_and_archive_replay() {
   TZ=Australia/Sydney sync_cmd apply --file "$HOME_DIR/a3.json" >/dev/null 2>&1 || fail "a snooze ahead of UTC should apply"
   assert_contains "$(body_of w1)" "hold_until: 2099-11-17" "ahead of UTC, the backlog's date is the local one"
   assert_contains "$(body_of w1)" "Captain hold returns: 2099-11-15T22:00:00Z" "with the exact return time unchanged"
+  # A date alone returns when the backlog lifts it, at its local midnight:
+  # 00:00 on 20 Nov in Sydney (AEDT, +11) is 13:00Z on the 19th.
+  printf '%s\n' '{"seq":4,"itemId":"w1","revision":1,"type":"snooze","until":"2099-11-20","at":"2099-01-03T00:00:00.000Z"}' > "$HOME_DIR/a4.json"
+  TZ=Australia/Sydney sync_cmd apply --file "$HOME_DIR/a4.json" >/dev/null 2>&1 || fail "a snooze to a date should apply"
+  assert_contains "$(body_of w1)" "hold_until: 2099-11-20" "the backlog keeps the date"
+  assert_equals '"2099-11-19T13:00:00Z"' "$(item w1 .snoozed.until)" "and T3 is told it returns at that date's local midnight"
   printf '%s\n' '{"seq":2,"itemId":"w2","revision":1,"type":"archive","at":"2026-11-13T23:59:00.000Z"}' > "$HOME_DIR/a2.json"
   sync_cmd apply --file "$HOME_DIR/a2.json" >/dev/null 2>&1 || fail "an archive should apply"
   assert_contains "$(body_of w2)" "Archived in T3 on 2026-11-13: not pursued." "archive closes a decision as not pursued"
@@ -227,6 +233,23 @@ test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive() 
   captain answer w2 --decision-file "$HOME_DIR/decision" >/dev/null 2>&1 || fail "answer should succeed"
   assert_equals "true" "$(world ".threads[\"$thread\"].archived")" "an answered item's own thread is archived"
   pass "fm-t3-captain-sync.sh: an item with no worker gets a thread of its own, and check catches a lost archive"
+}
+
+test_promoted_scout_is_no_kept_review() {
+  make_home promoted
+  FM_T3_W=$WORKER_THREAD t3_fake_set 'w.threads[process.env.FM_T3_W] = { threadId: process.env.FM_T3_W, projectId: "proj-fm", title: "Worker",
+    status: "running", activeRunId: "run-1", archived: false, worktreePath: "/tmp/wt", items: [], runs: [] }'
+  # A kept scout promoted to a ship keeps working on the same thread; a ship
+  # never keeps its thread, so its leftover review fields count for nothing.
+  printf 'kind=ship\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\nt3_review_target=%s\n' "$WORKER_THREAD" "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
+  captain hold w1 --reason "Keep going?" >/dev/null 2>&1 || fail "hold should succeed"
+  assert_equals "{\"id\":\"$WORKER_THREAD\",\"finished\":false}" "$(item w1 .thread)" "its card is a running worker's, not a kept review"
+  printf '%s\n' '{"seq":1,"itemId":"w1","revision":1,"type":"archive","at":"2026-11-13T01:00:00.000Z"}' > "$HOME_DIR/a.json"
+  sync_cmd apply --file "$HOME_DIR/a.json" >/dev/null 2>&1 || fail "archive should apply"
+  assert_contains "$(body_of w1)" "not pursued" "the decision is closed"
+  assert_equals "false" "$(world ".threads[\"$WORKER_THREAD\"].archived")" "the running ship's thread is never archived"
+  assert_contains "$(cat "$HOME_DIR/state/t3-captain-sync/w1.wake" 2>/dev/null)" "check: t3-captain w1: " "firstmate is asked to wind it down instead"
+  pass "fm-t3-captain-sync.sh apply: a promoted scout's leftover review fields never make its card a kept review"
 }
 
 test_firstmate_archive_never_closes_a_decision() {
@@ -307,7 +330,7 @@ test_archive_on_a_kept_card_archives_its_thread() {
 test_migration_keeps_an_open_decision_a_decision() {
   local out
   make_home keep-decision
-  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\n' "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
+  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\nt3_review_target=%s\n' "$WORKER_THREAD" "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
   mkdir -p "$HOME_DIR/data/w1"
   printf '**Firstmate summary**\n\nThe grid wins.\n' > "$HOME_DIR/data/w1/handoff-r1.md"
   captain hold w1 --reason "Grid or list?" >/dev/null 2>&1 || fail "hold should succeed"
@@ -337,7 +360,7 @@ test_migration_moves_kept_cards_and_pinned_reports() {
   make_home migrate 'w.reportsTool = true; w.pinnedReports = [
     { id: "w2", title: "Camera report", pinnedAt: "2026-11-10T00:00:00.000Z" },
     { id: "old-night", title: "Last night", pinnedAt: "2026-11-11T00:00:00.000Z" }];'
-  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\n' "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
+  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\nt3_review_target=%s\n' "$WORKER_THREAD" "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
   mkdir -p "$HOME_DIR/data/w1" "$HOME_DIR/data/w2"
   printf '**Firstmate summary**\n\nThe grid wins.\n\n**Full explanation**\n\nBecause.\n' > "$HOME_DIR/data/w1/handoff-r1.md"
   printf '# Camera\n' > "$HOME_DIR/data/w2/report.md"
@@ -365,6 +388,7 @@ test_apply_snooze_to_a_time_and_archive_replay
 test_archive_on_a_running_worker_leaves_a_wind_down_notice
 test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive
 test_migration_keeps_an_open_decision_a_decision
+test_promoted_scout_is_no_kept_review
 test_firstmate_archive_never_closes_a_decision
 test_actions_on_one_item_apply_in_order
 test_archive_on_a_kept_card_archives_its_thread

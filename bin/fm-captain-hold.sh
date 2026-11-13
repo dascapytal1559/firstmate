@@ -62,11 +62,12 @@
 # `complete` and `verify` check. The reason may hold parentheses and line breaks:
 # tasks-axi refuses them, so `hold` escapes them where it writes the reason and
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
-# `--until` puts the item off until <when>: a YYYY-MM-DD date (00:00 UTC) or
-# an ISO date-time with Z or an offset, the time of day a T3 snooze preset
-# picks. The backlog's own `tasks-axi hold --until` takes dates only and lifts
-# at local midnight, so it gets the first local date on or after the instant,
-# and the exact instant goes on the `Captain hold returns:` header line below.
+# `--until` puts the item off until <when>: a YYYY-MM-DD date (its local
+# midnight, when the backlog lifts it) or an ISO date-time with Z or an
+# offset, the time of day a T3 snooze preset picks. The backlog's own
+# `tasks-axi hold --until` takes dates only and lifts at local midnight, so it
+# gets the first local date on or after the instant, and the exact instant
+# goes on the `Captain hold returns:` header line below.
 # `--read` marks the item To read: a finished report with nothing to decide,
 # which is not a captain call (`complete` refuses one); on an open decision it
 # changes nothing, since reading is part of deciding. Every hold names its
@@ -1016,10 +1017,11 @@ write_hold_header() {
 }
 
 # normalize_when <value>: a `--until` value as "<tasks-axi date> <instant>":
-# a YYYY-MM-DD date is itself and has no instant ("-"); an ISO date-time with
-# Z or an offset is that instant in UTC (YYYY-MM-DDTHH:MM:SSZ) and the first
-# local date on or after it, so the backlog's own date gate, which lifts at
-# local midnight, never lifts before the instant. Anything else fails.
+# a YYYY-MM-DD date is itself and has no instant ("-"), returning at its
+# local midnight (local_midnight below); an ISO date-time with Z or an offset
+# is that instant in UTC (YYYY-MM-DDTHH:MM:SSZ) and the first local date on or
+# after it, so the backlog's own date gate, which lifts at local midnight,
+# never lifts before the instant. Anything else fails.
 normalize_when() {  # <value>
   case "$1" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) printf '%s -\n' "$1"; return 0 ;;
@@ -1038,6 +1040,18 @@ normalize_when() {  # <value>
   ' "$1" || fail "--until must be a YYYY-MM-DD date or an ISO date-time with Z or an offset: $1"
 }
 
+# local_midnight <YYYY-MM-DD>: that date's local midnight, when the backlog
+# lifts a hold dated to it, as a UTC instant (YYYY-MM-DDTHH:MM:SSZ).
+local_midnight() {  # <date>
+  perl -MTime::Local=timelocal -e '
+    $ARGV[0] =~ /^(\d{4})-(\d\d)-(\d\d)$/ or exit 1;
+    my $t = eval { timelocal(0, 0, 0, $3, $2 - 1, $1) };
+    defined $t or exit 1;
+    my @u = gmtime($t);
+    printf("%04d-%02d-%02dT%02d:%02d:%02dZ\n", $u[5] + 1900, $u[4] + 1, $u[3], $u[2], $u[1], $u[0]);
+  ' "$1"
+}
+
 # The current UTC time, or FM_CAPTAIN_HOLD_NOW in tests.
 captain_hold_now() {
   local now=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
@@ -1049,13 +1063,13 @@ captain_hold_now() {
 
 # snooze_running <hold-until> <returns> <now>: a snooze with no date runs
 # until it is brought back; a dated one until its return instant (the returns
-# header, else 00:00 UTC on the backlog's date), as bin/fm-fleet-snapshot.sh
-# buckets it.
+# header, else the backlog date's local midnight), as
+# bin/fm-fleet-snapshot.sh buckets it.
 snooze_running() {
   local until=$1 returns=$2 now=$3
   [ "$until" != - ] || until=''
   [ -n "$until" ] || return 0
-  [ -n "$returns" ] || returns="${until}T00:00:00Z"
+  [ -n "$returns" ] || returns=$(local_midnight "$until") || return 1
   [[ "$returns" > "$now" ]]
 }
 
@@ -2175,6 +2189,9 @@ command_pr_policy() {
   acquire_task_control_lock "$id"
   require_tasks_axi
   command_open "$id" || fail "task $id is not an open captain hold"
+  task_show_or_fail "$id" "task $id disappeared while declaring its PR policy"
+  [ "$(body_hold_header "$(decode_shown_value "$(show_field "$show" body)")" flavor)" != read ] \
+    || fail "task $id is To read, not a captain call, so no PR settles it"
   tasks_axi update "$id" --pr "$url" >/dev/null || fail "could not link the PR on $id"
   task_show_or_fail "$id" "task $id disappeared while declaring its PR policy"
   fingerprint=$(pr_hold_fingerprint "$show")

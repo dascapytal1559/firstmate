@@ -399,7 +399,8 @@ fi
 BRIEF_REPLACEMENT=
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' -e '^upstream_consent=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' -e '^upstream_consent=' -e '^t3_review=' -e '^t3_review_target=' \
+  -e '^t3_review_revision=' -e '^t3_review_request=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"

@@ -31,8 +31,8 @@
 #
 # Wanted state, per task: a live or aged hold is listed until it is answered
 # or closed, however long it waits; a dated or snoozed hold is listed with
-# snoozed {at, until}, until its return (hold_returns, else 00:00 UTC on its
-# date) or, with no date, null; a blocked, answered, released, or closed call
+# snoozed {at, until}, until its return (hold_returns, else the local
+# midnight of its date, when the backlog lifts it) or, with no date, null; a blocked, answered, released, or closed call
 # is left out. The payload is the context record from this hold (same
 # hold-set stamp) or, without one, the hold reason as the question and the
 # only entry. Its revision is the record's plus one (1 with no record),
@@ -176,6 +176,8 @@ fi
 
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 taking_part() {
   [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ] || return 1
   fm_parent_channel_home_id "$FM_HOME" >/dev/null 2>&1 && return 1
@@ -210,7 +212,7 @@ slurp_threads() {
     id=$(basename "$meta" .meta)
     slug_ok "$id" || continue
     jq -cn --arg id "$id" --arg thread "$(sed -n 's/^t3_thread_id=//p' "$meta" | tail -n 1)" \
-      --arg review "$(sed -n 's/^t3_review=//p' "$meta" | tail -n 1)" \
+      --arg review "$(fm_t3_review_state "$meta")" \
       'select($thread != "") | {id: $id, thread: $thread, review: $review}'
   done | jq -s '.'
 }
@@ -228,9 +230,17 @@ plan() {
   slurp_threads > "$WORK/threads.json" || return 1
   jq -c 'select(type == "object")' "$THREADS" > "$WORK/own.json" 2>/dev/null || echo '{}' > "$WORK/own.json"
   [ -s "$WORK/own.json" ] || echo '{}' > "$WORK/own.json"
+  # Each hold date's local midnight, as a UTC instant.
+  jq -r '[.backlog.records[]? | .hold_until // empty | strings] | unique[]' "$WORK/snapshot.json" \
+    | perl -MTime::Local=timelocal -ne '
+        chomp; /^(\d{4})-(\d\d)-(\d\d)$/ or next;
+        my $t = eval { timelocal(0, 0, 0, $3, $2 - 1, $1) }; defined $t or next;
+        my @u = gmtime($t);
+        printf("%s\t%04d-%02d-%02dT%02d:%02d:%02dZ\n", $_, $u[5] + 1900, $u[4] + 1, $u[3], $u[2], $u[1], $u[0]);' \
+    | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}' > "$WORK/midnights.json" || return 1
   jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" --arg home "$FM_HOME" \
-    --slurpfile metas "$WORK/threads.json" --slurpfile own "$WORK/own.json" '
-    def iso: if . == null then null elif test("T") then . else . + "T00:00:00Z" end;
+    --slurpfile metas "$WORK/threads.json" --slurpfile own "$WORK/own.json" --slurpfile midnight "$WORK/midnights.json" '
+    def iso: if . == null then null elif test("T") then . else ($midnight[0][.] // (. + "T00:00:00Z")) end;
     def abs: if .kind == "link" or (.path | startswith("/")) then . else .path = ($home + "/" + .path) end;
     def entry: {at, kind} + (if .changed then {changed} else {} end) + {text}
       + {attachments: [(.attachments // [])[] | abs | {kind, path} + (if .label then {label} else {} end)]};
@@ -325,9 +335,14 @@ sync_decisions() {
 
   parent=''
   [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
+  # Each item thread's FirstMate archive mark, set before a retirement
+  # archives it, so that archive is never read as the captain's.
+  jq -r '.[]? | strings' "$WORK/own.json" | while IFS= read -r id; do
+    jq -n --arg t "$id" --arg m "$(fm_backend_t3code_archive_mark "$id")" '{($t): $m}'
+  done | jq -s 'add // {}' > "$WORK/marks.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
   jq -n --slurpfile list "$WORK/list.json" --arg root "$(cd "$FM_HOME" && pwd -P)" --arg parent "$parent" \
-    --arg threads "$THREADS" \
-    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0], threads: $threads}' > "$WORK/input.json" \
+    --arg threads "$THREADS" --slurpfile marks "$WORK/marks.json" \
+    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0], threads: $threads, archiveMarks: $marks[0]}' > "$WORK/input.json" \
     || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
   # Nothing to show, nothing shown since the last accepted pass, and no item

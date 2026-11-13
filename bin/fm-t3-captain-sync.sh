@@ -48,7 +48,9 @@
 #     finished) also leaves one wake, state/t3-captain-sync/<worker>.wake,
 #     asking firstmate to wind the worker down through its normal safe
 #     cleanup; the thread itself stays. A thread FirstMate archived itself
-#     (bin/backends/t3code.sh marks it first) is never the captain's: its
+#     (fm_backend_t3code_kill in bin/backends/t3code.sh, or the retirement
+#     of an item's own thread in bin/fm-t3-mcp.mjs decisions, marks it
+#     first) is never the captain's: its
 #     thread-archived changes nothing, so its items stay open and move to
 #     their own threads on the next pass. thread-unarchived changes nothing
 #     (a kept review reopened is the next check's). The item's thread is the
@@ -56,12 +58,14 @@
 #     applied; 3 refused, with the reason on stdout for T3 to show; 1
 #     failed, to retry.
 #   fm-t3-captain-sync.sh check
-#     The ten-minute safety net (bin/fm-watch.sh, and once at session start):
+#     The ten-minute safety net: the watcher runs it whenever
+#     state/.t3-captain-check is ten minutes old (bin/fm-watch.sh). It
 #     arms the listener if it is not registered and confirms it listens;
 #     publishes or closes kept reviews (bin/fm-t3-review.sh reconcile); one
 #     full push; apply-pending; and every thread the list names
 #     that now reads archived or gone, applied as thread-archived, in case
-#     T3's record of it was lost. FM_T3_CAPTAIN_SYNC_ARM=0 skips the arming,
+#     T3's record of it was lost; then drops every FirstMate archive mark
+#     whose thread no task record, list item, or item thread names any more. FM_T3_CAPTAIN_SYNC_ARM=0 skips the arming,
 #     for tests.
 #   fm-t3-captain-sync.sh migrate [--t3-settings <settings.json>]
 #     One-time move to the sidebar list: every kept review
@@ -128,6 +132,8 @@ release_actions_lock() {
 trap 'release_actions_lock; rm -rf -- "$WORK"' EXIT
 
 hold() { "$SCRIPT_DIR/fm-captain-hold.sh" "$@" </dev/null; }
+# shellcheck source=bin/fm-t3-review-lib.sh
+. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 mcp() {
@@ -196,7 +202,7 @@ cmd_apply() {
       worker=''
       [ -z "$thread" ] || worker=$(thread_task "$thread") || worker=''
       review=''
-      [ -z "$worker" ] || review=$(sed -n 's/^t3_review=//p' "$STATE/$worker.meta" | tail -n 1)
+      [ -z "$worker" ] || review=$(fm_t3_review_state "$STATE/$worker.meta")
       if [ -n "$review" ] && [ "$type" = archive ]; then
         out=$(mcp archive --thread "$thread" 2>&1) || rc=$?
       fi
@@ -310,6 +316,27 @@ lost_archives() {
   return "$rc"
 }
 
+# FirstMate's archive marks outlive their task record only while the list or
+# an item thread still names their thread.
+prune_archive_marks() {
+  local dir mark named
+  fm_backend_source t3code >/dev/null 2>&1 || return 0
+  dir=$(fm_backend_t3code_archive_mark x)
+  dir=${dir%/*}
+  [ -d "$dir" ] || return 0
+  named=$( {
+    jq -r '.items[]?.thread.id // empty' "$SENT" 2>/dev/null
+    jq -r '.[]? | strings' "$STATE/t3-needs-me/threads.json" 2>/dev/null
+    for mark in "$STATE"/*.meta; do [ -f "$mark" ] && sed -n 's/^t3_thread_id=//p' "$mark"; done
+  } | while IFS= read -r mark; do
+    [ -z "$mark" ] || basename "$(fm_backend_t3code_archive_mark "$mark")"
+  done )
+  for mark in "$dir"/*; do
+    [ -f "$mark" ] || continue
+    printf '%s\n' "$named" | grep -qxF -- "${mark##*/}" || rm -f -- "$mark"
+  done
+}
+
 # Registered once: registering again would start a new generation.
 # FM_T3_CAPTAIN_SYNC_ARM=0 leaves the listener alone (tests).
 arm() {
@@ -329,6 +356,7 @@ cmd_check() {
   "$SCRIPT_DIR/fm-t3-needs-me.sh" sync </dev/null || rc=1
   apply_pending || rc=1
   lost_archives || rc=1
+  prune_archive_marks
   return "$rc"
 }
 
@@ -371,7 +399,7 @@ cmd_migrate() {
     [ -f "$meta" ] || continue
     id=$(basename "$meta" .meta)
     valid_id "$id" || continue
-    review=$(sed -n 's/^t3_review=//p' "$meta" | tail -n 1)
+    review=$(fm_t3_review_state "$meta")
     case "$review" in pending|waiting) ;; *) continue ;; esac
     reason=$(review_summary "$id") || reason="Report ready: data/$id/report.md"
     if hold hold "$id" --read --reason "$reason" >/dev/null 2>"$WORK/hold.err"; then

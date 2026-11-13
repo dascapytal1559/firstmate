@@ -586,7 +586,8 @@ terminal_hold_event() { # task canonical-url
   # Closure is actionable even when no policy says it answers the question.
   jq --arg task "$task" --slurpfile input "$TMP/input.json" '
     select(.observation.state == "closed" and (.seen | index("closed")) == null
-      and any($input[0].backlog.records[]?; .structured == true and .id == $task and .hold_bucket != null))
+      and any($input[0].backlog.records[]?; .structured == true and .id == $task and .hold_bucket != null
+        and .hold_flavor != "read"))
     | .seen += ["closed"]
     | .pending += [{token:"closed",type:"closed",source:.url,head:.observation.head,body:"PR closed without merging"}]' \
     "$TMP/terminal.json" > "$TMP/terminal-event.json"

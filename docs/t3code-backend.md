@@ -299,7 +299,7 @@ T3 keeps the items as one list that FirstMate replaces whole, and an identical l
 [`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) sends it after every hold, answer, snooze, reconcile, and context, before that command returns; and [`bin/fm-t3-captain-sync.sh`](../bin/fm-t3-captain-sync.sh)'s listener, which the watcher keeps running through the process-event runner, sends it within about a second of any other change to the backlog file, the context records, a task record's thread, or the Bridge's other sources:
 
 - a live or aged item is listed until it is answered or closed, however long it waits;
-- a snoozed item is listed with `snoozed {at, until}`: until its return time (`--until` takes a date, 00:00 UTC, or a time of day), or with no date until he brings it back; FirstMate's own updates never bring it back;
+- a snoozed item is listed with `snoozed {at, until}`: until its return time (`--until` takes a date, which returns at its local midnight, or a time of day), or with no date until he brings it back; FirstMate's own updates never bring it back;
 - a blocked, answered, released, or closed item is left out.
 
 His actions reach the backlog at once: T3 logs Snooze, Bring back, Archive, and every archive or restore of a listed thread, and the listener applies each through `bin/fm-captain-hold.sh` (`snooze`, `unsnooze`, `archive`, or `bin/fm-t3-review.sh closed` for a kept review), pushes the list, and only then acknowledges it.

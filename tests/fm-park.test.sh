@@ -806,10 +806,14 @@ test_trusted_comment_relaunches_and_untrusted_comment_is_reported() {
   w=$(make_world trust-drive-by "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
   gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
   expect_untrusted "$w" untrusted-comment "new comments from stranger (latest $later)"
-  # A further untrusted comment is new activity and is reported again.
+  # The same outsider commenting again is no new author: one notice per park,
+  # so an outsider cannot wake firstmate every tick.
   gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"CONTRIBUTOR\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"}]"
   out=$(run_park "$w" tick 2>&1)
-  case "$out" in "untrusted lane: PR "*"(latest $later2)"*) ;; *) fail "untrusted-comment: newer activity not reported: $out" ;; esac
+  [ -z "$out" ] || fail "untrusted-comment: the same outsider's newer comment was reported again: $out"
+  # A new untrusted author is reported, once.
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"CONTRIBUTOR\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"},{\"author\":{\"login\":\"passerby\",\"__typename\":\"User\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"}]"
+  expect_untrusted "$w" untrusted-new-author "new comments from passerby, stranger"
   [ ! -e "$w/control.log" ] || fail "untrusted-comment: newer untrusted activity made a lifecycle call"
   # A trusted comment alongside it still relaunches, and only it is the trigger.
   gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"CONTRIBUTOR\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"},{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"authorAssociation\":\"MEMBER\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"}]"
@@ -826,7 +830,7 @@ test_trusted_comment_relaunches_and_untrusted_comment_is_reported() {
   w=$(make_world trust-unlisted-bot "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
   gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"spam-app\",\"__typename\":\"Bot\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
   expect_untrusted "$w" unlisted-bot "new comments from spam-app"
-  pass "a trusted comment relaunches with untrusted-input guidance; an untrusted or unlisted-bot comment never relaunches and is reported once per change"
+  pass "a trusted comment relaunches with untrusted-input guidance; an untrusted or unlisted-bot comment never relaunches and is reported once per park and new author"
 }
 
 test_untrusted_thread_and_unknown_reads_are_reported_not_relaunched() {

@@ -5,6 +5,9 @@
 # driven through the real bin/fm-captain-hold.sh and tasks-axi backlogs
 # against the fake T3 server.
 set -u
+# A dated hold returns at its date's local midnight; pin the zone so that is
+# 00:00 UTC here.
+export TZ=UTC
 
 # A fleet pane already carries GIT_CONFIG core.hooksPath.
 unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS
@@ -320,7 +323,7 @@ test_items_ride_on_their_cards() {
       status: "completed", activeRunId: null, archived: false, worktreePath: "/tmp/wt", items: [], runs: [] };'
   (cd "$HOME_DIR" && tasks-axi add k1 "Kept scout" --repo sample && tasks-axi add s1 "Live ship" --repo sample) >/dev/null \
     || fail "could not seed the worker rows"
-  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\n' "$kept" > "$HOME_DIR/state/k1.meta"
+  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\nt3_review_target=%s\n' "$kept" "$kept" > "$HOME_DIR/state/k1.meta"
   printf 'kind=ship\nbackend=t3code\nt3_thread_id=%s\n' "$live" > "$HOME_DIR/state/s1.meta"
   captain hold k1 --read --reason "The scout's summary" >/dev/null 2>&1 || fail "the read hold should succeed"
   FM_CAPTAIN_HOLD_NOW=2026-11-01T00:00:00Z captain hold w1 --reason "First call from the scout" --origin k1 >/dev/null 2>&1 \
@@ -422,7 +425,7 @@ test_list_dated_hold_waits_until_its_date() {
     || fail "dated hold should succeed"
   at 2099-01-01T10:01:00Z needs_me sync >/dev/null || fail "sync after the dated hold should succeed"
   assert_equals '{"at":"2099-01-01T10:00:00Z","until":"2099-01-04T00:00:00Z"}' "$(entry w1 .snoozed)" \
-    "a dated hold is snoozed from when it was put off until 00:00 UTC on its date"
+    "a dated hold is snoozed from when it was put off until its date's local midnight"
   at 2099-01-04T00:01:00Z needs_me sync >/dev/null || fail "sync on the due date should succeed"
   assert_equals 'null' "$(entry w1 .snoozed)" "the minute its date comes due it is snoozed no longer"
   at 2099-01-05T00:02:00Z needs_me sync >/dev/null || fail "sync a day after the due date should succeed"

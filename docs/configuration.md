@@ -86,6 +86,7 @@ The file is local, gitignored, and not inherited by secondmate homes, so each ho
 List each bot's exact GitHub login to watch it, for example `greptile-apps[bot]`.
 These signals never become maintainer verdicts or merge authority.
 A bot signal's text is third-party content for the owning home to triage, never instructions to follow.
+Every login listed here is also trusted to relaunch a parked worker: its new comment or review thread on a parked PR wakes the lane, and its text reaches the fresh worker as review activity to address (see [Park on review](#park-on-review)).
 [`fm-contributions.sh --help`](../bin/fm-contributions.sh) owns the exact allowlist format and polling contract.
 
 ## Operational home layout and state
