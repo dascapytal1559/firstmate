@@ -729,7 +729,7 @@ test_reported_unknown_stall_is_not_escalated_again_when_idle() {
 }
 
 test_kill_interrupts_then_archives_and_tolerates_gone() {
-  local archive down
+  local archive down mark
   t3_case kill
   t3_run 'fm_backend_t3code_kill thread-live' || fail "kill of an idle thread should succeed"
   [ "$(t3_dispatch_types)" = t3_thread_organize ] || fail "kill of an idle thread must only archive, got '$(t3_dispatch_types)'"
@@ -749,10 +749,16 @@ test_kill_interrupts_then_archives_and_tolerates_gone() {
   [ -z "$(t3_dispatch_types)" ] || fail "an archived thread must call nothing"
   t3_world "$(t3_thread_json thread-live running false)"
   t3_world_set 'w.archiveKeepsRun = true; w.waitTimesOut = true'
+  mark=$(t3_run 'fm_backend_t3code_archive_mark thread-live')
+  rm -f "$mark"
   FM_T3CODE_ARCHIVE_TIMEOUT_MS=300 t3_run 'fm_backend_t3code_kill thread-live' >/dev/null 2>&1 && fail "an archive that leaves a run active must fail the kill"
+  # T3 archived the thread though the close is unproven: that archive is still
+  # FirstMate's, so the captain's list must never read it as his.
+  [ -e "$mark" ] || fail "a close_unproven kill of a thread T3 archived must keep FirstMate's archive mark"
   t3_world "$(t3_thread_json thread-live completed false)"
   t3_world_set 'w.failTools = { t3_thread_organize: { code: "boom", message: "archive failed" } }'
   t3_run 'fm_backend_t3code_kill thread-live' 2>/dev/null && fail "a failed archive must fail the kill"
+  [ ! -e "$mark" ] || fail "a kill that never archived the thread must drop FirstMate's archive mark"
   down=$(t3_down_config)
   FM_CONFIG_OVERRIDE="$down" bash -c '. "$0/bin/fm-backend.sh"; fm_backend_source t3code; fm_backend_t3code_kill thread-live' "$ROOT" 2>/dev/null \
     && fail "an unreachable server must fail the kill"
