@@ -145,7 +145,7 @@ The launch reads both back through the configuration read and archives and refus
 A secondmate carries no `FM_SUPERVISOR_TARGET`, because its own thread id is not known before launch; its away daemon finds its thread by home, which `FM_SUPERVISOR_BACKEND=t3code` enables.
 
 The statement's pull-request-tool workaround for Claude follows the [verified version boundary](verification/runtime-backends.md#claude-pull-request-tools); an older or unreadable server keeps the clause, while a server at or past the verified build gets none.
-Firstmate records the PR from the worker's `done: PR <url>` status line either way.
+Firstmate records the PR from a worker's ready `done:` report either way; [`config/pr-register-scan`](configuration.md#pr-registration-scan-configpr-register-scan) describes the scan's accepted forms.
 The thread's `GIT_CONFIG_*` entries are Firstmate's own `core.hooksPath` hook entry only: inherited `GIT_CONFIG_*` values, or any other inherited environment value, are never forwarded, because they can carry credentials.
 That entry sets `GIT_CONFIG_COUNT=1` and index 0, so numbered `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` entries in the T3 server's environment do not apply in the thread; with `config/keep-ai-trailers` no hook entry is written and they apply unchanged, except on a `forge=external` ship, whose push guard always installs the hook entry.
 A T3 server whose agents need extra Git config, such as a `credential.helper`, supplies it through Git config files, which the hook entry leaves alone: for example the service user's global config, or `GIT_CONFIG_GLOBAL` in its service environment.
@@ -495,9 +495,9 @@ Resolve ambiguity by explicitly setting both `FM_SUPERVISOR_BACKEND=t3code` and 
 Injection is a `t3_thread_send` only into a settled supervisor thread, one the [thread status table](#restart-and-liveness-behavior) reads idle/alive with no pending request; any other row, including `blocked` and an unreadable thread, defers the digest exactly as a busy pane does on every other backend.
 An unknown native busy verdict defers new-turn delivery but does not prove that work resumed.
 Away housekeeping keeps an overdue stale alert pending and buffers one possible-wedge report while the verdict remains unknown, including a failed run or a transient thread-read failure.
-Delivered warnings stay suppressed while the same unknown condition persists.
-If a fresh daemon entry discards a queued, undelivered warning, it clears that warning's reported marker and preserves its stale timer, so the next housekeeping pass queues exactly one replacement.
-Refreshing a live daemon preserves the queue; a failed start restores the previous queue and reported markers.
+Within the same away session, delivered warnings stay suppressed while the same unknown condition persists.
+The [stale-artifact lifecycle](../.agents/skills/afk/SKILL.md#stale-artifact-lifecycle) owns session-boundary cleanup and recheck-window resets.
+Refreshing a live daemon preserves the queue and episode markers; a failed start restores the previous queue and episode markers.
 Confirmed busy activity, a missing thread, or an idle verdict after the unknown condition was reported clears the stale and reported markers without another report, so a later unknown condition can report again.
 Declared external-wait rechecks also survive native uncertainty; the worker's declaration still controls their cadence.
 `stale_window_is_busy` and `housekeeping` in `bin/fm-supervise-daemon.sh` own stale tracking; `fm_afk_clear_stale_artifacts` in `bin/fm-afk-start.sh` and the launcher in `bin/fm-afk-launch.sh` own queue discard and startup rollback.
