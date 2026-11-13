@@ -267,7 +267,7 @@ What waits on the captain is no label of Firstmate's: T3 shows Needs you, To rea
 A run left only watching a PR with green checks reads as done, so the card reads `Ready` then.
 
 The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from each worker's current state, its steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
-It runs after every hold, answer, and reconcile close, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
+It runs after every hold, answer, reconcile close, and PR settlement, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
 The watcher sees a run end from its own wait on T3, at once where that wait holds the watcher's cycle and within one poll interval in a home that also has a Herdr or Rex worker; a no-mistakes run starting or ending is seen by the minute pass.
 A run or turn that cannot be read leaves the card as it is.
 Cleanup clears the label before archiving the thread.
