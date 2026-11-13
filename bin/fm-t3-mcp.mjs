@@ -263,6 +263,14 @@
 //     by the thread reading back coordinator:true, else exit 1
 //     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
 //     harmless.
+//   fm-t3-mcp.mjs firstmate-thread --root <abs-path>
+//     The FirstMate thread of the live project rooted at <root>, running a
+//     turn or not, as bin/fm-spawn.sh names its workers' crew parent: the
+//     project's one pinned coordinator while it is an unarchived,
+//     worktree-less, non-subagent thread of that project, else the thread
+//     thread-for-root finds. Prints {threadId, source} with source
+//     coordinator or live, both null when there is none; exit 6 as
+//     thread-for-root when there is no usable pin and several live threads.
 //   fm-t3-mcp.mjs restart-status
 //   fm-t3-mcp.mjs restart-request --reason <text>
 //   fm-t3-mcp.mjs restart-cancel
@@ -307,7 +315,8 @@
 //     since?, question, options[], entries[], revision, wakeAt?}. The
 //     FirstMate thread is the cached parent while it is still a live,
 //     worktree-less thread of the project rooted at root, else that
-//     project's one pinned coordinator, else thread-for-root's; with none the
+//     project's one pinned coordinator while it is such a thread, else
+//     thread-for-root's (firstmate-thread's lookup); with none the
 //     pass changes nothing and answers parent:null. Otherwise the list
 //     replaces T3's whole list in one t3_decisions_set call with replyTo the
 //     FirstMate thread. A decision outside T3's bounds is left out and named
@@ -2387,23 +2396,27 @@ export function bridgeDecisionProblem(d) {
 
 const isArchived = (t) => t.archived === true || Boolean(t.archivedAt);
 
-// The FirstMate thread decisions belong to: the cached id while it is still a
-// live, worktree-less thread of the project rooted at <root>; else that
-// project's one pinned coordinator; else thread-for-root's live thread. null
-// when there is none, so the caller does nothing.
-async function decisionParent(session, rootPath, cached) {
+// The FirstMate thread of the project rooted at <root>, whether or not it is
+// running a turn right now: the cached id while it is still a live,
+// worktree-less thread of that project; else the project's one pinned
+// coordinator while it is such a thread; else thread-for-root's live thread.
+// {threadId, projectId, source} with source cached, coordinator, or live; null
+// when there is none; several live threads and no usable pin refuse as
+// thread-for-root does (exit 6).
+async function firstmateThread(session, rootPath, cached) {
   const project = await projectForRoot(session, rootPath);
   if (!project) return null;
   const usable = (t) => t.projectId === project.id && !isArchived(t) && (t.worktreePath ?? null) === null
     && (t.relationshipToParent ?? null) === null;
-  if (cached) {
+  const usableId = async (threadId) => {
     try {
-      const t = threadOf(await session.call("t3_thread_read", { threadId: cached, limit: 1, runLimit: 1 }));
-      if (usable(t)) return { threadId: cached, projectId: project.id };
+      return usable(threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 })));
     } catch (err) {
-      if (!isNotFound(err)) throw err;
+      if (isNotFound(err)) return false;
+      throw err;
     }
-  }
+  };
+  if (cached && await usableId(cached)) return { threadId: cached, projectId: project.id, source: "cached" };
   const pinned = [];
   let cursor;
   for (let page = 0; page < 1000; page++) {
@@ -2412,13 +2425,25 @@ async function decisionParent(session, rootPath, cached) {
     if (listed?.nextCursor === null || listed?.nextCursor === undefined) break;
     cursor = listed.nextCursor;
   }
-  if (pinned.length === 1) return { threadId: pinned[0], projectId: project.id };
+  if (pinned.length === 1 && await usableId(pinned[0])) return { threadId: pinned[0], projectId: project.id, source: "coordinator" };
   try {
-    return { threadId: await rootThread(session, rootPath), projectId: project.id };
+    return { threadId: await rootThread(session, rootPath), projectId: project.id, source: "live" };
   } catch (err) {
     if (err instanceof Refusal && err.exit === 5) return null;
     throw err;
   }
+}
+
+// firstmate-thread: the thread a worker spawned from the home rooted at
+// <root> names as its crew parent (bin/fm-spawn.sh), found as
+// firstmateThread finds it with no cached id, so a spawn made between the
+// FirstMate thread's turns still finds its pinned coordinator.
+async function firstmateThreadVerb(flags) {
+  const rootPath = need(flags, "root");
+  if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
+  const { session } = await verifiedSession(flags);
+  const found = await firstmateThread(session, rootPath, null);
+  return { ok: true, threadId: found?.threadId ?? null, source: found?.source ?? null };
 }
 
 // One pass: one t3_decisions_set call carrying every decision the Bridge
@@ -2435,7 +2460,7 @@ async function decisions(flags) {
   }
   const { session } = await verifiedSession(flags);
   if (!session.toolSchemas.has("t3_decisions_set")) throw new Refusal("decisions_unsupported", "this T3 has no t3_decisions_set", 4);
-  const parent = await decisionParent(session, input.root, input.parent ?? null);
+  const parent = await firstmateThread(session, input.root, input.parent ?? null);
   if (!parent) return { ok: true, parent: null, projectId: null, decisions: [], rejected: [] };
   const rejected = [];
   const sent = [];
@@ -2824,6 +2849,7 @@ const VERBS = {
   fence,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
+  "firstmate-thread": firstmateThreadVerb,
   "restart-status": restartStatusVerb,
   "restart-request": restartRequest,
   "restart-cancel": restartCancel,

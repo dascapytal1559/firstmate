@@ -199,6 +199,32 @@ console.error("error: " + d.error.message);
   esac
 }
 
+# fm_backend_t3code_firstmate_thread <home>: the FirstMate thread of the home,
+# whether or not it is running a turn (bin/fm-t3-mcp.mjs firstmate-thread owns
+# the lookup: the pinned coordinator, else the one live thread). Found prints
+# its id (0); none prints nothing (1); several live threads and no pin is an
+# error naming the ids (2); a server that could not be read is silent (3).
+fm_backend_t3code_firstmate_thread() {  # <home> -> thread id
+  local home=$1 real out rc id
+  real=$(cd "$home" 2>/dev/null && pwd -P) || return 1
+  out=$(fm_backend_t3code_mcp firstmate-thread --root "$real" 2>/dev/null) && rc=0 || rc=$?
+  case "$rc" in
+    0)
+      # A null threadId is the helper's answer for none.
+      id=$(printf '%s' "$out" | fm_backend_t3code_json_get threadId) && [ -n "$id" ] || return 1
+      printf '%s' "$id"
+      ;;
+    6)
+      printf '%s' "$out" | node -e '
+const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+console.error("error: " + d.error.message);
+'
+      return 2
+      ;;
+    *) return 3 ;;
+  esac
+}
+
 # One logical delivery keeps one client request id across retries and
 # restarts: T3 derives the message id from it within the auth session that
 # sent it, so a resend after a lost reply lands on the message T3 already

@@ -108,9 +108,10 @@ T3 assigns the thread id at launch (`mcp:<uuid>`), and the task records it as `t
 The normal isolation and unlanded-work refusal rules still apply.
 
 Each launched thread also names the T3 thread running the firstmate that spawned it as its parent, so T3 lists it as that thread's crew: a worker under the main or under the secondmate that spawned it, and a secondmate under the main.
-The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else the one live worktree-less thread in the spawning home, the same cwd match away mode uses.
+The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else the spawning home's FirstMate thread whether or not it is running a turn: the project's one pinned coordinator, else the one live worktree-less thread, the same cwd match away mode uses.
+A spawn made between the FirstMate thread's turns, such as from a Stop-hook continuation, therefore still finds a pinned coordinator.
 It is sent as `parentThreadId` only where the `t3_thread_launch` schema declares it, and the launch read-back must then show `relationshipToParent` `crew` under exactly that parent, or the thread is archived and refused like any other mis-binding.
-A T3 without crew lineage, a firstmate not running in T3, or a home with several live threads launches the thread with no parent, which changes only how T3 groups it; lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
+A T3 without crew lineage, a firstmate not running in T3, or a home with no pinned coordinator and either no live thread or several launches the thread with no parent, which changes only how T3 groups it; the spawn prints a note saying why, lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
 
 ### Work causes
 
@@ -442,10 +443,11 @@ Run `/stow` first when the session holds anything worth keeping; `/clear` itself
    A hook that fires once the process is gone arms nothing and moves no lock, whether that is before or after the new session starts.
 2. The [T3 Code fork](https://github.com/dascapytal1559/t3code)'s Claude adapter waits for that exit before the new session opens.
    Upstream T3 Code does not wait, so there a new session can start beside the old process and come up read-only.
+   Its read-only digest then says the previous session on this thread is still running and names the remedy: end that process, whose unacknowledged wakes stay queued, and run session start again.
 3. The new process takes the helm through the ordinary session start.
    `bin/fm-lock.sh` reclaims the dead holder's lock, so the session does not come up read-only, and it writes the same thread id to `state/t3-main-thread`.
    The T3 server has not restarted, so `bin/fm-t3-restart.sh recover` steers no worker.
-4. Wakes queued during the swap stay durable and reach the new session in its digest.
+4. Wakes queued during the swap, and any the old session drained but had not acknowledged when it was stopped, stay durable and reach the new session in its digest.
    Claude ends a running Stop hook, its arm, and its watcher with the session ([dated evidence](verification/runtime-backends.md#fresh-session-swap-on-real-claude)), so the new session's first Stop starts the one cycle, and it attaches instead if a watcher did outlive the old session.
    A watcher that died leaves one recovery notice, in the digest or as a wake after that first Stop, which the new session acknowledges like any other.
 

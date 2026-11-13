@@ -2878,25 +2878,33 @@ spawn_t3code_require_channels() {
   return 1
 }
 
-# spawn_t3code_parent_thread - print the T3 thread running this spawn's
-# firstmate, which the task's thread names as its crew parent: an explicit
+# spawn_t3code_parent_thread - print the T3 thread of this spawn's firstmate,
+# which the task's thread names as its crew parent: an explicit
 # FM_SUPERVISOR_TARGET when discover_supervisor_backend pairs it with t3code,
-# else the one live thread in this home. The home lookup is the t3code supervisor rule's cwd match
-# without its selection gate, which a spawn on t3code has already passed. A
-# secondmate's own spawn runs in its parent's home, so a secondmate is crew
-# of the main and its workers crew of the secondmate. Nothing is printed when
-# no T3 thread runs this firstmate, and the thread then launches without a
-# parent.
+# else this home's FirstMate thread whether or not it is mid-turn
+# (fm_backend_t3code_firstmate_thread: the pinned coordinator, else the one
+# live thread), so a spawn made between T3 runs, such as from a Stop-hook
+# continuation, still finds it. A secondmate's own spawn runs in its parent's
+# home, so a secondmate is crew of the main and its workers crew of the
+# secondmate. When no parent is found the thread launches without one and a
+# note on stderr says why.
 spawn_t3code_parent_thread() {
   local parent='' rc=0
   if [ -n "${FM_SUPERVISOR_TARGET:-}" ]; then
-    [ "$(discover_supervisor_backend 2>/dev/null)" != t3code ] || printf '%s' "$FM_SUPERVISOR_TARGET"
+    if [ "$(discover_supervisor_backend 2>/dev/null)" = t3code ]; then
+      printf '%s' "$FM_SUPERVISOR_TARGET"
+    else
+      echo "note: FM_SUPERVISOR_TARGET names a supervisor outside T3; launching $ID's thread without a crew parent" >&2
+    fi
     return 0
   fi
-  parent=$(fm_backend_t3code_thread_for_home "$FM_HOME" 2>/dev/null) || rc=$?
-  if [ "$rc" -eq 2 ]; then
-    echo "note: several live T3 threads run in $FM_HOME; launching $ID's thread without a crew parent (FM_SUPERVISOR_TARGET names one)" >&2
-  fi
+  parent=$(fm_backend_t3code_firstmate_thread "$FM_HOME" 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    2) echo "note: several live T3 threads run in $FM_HOME and none is pinned as its coordinator; launching $ID's thread without a crew parent (FM_SUPERVISOR_TARGET names one)" >&2 ;;
+    3) echo "note: could not read T3's threads for $FM_HOME; launching $ID's thread without a crew parent" >&2 ;;
+    *) echo "note: T3 has no FirstMate thread for $FM_HOME (none pinned as coordinator and none running); launching $ID's thread without a crew parent" >&2 ;;
+  esac
   printf '%s' "$parent"
 }
 

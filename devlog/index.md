@@ -1248,3 +1248,37 @@ What was built:
 The evidence is a new regression suite against a fake T3 with the restart registry: drained at once, waiting on running turns, the timeout cancel, a cancel from T3, a replaced request, a restart on its own, and a stop that kills the whole process group, which still cancels.
 That last case first failed, and found a real gap: a stop that landed while T3 was still answering the request skipped the cancel.
 The live T3 answered the new status call read-only; no restart was requested on it.
+
+## 49. A fresh start hands over cleanly (13 November 2026)
+
+A `/clear` on the FirstMate thread in T3 left the previous session running.
+T3 sent new messages to the new session, while the old one kept the session lock and went on dispatching and merging work for about 20 minutes with its replies no longer shown in the thread, and the new session sat read-only.
+One worker launched in that window had no parent thread and showed at the top level of the sidebar.
+The old session was stopped by hand to recover.
+
+> When we run slash clear, um especially when it's registered, then that is a definitive moment when we've switched to a new first mate main thread.
+>
+> — 13 November 2026
+
+On the case where the old session is busy at that moment:
+
+> given that this is kind of a backstop we can just go with like stop it right away and then migrate for as long as we can maintain that smooth handover.
+
+T3 itself is changing so that a fresh start on the main thread stops the previous session; this is FirstMate's side of the handover.
+
+- **Workers keep their parent between turns.**
+  A worker's thread now names the project's pinned FirstMate thread as its parent even when FirstMate is not mid-turn, as the Bridge decisions already did, falling back to the one running thread.
+  When no parent can be found, the spawn says why instead of launching an orphan silently.
+- **A read-only start says what is wrong.**
+  When the lock belongs to the earlier session on the same T3 thread, the read-only notice now says so and names the remedy, instead of only "another live session holds the lock":
+
+  ```text
+  error: the previous firstmate session on this T3 thread (<thread>) is still running and holds the lock (pid <pid>, session <id>); its replies no longer reach the thread. Safe remedy: end that earlier session with kill <pid> (the SIGTERM T3 sends a replaced session; its unacknowledged wakes stay queued for this one), then run bin/fm-session-start.sh again here; operate read-only until resolved
+  ```
+
+  The thread comes from the id T3 gives every agent, matched against the thread record only the lock holder writes; a record older than the lock proves nothing, so no claim is made from it.
+- **Nothing in flight is lost.**
+  A new real-process test stops a session after it has read a notification but before it acknowledged it, and checks that the fresh session is shown the same notification and can acknowledge it.
+  This already held; the test now keeps it so.
+
+The evidence is the swap suite's two new cases (the same-thread refusal, with its stale-record fallback, and the unacknowledged handover) and four new crew-parent cases: a pinned thread between turns, a pin that settles several running threads, an archived pin ignored, and no thread at all.

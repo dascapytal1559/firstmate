@@ -1459,10 +1459,12 @@ test_spawn_claude_worker_rides_thread_channels() {
   pass "fm-spawn.sh --backend t3code claude: on a T3 with per-thread facts the environment and statement ride the launch and only the busy hooks stay in the worktree"
 }
 
-# A worker's thread names the T3 thread running its firstmate as its crew
-# parent where T3 offers lineage: the one live thread in the home (t-main),
-# or an explicit FM_SUPERVISOR_TARGET paired with t3code; a T3 without
-# lineage, or a home with several live threads, launches it with no parent.
+# A worker's thread names its firstmate's T3 thread as its crew parent where
+# T3 offers lineage: an explicit FM_SUPERVISOR_TARGET paired with t3code, else
+# the home's one usable pinned coordinator whether or not it is mid-turn, else
+# the one live thread in the home (t-main). A T3 without lineage launches it
+# with no parent; a home with no usable pin and no live thread or several
+# launches it with no parent and says so.
 test_spawn_names_supervisor_thread_as_crew_parent() {  # <case> <world js> <expected parent> [NAME=VALUE...]
   local name=$1 js=$2 expect=$3 id out rc home
   shift 3
@@ -1480,7 +1482,7 @@ w.threads["t-other"] = at("t-other", "completed");'
   out=$(unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND; for kv in "$@"; do export "${kv?}"; done; t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "$name: the worker spawn should succeed"$'\n'"$out"
   [ "$(t3_launch_field 'a.parentThreadId')" = "${expect:-undefined}" ] || fail "$name: the launch should name parent '${expect:-none}', got '$(t3_launch_field 'a.parentThreadId')'"
-  [ -n "$expect" ] || [ "$name" != ambiguous ] || assert_contains "$out" "without a crew parent" "an ambiguous home says the thread has no crew parent"
+  [ -n "$expect" ] || [ "$name" = upstream ] || assert_contains "$out" "without a crew parent" "$name: a spawn with no crew parent says so"
   pass "fm-spawn.sh --backend t3code: crew parent ($name) is '${expect:-none}'"
 }
 
@@ -3408,6 +3410,10 @@ test_spawn_names_supervisor_thread_as_crew_parent home ';' t-main
 test_spawn_names_supervisor_thread_as_crew_parent explicit ';' t-other FM_SUPERVISOR_TARGET=t-other FM_SUPERVISOR_BACKEND=t3code
 test_spawn_names_supervisor_thread_as_crew_parent upstream 'delete w.crewLineage' ''
 test_spawn_names_supervisor_thread_as_crew_parent ambiguous 'w.threads["t-other"].status = "running"; w.threads["t-other"].activeRunId = "r-t-other"' ''
+test_spawn_names_supervisor_thread_as_crew_parent between-turns 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-main"], { status: "completed", activeRunId: null, coordinator: true })' t-main
+test_spawn_names_supervisor_thread_as_crew_parent pin-over-ambiguous 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-other"], { status: "running", activeRunId: "r-t-other", coordinator: true })' t-other
+test_spawn_names_supervisor_thread_as_crew_parent archived-pin 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-other"], { archived: true, coordinator: true })' t-main
+test_spawn_names_supervisor_thread_as_crew_parent none 'Object.assign(w.threads["t-main"], { status: "completed", activeRunId: null })' ''
 test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease
 test_spawn_external_forge_codex_ship_carries_push_guard

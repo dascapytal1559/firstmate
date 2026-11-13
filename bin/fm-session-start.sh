@@ -682,7 +682,8 @@ EOF
 }
 
 # state/t3-main-thread answers "which T3 thread is FirstMate" for anything that
-# must reach it (an incident listener, a notifier). The session lock already
+# must reach it (an incident listener, a notifier), and lets bin/fm-lock.sh tell
+# a refused session that the holder runs on its own thread. The session lock already
 # decides which session is the live FirstMate, so only a session that holds the
 # lock may touch the record: a locked T3 session publishes its thread id by
 # atomic rename, a locked non-T3 session removes a stale record, and a refused
