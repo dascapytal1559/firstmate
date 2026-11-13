@@ -17,8 +17,10 @@
 #     data/<id>/report.md by absolute path - writes it to
 #     data/<id>/handoff-r<n>.md as firstmate's own record of what it relayed
 #     (nothing is posted into the thread), records t3_review=pending with
-#     its revision and stable key, and only then publishes (as publish
-#     below). The key is derived from this home, the task, its spawn
+#     its revision and stable key, holds the scout's task for the captain as
+#     To read (bin/fm-captain-hold.sh hold --read, the summary's first line as
+#     the reason), so the backlog is what says it waits to be read, and only
+#     then publishes (as publish below). The key is derived from this home, the task, its spawn
 #     generation, the report, and the handoff, so running retain again with
 #     the same words changes nothing, and a revised report or handoff is a
 #     new revision. Exit 4, keeping no record, when the task is not a T3
@@ -29,40 +31,46 @@
 #     Publish a pending review: the tag "waiting for captain" and automatic
 #     settling off, each proven by read-back, with no note and no worker
 #     turn; then t3_review=waiting. A thread he archived or deleted first
-#     records t3_review=closed instead (his close wins, and parks his open
+#     records t3_review=closed instead (his close wins, and closes his open
 #     calls as reconcile does). A busy thread exits 75 and stays pending; any
 #     other failure exits 1 and stays pending for retry, never archived. A T3
 #     too old to keep threads drops the record and exits 4, so the scout is
 #     cleaned up as usual.
 #   fm-t3-review.sh reconcile
-#     The watcher's minute pass over every retained review: a pending one is
+#     The pass over every retained review that bin/fm-t3-captain-sync.sh
+#     check runs every ten minutes: a pending one is
 #     published, and one a T3 too old to keep threads drops leaves the same
 #     cleanup wake as a close; a waiting one whose thread now reads archived
-#     or deleted is recorded closed, its open calls are parked (below), and
-#     it leaves one wake for firstmate in state/t3-review/<id>.closed; a
-#     closed one whose thread still reads closed has any call left open
-#     parked again; a closed one he has reopened goes back to pending, so the
-#     next pass tags it again. A thread T3 cannot read changes nothing. A
-#     record whose lock is held (cleanup is running) is skipped until the
-#     next pass. Never revives, steers, or archives.
+#     or deleted is closed as `closed` below does; a closed one he has
+#     reopened goes back to pending, so the next pass tags it again. A thread
+#     T3 cannot read changes nothing. A record whose lock is held (cleanup is
+#     running) is skipped until the next pass. Never revives, steers, or
+#     archives.
+#   fm-t3-review.sh closed <task-id> [--at <instant>]
+#     The captain archived the kept thread (T3 logged it, and
+#     bin/fm-t3-captain-sync.sh apply runs this at once): t3_review=closed,
+#     its open calls closed and the scout marked read (below, dated --at),
+#     and one wake for firstmate in state/t3-review/<id>.closed. A record
+#     already closed changes nothing.
 #   fm-t3-review.sh check-close <task-id>
 #     bin/fm-teardown.sh runs this, holding the task's meta lock
 #     (FM_T3_REVIEW_META_LOCK_HELD=1), before any destructive step: exit 0
 #     when the thread reads deleted, or archived on a T3 that can fence it
-#     (recorded closed, with its open calls parked, either way); exit 1 while
+#     (recorded closed, with its open calls closed, either way); exit 1 while
 #     it is still open, or when this T3 can never fence it; exit 3 when T3
 #     cannot be read, which never counts as closed.
 #
-# Archive as park: archiving or deleting a kept card is the captain's "done,
-# not pursuing this". Every captain call still open on the backlog whose
-# hold names the review as its origin (`hold --origin`), or that the review's
-# completion gate inventoried (decision_keys), is closed through
-# bin/fm-captain-hold.sh answer, without --release, with the decision
-# "Archived the card in T3 on <UTC date>: parked, not pursued.", so it leaves
-# his open decisions. A hold on the review's own task is not its call and is
-# left to cleanup. Nothing is deleted: the report, the handoff, and the
-# task's data stay. A call that cannot be parked is reported and retried on
-# the next pass.
+# Archive is "not pursued": archiving or deleting a kept card is the
+# captain's "done, not pursuing this". Every captain call still open on the
+# backlog whose hold names the review as its origin (`hold --origin`), or that
+# the review's completion gate inventoried (decision_keys), is closed through
+# bin/fm-captain-hold.sh archive, which answers a decision "Archived in T3 on
+# <UTC date>: not pursued." and marks a To read item read, so it leaves his
+# open items. The scout's own To read hold is marked read too, except during
+# cleanup, which holds that task's lock and settles it itself; any other hold
+# on the review's own task is not its call and is left to cleanup. Nothing is
+# deleted: the report, the handoff, and the task's data stay. A call that
+# cannot be closed is reported and retried on the next pass.
 #
 # Record fields (state/<id>.meta): t3_review (pending|waiting|closed),
 # t3_review_target (the thread), t3_review_revision, t3_review_request (the
@@ -82,7 +90,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 ALERTS="$STATE/t3-review"
 
 usage() {
-  sed -n '11,54p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '/^# Usage:/,/^# Archive is/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -175,51 +183,51 @@ leave_close_wake() {  # <id> [what happened]
     || echo "t3-review: could not leave the close notice for $1" >&2
 }
 
-# park_open_calls <id>: see "Archive as park" in the header. Sets PARKED to
-# the ids it parked and UNPARKED to what it could not park (ids, or "the
-# backlog" when it could not be read), each space-separated, reporting every
-# failure on stderr.
-PARKED=
-UNPARKED=
-park_open_calls() {
-  local id=$1 keys calls task
-  PARKED=
-  UNPARKED=
-  command -v jq >/dev/null 2>&1 || { UNPARKED='the backlog'; echo "t3-review: jq is required to park $id's open calls" >&2; return 0; }
+# close_open_calls <id> <at> [self]: see "Archive is not pursued" in the
+# header; with self, the scout's own To read hold too. Sets CLOSED to the ids
+# it closed and UNCLOSED to what it could not close (ids, or "the backlog"
+# when it could not be read), each space-separated, reporting every failure
+# on stderr.
+CLOSED=
+UNCLOSED=
+close_open_calls() {
+  local id=$1 at=$2 self=${3:-} keys calls task
+  CLOSED=
+  UNCLOSED=
+  command -v jq >/dev/null 2>&1 || { UNCLOSED='the backlog'; echo "t3-review: jq is required to close $id's open calls" >&2; return 0; }
   keys=$(fm_meta_get "$STATE/$id.meta" decision_keys)
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/park-snapshot.json" 2>"$WORK/park.err" </dev/null \
-    || ! calls=$(jq -r --arg id "$id" --arg keys ",$keys," '.backlog.records[]?
-      | select(.structured and .state != "done" and .hold_kind == "captain" and .id != $id)
-      | .id as $task | select(.hold_origin == $id or ($keys | contains("," + $task + ",")))
-      | .id' "$WORK/park-snapshot.json"); then
-    UNPARKED='the backlog'
-    echo "t3-review: the backlog could not be read to park $id's open calls: $(head -n 1 "$WORK/park.err")" >&2
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/close-snapshot.json" 2>"$WORK/close.err" </dev/null \
+    || ! calls=$(jq -r --arg id "$id" --arg keys ",$keys," --arg self "$self" '.backlog.records[]?
+      | select(.structured and .state != "done" and .hold_kind == "captain")
+      | select(if .id == $id then $self == "self" and .hold_flavor == "read"
+               else (.id as $task | .hold_origin == $id or ($keys | contains("," + $task + ","))) end)
+      | .id' "$WORK/close-snapshot.json"); then
+    UNCLOSED='the backlog'
+    echo "t3-review: the backlog could not be read to close $id's open calls: $(head -n 1 "$WORK/close.err")" >&2
     return 0
   fi
-  [ -n "$calls" ] || return 0
-  printf 'Archived the card in T3 on %s: parked, not pursued.\n' "$(date -u +%Y-%m-%d)" > "$WORK/park-decision.txt" \
-    || { UNPARKED=$(printf '%s' "$calls" | tr '\n' ' '); echo "t3-review: cannot write the park decision for $id" >&2; return 0; }
   while IFS= read -r task; do
     valid_id "$task" || continue
     if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-captain-hold.sh" answer "$task" --decision-file "$WORK/park-decision.txt" >/dev/null 2>"$WORK/park.err" </dev/null; then
-      PARKED="${PARKED:+$PARKED }$task"
+      "$SCRIPT_DIR/fm-captain-hold.sh" archive "$task" --at "$at" >/dev/null 2>"$WORK/close.err" </dev/null; then
+      CLOSED="${CLOSED:+$CLOSED }$task"
     else
-      UNPARKED="${UNPARKED:+$UNPARKED }$task"
-      echo "t3-review: $task, a call from $id's archived card, is still open: $(grep . "$WORK/park.err" | tail -n 1)" >&2
+      UNCLOSED="${UNCLOSED:+$UNCLOSED }$task"
+      echo "t3-review: $task, a call from $id's archived card, is still open: $(grep . "$WORK/close.err" | tail -n 1)" >&2
     fi
   done <<< "$calls"
 }
 
-# closed_by_captain <id> [close-wake]: the captain's close of the review's
-# thread, just recorded: park its open calls once, then leave the close wake
-# when asked, naming what was parked and anything left for firstmate to park.
+# closed_by_captain <id> [close-wake [<at>]]: the captain's close of the
+# review's thread, just recorded: close its open calls once (and, outside
+# cleanup, mark the scout read), then leave the close wake when asked, naming
+# what was closed and anything left for firstmate to close.
 closed_by_captain() {
-  local what='the captain closed the kept review thread'
-  park_open_calls "$1"
-  [ -z "$PARKED" ] || what="$what; its open calls $PARKED were recorded as parked"
-  [ -z "$UNPARKED" ] || what="$what; parking its open calls failed for $UNPARKED, so park them with bin/fm-captain-hold.sh answer"
+  local what='the captain closed the kept review thread' at=${3:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  if [ "${2:-}" = close-wake ]; then close_open_calls "$1" "$at" self; else close_open_calls "$1" "$at"; fi
+  [ -z "$CLOSED" ] || what="$what; $CLOSED recorded as not pursued or read"
+  [ -z "$UNCLOSED" ] || what="$what; closing failed for $UNCLOSED, so close them with bin/fm-captain-hold.sh archive"
   [ "${2:-}" != close-wake ] || leave_close_wake "$1" "$what"
 }
 
@@ -351,6 +359,11 @@ cmd_retain() {
     release
     echo "t3-review: $id's handoff revision $rev is recorded; its thread and copy are kept until the captain closes the thread"
   fi
+  # The backlog, not this record, is what says the report waits to be read.
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" --read \
+      --reason "$(grep -m 1 . "$summary" | cut -c1-4000)" >/dev/null 2>"$WORK/hold.err" </dev/null \
+    || die "$id's report could not be held To read for the captain: $(grep . "$WORK/hold.err" | tail -n 1)"
   rc=0
   publish_task "$id" || rc=$?
   [ "$rc" != 5 ] || rc=4
@@ -405,6 +418,32 @@ cmd_reconcile() {
   return "$rc"
 }
 
+cmd_closed() {
+  local id=${1:-} at='' meta
+  shift || true
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --at) at=${2:-}; shift 2 || usage ;;
+      *) usage ;;
+    esac
+  done
+  valid_id "$id" || usage
+  meta="$STATE/$id.meta"
+  [ -n "$(fm_t3_review_state "$meta")" ] || { echo "t3-review: $id keeps no review" >&2; return 1; }
+  lock "$id" || die "cannot lock $id's record"
+  if [ "$(fm_t3_review_state "$meta")" = closed ]; then
+    release
+    echo "t3-review: $id's thread is already recorded closed"
+    return 0
+  fi
+  set_fields "$meta" t3_review=closed || { release; die "cannot record $id's close"; }
+  release
+  closed_by_captain "$id" close-wake "$at"
+  refresh_cards
+  echo "t3-review: $id's thread is recorded closed${CLOSED:+; $CLOSED settled}"
+  [ -z "$UNCLOSED" ]
+}
+
 cmd_check_close() {
   local id=${1:-} meta out exists archived newly
   { [ "$#" = 1 ] && valid_id "$id"; } || usage
@@ -425,12 +464,12 @@ cmd_check_close() {
     fi
     release
     rm -f -- "$ALERTS/$id.closed"
-    # Cleanup came first, so the close is parked here; the hold on this task
+    # Cleanup came first, so the calls are closed here; the hold on this task
     # itself, whose control lock cleanup holds, is never one of them.
     if [ "$newly" = 1 ]; then
       closed_by_captain "$id"
-      [ -z "$PARKED" ] || echo "t3-review: $id's open calls $PARKED were recorded as parked" >&2
-      [ -z "$UNPARKED" ] || echo "t3-review: parking $id's open calls failed for $UNPARKED; park them with bin/fm-captain-hold.sh answer" >&2
+      [ -z "$CLOSED" ] || echo "t3-review: $id's open calls $CLOSED were recorded as not pursued" >&2
+      [ -z "$UNCLOSED" ] || echo "t3-review: closing $id's open calls failed for $UNCLOSED; close them with bin/fm-captain-hold.sh archive" >&2
     fi
     # An archived thread is fenced before its copy goes back; a T3 that can
     # never fence is refused here, before cleanup records anything.
@@ -458,6 +497,7 @@ case "$VERB" in
     exit "$rc"
     ;;
   reconcile) cmd_reconcile "$@" ;;
+  closed) cmd_closed "$@" ;;
   check-close) cmd_check_close "$@" ;;
   *) usage ;;
 esac

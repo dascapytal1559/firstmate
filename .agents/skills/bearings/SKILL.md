@@ -157,11 +157,12 @@ After them, every response renders EXACTLY these four sections, in THIS order, a
    Show the other contribution actors only as counts beside the checked/known coverage, and disclose `captain_omitted`, `unmeasured_homes`, stale verdicts and checks with no verdict when nonzero.
    Empty-state: "Nothing needs your action right now" is allowed only when `contributions.proven_clear` is true and the existing decision set is empty.
    When the section is empty but coverage is incomplete, say that no decision is recorded and give the checked/known count; a missing coverage field is also unverified.
+   When the snapshot's `to_read` is not empty, end the section with one short "To read:" line naming those finished reports; they are not decisions.
 2. **Recently Landed** - the bounded current recent-completions baseline: merged PRs, completed scouts, and finished local-only merges across the main fleet and every registered secondmate home.
    Empty-state: "No recent completions are in the current baseline."
 3. **Underway** - live work progressing on its own, one line of current state per direct report.
    Empty-state: "Nothing is underway."
-4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred or aged captain-hold safety gates, plus action-free fleet-integrity warnings.
+4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred, snoozed, or aged captain-hold safety gates, plus action-free fleet-integrity warnings.
    Empty-state: "Nothing is queued."
 
 Under an "Ideas" label after Charted Next, when the snapshot's `ideas.total` is above zero, give that count, one short line for each `ideas.newest` row, and the `ideas.list` command that lists them all.

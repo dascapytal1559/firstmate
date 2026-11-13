@@ -631,6 +631,45 @@ test_restart_registry_verbs() {
   pass "fm-t3-mcp restart-*: request, status, and cancel speak the fork's registry, prove the answer, and refuse a T3 without it"
 }
 
+test_actions_and_reports_unpin_verbs() {
+  local ack="$TMP_ROOT/ack.json"
+  fresh_case actions
+  mcp actions --wait-ms 0
+  expect_code 4 "$RC" "a T3 without the action log is refused"
+  assert_contains "$OUT" actions_unsupported "the refusal names it"
+  t3_fake_set 'w.actionsTool = true; w.actions = [
+    { seq: 1, commandId: "c1", itemId: "w1", revision: 1, type: "snooze", until: null, at: "2026-11-13T01:00:00.000Z" },
+    { seq: 2, commandId: "c2", itemId: "w2", revision: 3, type: "thread-archived", at: "2026-11-13T02:00:00.000Z" }];'
+  mcp actions --after 1 --wait-ms 0
+  expect_code 0 "$RC" "the log is read: $ERR"
+  assert_equals '[2]' "$(field "$OUT" actions | jq -c '[.[].seq]')" "only actions after --after"
+  assert_equals 2 "$(field "$OUT" lastSeq)" "with the log's last seq"
+  printf '%s\n' '[{"seq":1,"outcome":"applied"},{"seq":2,"outcome":"refused","message":"no such item"}]' > "$ack"
+  mcp actions --wait-ms 0 --ack-file "$ack"
+  expect_code 0 "$RC" "acknowledging: $ERR"
+  assert_equals '[]' "$(field "$OUT" actions)" "acknowledged actions leave the log"
+  assert_equals '{"seq":2,"outcome":"refused","message":"no such item"}' \
+    "$(jq -c '.acks[1] | {seq, outcome, message}' "$T3_FAKE_WORLD")" "a refusal carries its message"
+  mcp actions --wait-ms 30001
+  expect_code 2 "$RC" "a wait past 30 s is invalid use"
+  printf '%s\n' '[{"seq":1,"outcome":"done"}]' > "$ack"
+  mcp actions --ack-file "$ack"
+  expect_code 2 "$RC" "an unknown outcome is invalid use"
+  t3_fake_set 'w.actions = [{ seq: 3, itemId: "w1", revision: 1, type: "explode", at: "2026-11-13T01:00:00.000Z" }]'
+  mcp actions --wait-ms 0
+  expect_code 1 "$RC" "an action of another shape is refused"
+  assert_contains "$OUT" actions_malformed "and named"
+
+  mcp reports-unpin --id fm-migrate-list
+  expect_code 4 "$RC" "a T3 without pinned reports is refused"
+  t3_fake_set 'w.reportsTool = true; w.pinnedReports = [{ id: "r1", title: "Report one", pinnedAt: "2026-11-11T00:00:00.000Z" }]'
+  mcp reports-unpin --id nobody
+  assert_equals '["r1"]' "$(field "$OUT" reports | jq -c '[.[].id]')" "an id never pinned answers the whole list"
+  mcp reports-unpin --id r1
+  assert_equals '[]' "$(field "$OUT" reports)" "and a pinned one is unpinned"
+  pass "fm-t3-mcp actions and reports-unpin: the action log is read, waited on, and acknowledged; reports unpin"
+}
+
 test_read_limit_matches_t3_cap() {
   local thread
   fresh_case read-limit
@@ -1834,6 +1873,7 @@ test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_started_at
 test_restart_registry_verbs
+test_actions_and_reports_unpin_verbs
 test_read_limit_matches_t3_cap
 test_interrupt_confirms_only_the_interrupted_run
 test_send_lost_reply_is_unconfirmed_and_retry_is_one_delivery

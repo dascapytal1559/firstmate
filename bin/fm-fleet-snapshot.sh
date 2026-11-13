@@ -22,9 +22,15 @@
 #     hold_reason, and hold_until when tasks-axi emits it. They also carry
 #     normalized current_role, requires_child_metadata, blocked_by_ids,
 #     unresolved_blocker_ids, captain_actionable, hold_set, hold_origin,
-#     hold_age_days, and hold_bucket fields. hold_origin is the task a hold
-#     was raised for (`hold --origin`, the body line right after the hold-set
-#     stamp, written only by bin/fm-captain-hold.sh), else null.
+#     hold_age_days, hold_bucket, hold_flavor, hold_snoozed_at, and
+#     hold_returns fields. hold_origin is the task a hold was raised for
+#     (`hold --origin`), else null; it and the other hold-header facts come
+#     only from the header lines right after the hold-set stamp, written only
+#     by bin/fm-captain-hold.sh (its header owns them). hold_flavor is "read"
+#     for a To read item and "decision" otherwise (null where hold_bucket is
+#     null); hold_snoozed_at is when a dated or snoozed item was put off (its
+#     snoozed line, else the hold-set stamp), else null; hold_returns is the
+#     exact return instant of a hold dated to a time of day, else null.
 #     Repeated blocker tokens remain ordered; a blocker resolves only when its
 #     structured record is Done, and missing ids stay open.
 #     There is no separate decision type: any captain-held task is the same
@@ -35,15 +41,17 @@
 #     hold reason or body prose is ever matched. The buckets are total and
 #     mutually exclusive, so every captain hold lands in exactly one and none
 #     can fall through: "blocked" when any blocker is unresolved, else "dated"
-#     when hold_until is still in the future, else "aged" when an undated hold
-#     is at least FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; legacy
-#     unstamped holds fall back to `since`), else "live". A non-captain or Done
-#     row carries null, and so does an idea.
+#     when hold_until is still in the future (to the instant, for a hold
+#     with hold_returns), else "snoozed" when an undated hold carries a
+#     snoozed line (put off until the captain brings it back), else "aged"
+#     when an undated hold is at least FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old
+#     (default 14; legacy unstamped holds fall back to `since`), else "live".
+#     A non-captain or Done row carries null, and so does an idea.
 #     A Queued row of kind idea has current_role "idea": something the captain may
 #     pick up, with no work on it yet, so it is never ready and never waits on the
 #     captain (docs/configuration.md "Ideas").
-#     captain_actionable means "waiting on the captain now" and is exactly
-#     hold_bucket == "live".
+#     captain_actionable means "a decision waiting on the captain now":
+#     hold_bucket == "live" and hold_flavor == "decision".
 #     hold_age_days is the hold's age when computable, else null.
 #     Aging is a projection safety net only: the durable deferral remains
 #     re-holding with --until.
@@ -261,8 +269,9 @@ Its invalidity object names the normalized failure kind and affected ids.
 Actionable tasks-axi captain holds appear as decisions_open and stay visible in
 queued with hold_reason, hold_kind, hold_until,
 hold_bucket, hold_age_days, and plural blocker fields for downstream
-projections. A captain hold is actionable only when every blocker is Done, any
-hold-until date has arrived, and an undated hold remains below the aging threshold.
+projections. A captain hold is actionable only when it is a decision (not To
+read), every blocker is Done, any hold-until date or return time has arrived,
+it is not snoozed, and an undated hold remains below the aging threshold.
 Cross-home collection uses FM_SNAPSHOT_SECONDMATES (default 20, 0 lifts the
 count bound) and FM_SNAPSHOT_SECONDMATE_MAX_BYTES.
 Every sampled remote home's state/home-summary.json is fetched concurrently
@@ -291,7 +300,7 @@ The registered secondmate table uses FM_SNAPSHOT_REGISTRY_LINES,
 FM_SNAPSHOT_REGISTRY_BYTES, FM_SNAPSHOT_REGISTRY_RECORDS, and
 FM_SNAPSHOT_REGISTRY_TIMEOUT, with unavailability and truncation disclosed.
 Every captain hold carries hold_bucket, decided only from structured fields and
-never from hold reason or body prose: "blocked", "dated", "aged", or "live".
+never from hold reason or body prose: "blocked", "dated", "snoozed", "aged", or "live".
 An undated hold ages once its hold-set timestamp is at least
 FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS old (default 14; 0 ages every hold with a
 non-negative computed age); legacy holds without a stamp fall back to their
@@ -549,8 +558,16 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
     | .records |= map(
         if (.body_lines | length) > 0 then
           .hold_set = cap(.body_lines[0]; "^Captain hold set:[[:space:]]*(?<v>[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?)$")
-          | .hold_origin = (if .hold_set == null then null
-              else cap(.body_lines[1] // ""; "^Captain hold origin:[[:space:]]*(?<v>[A-Za-z0-9._-]+)$") end)
+          | (if .hold_set == null then []
+             else reduce .body_lines[1:][] as $l ({done:false, out:[]};
+                if .done then .
+                elif ($l | test("^Captain hold (origin|flavor|snoozed|returns): ")) then .out += [$l]
+                else .done = true end) | .out end) as $header
+          | def header($key; $re): first($header[] | cap(.; "^Captain hold " + $key + ":[[:space:]]*(?<v>" + $re + ")$") | select(. != null)) // null;
+            .hold_origin = header("origin"; "[A-Za-z0-9._-]+")
+          | .hold_read = (header("flavor"; "read") != null)
+          | .hold_snoozed_at = header("snoozed"; "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+          | .hold_returns_at = header("returns"; "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
           | .local_note = (.local_note
               // (if any(.body_lines[];
                     test("^Resolution recorded by fm-(captain|decision)-hold\\.$"))
@@ -579,15 +596,22 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                else "done" end)
           | .requires_child_metadata = (.current_role == "worker")
           | .hold_age_days = days_between((.hold_set // .since); $now)
+          | .hold_returns = (if .hold_until == null then null else .hold_returns_at end)
           | .hold_bucket =
               (if .hold_kind != "captain" or .hold_reason == null or .state == "done"
                   or .current_role == "idea" then null
                elif (.unresolved_blocker_ids | length) > 0 then "blocked"
-               elif .hold_until != null and .hold_until > $today then "dated"
+               elif .hold_until != null and
+                    (if .hold_returns_at != null then .hold_returns_at > $now else .hold_until > $today end) then "dated"
+               elif .hold_until == null and .hold_snoozed_at != null then "snoozed"
                elif .hold_until == null and .hold_age_days != null
                     and .hold_age_days >= $age_days then "aged"
                else "live" end)
-          | .captain_actionable = (.hold_bucket == "live")
+          | .hold_flavor = (if .hold_bucket == null then null elif .hold_read then "read" else "decision" end)
+          | .hold_snoozed_at = (if .hold_bucket == "dated" or .hold_bucket == "snoozed"
+              then (.hold_snoozed_at // .hold_set) else null end)
+          | .captain_actionable = (.hold_bucket == "live" and .hold_flavor == "decision")
+          | del(.hold_read, .hold_returns_at)
         else . end)
     | del(.section,.order)
   ' < "$backlog" | fm_hold_reason_decode_stream json

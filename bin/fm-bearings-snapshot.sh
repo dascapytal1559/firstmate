@@ -40,9 +40,11 @@
 # buckets are total and mutually exclusive, so every captain hold appears in
 # exactly one decision bucket and none can fall through both. An actively worked
 # held task may also appear in Underway. A "live" hold is a default Captain's Call
-# entry; "blocked", "dated", and "aged" leave the default Captain's Call, render
-# as Charted Next gates stating why (the blocking work, the until date, or the
-# floored age), and are counted in omitted[].
+# entry; "blocked", "dated", "snoozed", and "aged" leave the default Captain's
+# Call, render as Charted Next gates stating why (the blocking work, the until
+# date or time, "snoozed", or the floored age), and are counted in omitted[].
+# A live or aged To read item (hold_flavor read) is never a decision: it is
+# listed in to_read instead of Captain's Call or a gate.
 # --all-decisions reveals every captain hold available within the bounded snapshot
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
@@ -165,6 +167,7 @@ Default fields: schema, home, generated, priorities{text}, objectives{text}, prs
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,question,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed},
+  to_read{id,title,repo} (this home's live or aged To read items, never decisions),
   ideas{total,list,newest{id,title,repo,owner,filed}}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
@@ -410,6 +413,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       elif length > $n then (if $n == 1 then "…" else (.[:($n - 1)] + "…") end)
       else . end;
   def live_captain_call: .hold_bucket == "live";
+  def waiting_to_read: .hold_flavor == "read" and (.hold_bucket == "live" or .hold_bucket == "aged");
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
   def bounded_blocker_note($n):
@@ -429,7 +433,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       end;
   def hold_note:
     if .hold_bucket == "blocked" then bounded_blocker_note(70)
-    elif .hold_bucket == "dated" then ("until " + (.hold_until // "-"))
+    elif .hold_bucket == "dated" then ("until " + (.hold_returns // .hold_until // "-"))
+    elif .hold_bucket == "snoozed" then "snoozed"
     elif .hold_bucket == "aged" and .hold_age_days != null then
       ("held " + (.hold_age_days | tostring) + "d")
     else null end;
@@ -548,7 +553,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
-         | select(.structured and .hold_bucket != null)
+         | select(.structured and .hold_bucket != null and .hold_flavor != "read")
          | select(($all_decisions == 1) or live_captain_call)
          | {id,key:.id,verb:"captain-hold",
             summary:hold_summary(.title; .hold_reason),
@@ -604,7 +609,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.structured and
              (.hold_bucket != null or .state == "queued" or
               (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
-         | select(.captain_actionable != true and .current_role != "idea")
+         | select(.captain_actionable != true and .current_role != "idea" and (waiting_to_read | not))
          | select((.hold_bucket == null) or ($all_decisions == 0))
          | as_gate("(main)") ]
      + [ (.secondmate_current.records // [])[] as $m
@@ -682,6 +687,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       gates: ($return_catchup_gate
               + ($gates_all | newest_filed_first
                  | if $all_queued == 1 then . else .[:$gates_n] end)),
+      to_read: [ .backlog.records[] | select(.structured and waiting_to_read)
+                 | {id, title:(.title | trunc(70)), repo:(.repo // null)} ],
       ideas: {total:($ideas_all | length),
               list:"bin/fm-tasks-axi.sh list --state queued --kind idea",
               newest:($ideas_all | reverse | newest_filed_first | .[:$ideas_n])},

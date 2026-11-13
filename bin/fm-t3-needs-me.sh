@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# fm-t3-needs-me.sh - keep the decisions on the captain's T3 Bridge tab in
-# line with his open captain calls (docs/t3code-backend.md "Bridge decisions").
+# fm-t3-needs-me.sh - keep the captain's list in T3 in line with his open
+# captain items (docs/t3code-backend.md "Captain's list").
 #
-# Each open captain call is one decision on the Bridge, carrying the call's
-# question, options, its project (the task's repo), when it started waiting
-# (the hold's start), and the words Firstmate raised and updated it with. The
-# wanted state comes from structured records only: the backlog's captain holds
-# and their hold_bucket (bin/fm-fleet-snapshot.sh), the call's context record
+# Each open captain hold is one item, carrying the call's question, options,
+# its project (the task's repo), when it started waiting (the hold's start),
+# the words Firstmate raised and updated it with, its kind (decision, or read
+# for a To read item), its snooze, and the card it rides on. The wanted state
+# comes from structured records only: the backlog's captain holds and their
+# hold_bucket, hold_flavor, hold_snoozed_at, and hold_returns
+# (bin/fm-fleet-snapshot.sh), the call's context record
 # (data/needs-me/<task-id>.json, written only by bin/fm-captain-hold.sh
-# context). No prose is read.
+# context), each task record's t3_thread_id and t3_review, and the item
+# threads file (state/t3-needs-me/threads.json). No prose is read.
 #
 # Usage:
 #   fm-t3-needs-me.sh sync
-#     bin/fm-captain-hold.sh runs this after every hold, answer, reconcile, and
-#     context, before it returns, and bin/fm-watch.sh about once a minute as
-#     the backstop. One pass, one T3 session, and one more each when the
-#     objectives, the routing table or the rules changed.
+#     bin/fm-captain-hold.sh runs this after every hold, answer, snooze,
+#     reconcile, and context, before it returns; bin/fm-t3-captain-sync.sh's
+#     listener runs it on any other change to its sources, and its ten-minute
+#     check as the safety net. One pass, one T3 session, and one more each
+#     when the objectives, the routing table or the rules changed.
 #   fm-t3-needs-me.sh reply-task [<message-file>]
 #     Prints the task id a captain reply names (stdin without a file): a reply
-#     from the Bridge names it on its `needs-me-task: <task-id>` line, and one
+#     to an item names it on its `needs-me-task: <task-id>` line, and one
 #     typed on a kept card names the card's thread on its
 #     `kept-thread: <thread-id>` line, whose task is the one record in
 #     state/*.meta with that t3_thread_id. Exit 1 when the message names
@@ -26,18 +30,29 @@
 #     malformed id, or a thread more than one task records.
 #
 # Wanted state, per task: a live or aged hold is listed until it is answered
-# or closed, however long it waits; a dated hold (--until) is listed with
-# wakeAt 00:00 UTC on that date, so it waits under Scheduled until then; a
-# blocked, answered, released, or closed call is left out. The payload is the
-# context record from this hold (same hold-set stamp) or, without one, the
-# hold reason as the question and the only entry. Its revision is the
-# record's plus one (1 with no record), always positive as T3 requires, so
-# every raise and update reaches T3 as a new revision.
+# or closed, however long it waits; a dated or snoozed hold is listed with
+# snoozed {at, until}, until its return (hold_returns, else 00:00 UTC on its
+# date) or, with no date, null; a blocked, answered, released, or closed call
+# is left out. The payload is the context record from this hold (same
+# hold-set stamp) or, without one, the hold reason as the question and the
+# only entry. Its revision is the record's plus one (1 with no record),
+# always positive as T3 requires, so every raise and update reaches T3 as a
+# new revision, and a snooze alone does not.
+#
+# An item rides on the card of its own task's T3 thread, else its origin's
+# (hold_origin), while that record's review is not closed, `finished` when it
+# is a kept review (t3_review pending or waiting). One decision per card: the
+# oldest keeps it, To read items share it, and every other item rides on a
+# thread of its own, launched once by bin/fm-t3-mcp.mjs decisions and
+# recorded in the item threads file, which also archives that thread once its
+# item leaves the list or moves to a worker's card.
 #
 # A pass sends the whole list in one t3_decisions_set call (bin/fm-t3-mcp.mjs
-# decisions owns the call and its proof), so the Bridge changes in the same
-# step as Firstmate's records. Only a list that is empty and was empty on the
-# last accepted pass makes no call.
+# decisions owns the call and its proof), so the list changes in the same
+# step as Firstmate's records, and records what T3 took, each item's id,
+# kind, revision, and thread, in state/t3-needs-me/list.json for
+# bin/fm-t3-captain-sync.sh apply. Only a list that is empty, was empty on
+# the last accepted pass, and leaves no item thread to retire makes no call.
 #
 # A pass T3 does not take is reported on stdout and sent again on the next
 # pass. The third such pass in a row also leaves its exact error, as a
@@ -98,6 +113,8 @@ ROUTING_SYNC="$SYNCS/.routing"
 RULES_SYNC="$SYNCS/.rules"
 RULES_INVENTORY="$DATA/rules/inventory.json"
 DECISIONS_SYNC="$SYNCS/.decisions"
+THREADS="$SYNCS/threads.json"
+SENT="$SYNCS/list.json"
 ALERT="$SYNCS/.alert"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 BACKOFF_FAILURES=3
@@ -105,7 +122,7 @@ BACKOFF_SECONDS=900
 ALERT_AFTER=3
 
 usage() {
-  sed -n '13,26p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '/^# Usage:/,/^#     malformed id, or a thread more than one task records./p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -184,34 +201,74 @@ slurp_dir() {  # <dir>
   done | jq -s '.'
 }
 
-# The wanted list, one decision per open captain call the captain can answer,
-# into $WORK/list.json.
+# Every recorded task's T3 thread and kept-review state, as one array of
+# {id, thread, review}.
+slurp_threads() {
+  local meta id
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    id=$(basename "$meta" .meta)
+    slug_ok "$id" || continue
+    jq -cn --arg id "$id" --arg thread "$(sed -n 's/^t3_thread_id=//p' "$meta" | tail -n 1)" \
+      --arg review "$(sed -n 's/^t3_review=//p' "$meta" | tail -n 1)" \
+      'select($thread != "") | {id: $id, thread: $thread, review: $review}'
+  done | jq -s '.'
+}
+
+# The wanted list, one item per open captain item the captain can see, into
+# $WORK/list.json. An item rides on the card of its own task's T3 thread, else
+# its origin's, while that thread is not closed; the oldest decision on a
+# thread keeps it, and every other item without one is marked for a thread of
+# its own (`launch`), which the decisions verb launches, or reuses from
+# $THREADS.
 plan() {
   "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
     || { echo "t3-needs-me: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err")"; return 1; }
   slurp_dir "$CONTEXTS" > "$WORK/contexts.json" || return 1
-  jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" --arg home "$FM_HOME" '
+  slurp_threads > "$WORK/threads.json" || return 1
+  jq -c 'select(type == "object")' "$THREADS" > "$WORK/own.json" 2>/dev/null || echo '{}' > "$WORK/own.json"
+  [ -s "$WORK/own.json" ] || echo '{}' > "$WORK/own.json"
+  jq -n --slurpfile snap "$WORK/snapshot.json" --slurpfile ctx "$WORK/contexts.json" --arg home "$FM_HOME" \
+    --slurpfile metas "$WORK/threads.json" --slurpfile own "$WORK/own.json" '
     def iso: if . == null then null elif test("T") then . else . + "T00:00:00Z" end;
     def abs: if .kind == "link" or (.path | startswith("/")) then . else .path = ($home + "/" + .path) end;
     def entry: {at, kind} + (if .changed then {changed} else {} end) + {text}
       + {attachments: [(.attachments // [])[] | abs | {kind, path} + (if .label then {label} else {} end)]};
+    def oneline: gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "");
     ($ctx[0] | map({key: .taskId, value: .}) | from_entries) as $ctxs
+    | ($metas[0] | map(select(.review != "closed")) | map({key: .id, value: .}) | from_entries) as $cards
     | [ $snap[0].backlog.records[]?
         | select(.structured and .hold_kind == "captain" and .state != "done")
-        | select(.hold_bucket == "live" or .hold_bucket == "aged" or .hold_bucket == "dated")
+        | select(.hold_bucket == "live" or .hold_bucket == "aged" or .hold_bucket == "dated" or .hold_bucket == "snoozed")
         | . as $r
         | ($ctxs[$r.id] | if . != null and .holdSet == ($r.hold_set // "") then . else null end) as $c
         | (if $c != null and ($c.entries | length) > 0 then $c.entries else
              [{at: ($r.hold_set // $r.since | iso), kind: "raised", text: ($r.hold_reason[:8192]), attachments: []}] end) as $entries
+        | (($c.question // null) // $r.hold_reason) as $question
+        | ($cards[$r.id] // (if $r.hold_origin != null then $cards[$r.hold_origin] else null end)) as $card
         | {id: $r.id, title: ($r.title[:200])}
           + (if ($r.repo // "" | gsub("^\\s+|\\s+$"; "")) as $repo | $repo != "" and $repo != "-" then {projectName: ($r.repo[:200])} else {} end)
           + (if ($r.hold_set // "") != "" then {since: ($r.hold_set | iso)} else {} end)
-          + {question: ((($c.question // null) // $r.hold_reason)[:4000]),
+          + {question: ($question[:4000]),
              options: [($c.options // [])[] | {label}],
              entries: [$entries[] | entry],
-             revision: (($c.revision // 0) + 1)}
-          + (if $r.hold_bucket == "dated" and $r.hold_until != null then {wakeAt: ($r.hold_until | iso)} else {} end)
+             revision: (($c.revision // 0) + 1),
+             kind: $r.hold_flavor}
+          + (if $r.hold_bucket == "dated" or $r.hold_bucket == "snoozed"
+             then {snoozed: {at: ($r.hold_snoozed_at | iso), until: (if $r.hold_bucket == "dated" then ($r.hold_returns // $r.hold_until | iso) else null end)}}
+             else {} end)
+          + (if $card != null then {thread: {id: $card.thread, finished: ($card.review == "pending" or $card.review == "waiting")}} else {} end)
+          + {_order: ($r.hold_set // $r.since // ""),
+             _title: ($question | oneline | if length > 200 then .[:199] + "…" else . end)}
       ]
+    # One decision per thread: the oldest keeps it, and a later one gets a
+    # thread of its own. To read items share theirs.
+    | (map(select(.kind == "decision" and .thread != null)) | group_by(.thread.id)
+       | map(sort_by(._order) | .[1:][] | .id)) as $bumped
+    | map(.id as $id | if any($bumped[]; . == $id) then del(.thread) else . end)
+    | map(if .thread != null then . elif $own[0][.id] != null then .thread = {id: $own[0][.id], finished: true}
+          else .launch = {title: ._title} end)
+    | map(del(._order, ._title))
   ' > "$WORK/list.json" || { echo "t3-needs-me: the wanted state could not be built"; return 1; }
 }
 
@@ -269,13 +326,14 @@ sync_decisions() {
   parent=''
   [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
   jq -n --slurpfile list "$WORK/list.json" --arg root "$(cd "$FM_HOME" && pwd -P)" --arg parent "$parent" \
-    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0]}' > "$WORK/input.json" \
+    --arg threads "$THREADS" \
+    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0], threads: $threads}' > "$WORK/input.json" \
     || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
-  # Nothing to show, and nothing shown since the last accepted pass: no T3
-  # call at all.
-  if decisions_record | jq -e --slurpfile list "$WORK/list.json" \
-    '.empty == true and (.failures // 0) == 0 and $list[0] == []' >/dev/null; then
+  # Nothing to show, nothing shown since the last accepted pass, and no item
+  # thread left to retire: no T3 call at all.
+  if decisions_record | jq -e --slurpfile list "$WORK/list.json" --slurpfile own "$WORK/own.json" \
+    '.empty == true and (.failures // 0) == 0 and $list[0] == [] and $own[0] == {}' >/dev/null; then
     return 0
   fi
 
@@ -292,13 +350,15 @@ sync_decisions() {
     return 0
   fi
   printf '%s\n' "$out_parent" > "$SYNCS/.parent.tmp" && mv -f "$SYNCS/.parent.tmp" "$SYNCS/.parent"
+  jq -c '{at: '"$NOW"', items: (.items // [])}' "$WORK/out.json" > "$SENT.tmp" && mv -f "$SENT.tmp" "$SENT" \
+    || echo "t3-needs-me: could not record the list T3 took"
   pass_taken "$(jq 'length == 0' "$WORK/list.json")"
 
   while IFS=$'\t' read -r id message; do
     [ -n "$id$message" ] || continue
-    echo "t3-needs-me: decision $id was left off the Bridge: $message"
+    echo "t3-needs-me: item $id: $message"
     failed=1
-  done <<< "$(jq -r '.rejected[]? | [(.id // "?"), .problem] | @tsv' "$WORK/out.json")"
+  done <<< "$(jq -r '.rejected[]? | [(.id // "?"), (if .thread then .problem else "left off the list: " + .problem end)] | @tsv' "$WORK/out.json")"
   return "$failed"
 }
 

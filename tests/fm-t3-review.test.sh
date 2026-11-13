@@ -3,7 +3,8 @@
 # scout's thread for the captain: firstmate's handoff is recorded locally and
 # nothing is posted into the thread, which gets the tag and automatic settling
 # off, retried rather than given up; the captain's close is noticed even when
-# the thread is gone, and parks the open calls the card carried. Driven
+# the thread is gone, and closes the open calls the card carried as not
+# pursued. Driven
 # against the fake T3 server and the real bin/fm-captain-hold.sh, with no live
 # service.
 set -u
@@ -31,7 +32,7 @@ make_home() {
   HOME_DIR="$TMP_ROOT/$1"
   mkdir -p "$HOME_DIR/state" "$HOME_DIR/data/s1" "$HOME_DIR/config" "$HOME_DIR/copy"
   fm_test_tasks_toml "$HOME_DIR/.tasks.toml"
-  printf '## In flight\n\n## Queued\n\n## Done\n' > "$HOME_DIR/data/backlog.md"
+  printf '## In flight\n- [ ] s1 - The scout (repo: sample) (kind: scout) (since 2026-11-01)\n\n## Queued\n\n## Done\n' > "$HOME_DIR/data/backlog.md"
   t3_fake_case "$HOME_DIR/world" "${2:-}"
   FM_T3_WT="$HOME_DIR/copy" t3_fake_set 'w.reviews = w.reviews ?? true; w.threads = { "mcp:7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d": { threadId: "mcp:7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d",
     projectId: "proj-1", title: "scout", status: "completed", activeRunId: null, archived: false, worktreePath: process.env.FM_T3_WT, items: [], runs: [] } };'
@@ -73,6 +74,10 @@ test_retain_keeps_the_thread_and_posts_no_note() {
   assert_equals waiting "$(meta t3_review)" "a proven publication waits for the captain"
   assert_equals "$THREAD" "$(meta t3_review_target)" "the review is bound to its own thread"
   assert_equals 1 "$(meta t3_review_revision)" "the first handoff is revision 1"
+  assert_contains "$(cd "$HOME_DIR" && tasks-axi show s1 --full 2>/dev/null)" "Captain hold flavor: read" \
+    "the backlog holds the report To read"
+  assert_equals "read" "$(env FM_HOME="$HOME_DIR" "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input \
+    | jq -r '.backlog.records[] | select(.id == "s1") | .hold_flavor')" "as a To read item, not a decision"
   assert_equals 0 "$(notes)" "no Firstmate note is posted into the thread"
   [ -z "$(t3_fake_calls t3_thread_note)" ] || fail "retain never calls the note tool"
   report="$(cd "$HOME_DIR/data/s1" && pwd -P)/report.md"
@@ -250,39 +255,54 @@ row_state() {  # <task-id> -> open (held for the captain and not done) or closed
   if captain open "$1" >/dev/null 2>&1; then echo open; else echo closed; fi
 }
 
-assert_parked() {  # <task-id> <label>
+assert_not_pursued() {  # <task-id> <label>
   local body today
   today=$(date -u +%Y-%m-%d)
   assert_equals closed "$(row_state "$1")" "$2: the call leaves his open decisions"
   body=$(cd "$HOME_DIR" && tasks-axi show "$1" --full 2>/dev/null)
-  assert_contains "$body" "Archived the card in T3 on $today: parked, not pursued." "$2: the archive is recorded as his decision"
+  assert_contains "$body" "Archived in T3 on $today: not pursued." "$2: the archive is recorded as his decision"
+  assert_not_contains "$body" "parked" "$2: archive is never called parking"
 }
 
-test_archiving_the_card_parks_its_open_calls() {
+test_archiving_the_card_closes_its_open_calls() {
   park_home park-watch
   thread_set 't.archived = true;'
   review reconcile
   assert_equals closed "$(meta t3_review)" "his archive is his close"
-  assert_parked c1 "a call held from the review"
-  assert_parked c2 "a call the review's gate inventoried"
+  assert_not_pursued c1 "a call held from the review"
+  assert_not_pursued c2 "a call the review's gate inventoried"
+  assert_equals closed "$(row_state s1)" "the scout's own report is marked read"
   assert_equals open "$(row_state c3)" "another task's call stays open"
-  assert_not_contains "$(cd "$HOME_DIR" && tasks-axi show c4 --full 2>/dev/null)" "parked, not pursued" "an answered call keeps his answer"
-  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "its open calls c1 c2 were recorded as parked" "the close notice names what was parked"
+  assert_not_contains "$(cd "$HOME_DIR" && tasks-axi show c4 --full 2>/dev/null)" "not pursued" "an answered call keeps his answer"
+  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "s1 c1 c2 recorded as not pursued or read" "the close notice names what was closed"
   assert_present "$HOME_DIR/data/s1/report.md" "the report is never deleted"
   assert_present "$HOME_DIR/data/s1/handoff-r1.md" "the handoff is never deleted"
 
   captain hold c5 --title "A later call" --reason "Raised after the archive" --origin s1 >/dev/null 2>&1 || fail "hold c5"
   review reconcile
-  assert_equals open "$(row_state c5)" "a call raised after the close is not parked by a later pass"
+  assert_equals open "$(row_state c5)" "a call raised after the close is not closed by a later pass"
 
   park_home park-cleanup
   thread_set 't.archived = true;'
   review check-close s1
   expect_code 0 "$RC" "cleanup may run once he archived it: $OUT"
-  assert_parked c1 "cleanup noticing the archive first"
-  assert_parked c2 "cleanup noticing the archive first, inventoried call"
+  assert_not_pursued c1 "cleanup noticing the archive first"
+  assert_not_pursued c2 "cleanup noticing the archive first, inventoried call"
   assert_equals open "$(row_state c3)" "cleanup leaves another task's call open"
-  pass "fm-t3-review: archiving a kept card parks the open calls it carried, once, as his decision, and deletes nothing"
+  assert_equals open "$(row_state s1)" "cleanup, holding the scout's lock, settles its own hold itself"
+
+  # T3 logs his archive, and the listener applies it at once.
+  park_home park-closed
+  review closed s1 --at 2026-11-13T23:00:00.000Z
+  expect_code 0 "$RC" "the logged archive applies: $OUT"
+  assert_equals closed "$(meta t3_review)" "recorded closed"
+  assert_contains "$(cd "$HOME_DIR" && tasks-axi show c1 --full 2>/dev/null)" "Archived in T3 on 2026-11-13: not pursued." \
+    "dated by the archive itself, not by when it was applied"
+  assert_equals closed "$(row_state s1)" "and the scout marked read"
+  assert_present "$HOME_DIR/state/t3-review/s1.closed" "firstmate is told to clean it up"
+  review closed s1 --at 2026-11-13T23:00:00.000Z
+  expect_code 0 "$RC" "a replay changes nothing: $OUT"
+  pass "fm-t3-review: archiving a kept card closes the calls it carried as not pursued, marks it read, and deletes nothing"
 }
 
 # A pending handoff a T3 too old to keep threads refuses is dropped. Found by
@@ -413,6 +433,6 @@ test_retain_refuses_what_it_must_not_keep
 test_failures_retry_and_close_wins
 test_reconcile_notices_his_close_and_reopen
 test_reconcile_survives_a_record_it_cannot_publish
-test_archiving_the_card_parks_its_open_calls
+test_archiving_the_card_closes_its_open_calls
 test_reconcile_wakes_cleanup_when_t3_cannot_keep_it
 test_retain_refuses_an_option_without_its_value

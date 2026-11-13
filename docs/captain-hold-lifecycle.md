@@ -33,8 +33,10 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 
 | Subcommand | What it does | Details |
 | --- | --- | --- |
-| `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
-| `context` | Records the words Firstmate raised or updated an open call with, for the captain's T3 Bridge. | [Bridge decisions](t3code-backend.md#bridge-decisions) |
+| `hold` | Creates or reuses a task and holds it for the captain, as a decision or, with `--read`, a report To read. | [Creating a hold](#creating-a-hold-hold) |
+| `snooze`, `unsnooze` | Put an open item off, until a time or until brought back, and bring it back. | [Captain's list](t3code-backend.md#captains-list) |
+| `read-done`, `archive` | Record that the captain read a To read item, or archived an item in T3 (a decision closes as not pursued). | [Captain's list](t3code-backend.md#captains-list) |
+| `context` | Records the words Firstmate raised or updated an open call with, for the captain's list in T3. | [Captain's list](t3code-backend.md#captains-list) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
@@ -48,7 +50,7 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 ### Creating a hold (`hold`)
 
 The `hold` subcommand is the mandatory captain-hold creation path.
-On a live T3 worker it also [labels the worker's card](t3code-backend.md#crew-card-status), and on T3 every open call is listed on the captain's [Bridge](t3code-backend.md#bridge-decisions) in the same step.
+On T3 every open call is listed on the captain's [list](t3code-backend.md#captains-list) in the same step, on its worker's card when it has one.
 It works in this order:
 
 1. It uses an existing task, or creates one when nothing exists to hold.

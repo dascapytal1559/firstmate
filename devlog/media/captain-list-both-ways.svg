@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 300" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <rect width="760" height="300" fill="#ffffff"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+  </defs>
+  <rect x="30" y="100" width="190" height="100" rx="10" fill="#eef3ff" stroke="#5470c6"/>
+  <text x="125" y="135" text-anchor="middle" font-weight="600">Backlog</text>
+  <text x="125" y="158" text-anchor="middle" fill="#333">the one record of what</text>
+  <text x="125" y="176" text-anchor="middle" fill="#333">waits on the captain</text>
+  <rect x="540" y="100" width="190" height="100" rx="10" fill="#fff4e6" stroke="#d48a2b"/>
+  <text x="635" y="135" text-anchor="middle" font-weight="600">T3 sidebar</text>
+  <text x="635" y="158" text-anchor="middle" fill="#333">Needs you · To read</text>
+  <text x="635" y="176" text-anchor="middle" fill="#333">Snoozed</text>
+  <path d="M220,125 L538,125" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+  <text x="380" y="80" text-anchor="middle">any backlog change</text>
+  <text x="380" y="100" text-anchor="middle" fill="#555">whole list pushed within about a second</text>
+  <path d="M540,175 L222,175" stroke="#444" stroke-width="2" marker-end="url(#a)"/>
+  <text x="380" y="205" text-anchor="middle">Snooze · Bring back · Archive</text>
+  <text x="380" y="225" text-anchor="middle" fill="#555">applied to the backlog, pushed, then acknowledged</text>
+  <text x="380" y="275" text-anchor="middle" fill="#777">a ten-minute check covers crashes and restarts</text>
+</svg>

@@ -11,10 +11,10 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
 - [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
 - [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
-- [Bridge decisions](FORK.md#every-open-decision-on-t3-codes-bridge): each open decision is listed on T3's Bridge tab with its full context, beside the chat listing.
+- [Captain's list](FORK.md#everything-waiting-on-the-captain-in-t3-codes-sidebar): everything waiting on the captain shows on cards in T3's sidebar, in real time, and his Snooze and Archive change the backlog at once.
 - [Bridge routing table](FORK.md#the-model-routing-table-on-t3-codes-bridge): T3's Bridge tab shows which model FirstMate picks for each kind of task.
 - [Bridge rules](FORK.md#every-standing-rule-on-t3-codes-bridge): T3's Bridge tab lists every standing rule, approved or not, and one tap agrees with FirstMate's recommendation.
-- [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
+- [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Testing, Waiting, Ready, or Failed.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
 - [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.

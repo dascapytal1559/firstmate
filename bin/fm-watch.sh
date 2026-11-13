@@ -4095,15 +4095,49 @@ t3_present_sync_detached() {
     T3_PRESENT_PID=
   fi
   touch "$STATE/.t3-present-sync"
+  local list_check=0
+  if [ "$(age_of "$STATE/.t3-captain-check")" -ge 600 ]; then
+    touch "$STATE/.t3-captain-check"
+    list_check=1
+  fi
   {
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-t3-review.sh" reconcile
-    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-crew-status.sh" sync
-    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
+    # The captain's list follows the backlog in real time through its
+    # listener; this is its ten-minute safety net (bin/fm-t3-captain-sync.sh).
+    [ "$list_check" = 0 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-t3-captain-sync.sh" check
   } </dev/null >/dev/null 2>&1 &
   T3_PRESENT_PID=$!
+}
+
+# The captain archived an item on the card of a worker still running
+# (bin/fm-t3-captain-sync.sh apply leaves state/t3-captain-sync/<id>.wake):
+# one durable check wake per notice asks firstmate to wind the worker down
+# safely. A notice whose worker is already cleaned up is dropped.
+t3_captain_alert_tick() {
+  local alert id reason queued
+  for alert in "$STATE"/t3-captain-sync/*.wake; do
+    [ -f "$alert" ] || continue
+    id=$(basename "$alert" .wake)
+    if [ ! -f "$STATE/$id.meta" ]; then
+      rm -f -- "$alert"
+      continue
+    fi
+    reason=$(head -n 1 "$alert" 2>/dev/null || true)
+    case "$reason" in
+      "check: t3-captain $id: "*) ;;
+      *) rm -f -- "$alert"; continue ;;
+    esac
+    queued=$(fm_wake_queued_keys check)
+    if ! printf '%s\n' "$queued" | grep -Fx "t3-captain-$id" >/dev/null 2>&1; then
+      fm_wake_append check "t3-captain-$id" "$reason" || return 1
+      rm -f -- "$alert"
+      wake "$reason"
+      continue
+    fi
+    rm -f -- "$alert"
+  done
 }
 
 # The captain's T3 decisions failed to update three passes in a row
@@ -4322,11 +4356,12 @@ while :; do
 
   detached_job_tick
 
-  # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the captain's
-  # decisions (bin/fm-t3-needs-me.sh) are brought in line here as the
-  # backstop: a label or decision that failed, a label T3 lost, or a run that
-  # started or ended converges on the next pass, and decisions that keep
-  # failing wake firstmate. Only a home with the T3 credential takes part.
+  # The T3 crew cards' status (bin/fm-t3-crew-status.sh) is brought in line
+  # here every minute as the backstop: a label that failed, a label T3 lost,
+  # or a run that started or ended converges on the next pass. The captain's
+  # list gets its ten-minute safety net in the same pass, and a list that
+  # keeps failing wakes firstmate. Only a home with the T3 credential takes
+  # part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
     && [ "$(age_of "$STATE/.t3-present-sync")" -ge 60 ]; then
     t3_present_sync_detached
@@ -4337,6 +4372,10 @@ while :; do
   }
   t3_review_alert_tick || {
     echo 'watcher: T3 review close notice could not be queued' >&2
+    exit 1
+  }
+  t3_captain_alert_tick || {
+    echo 'watcher: T3 wind-down notice could not be queued' >&2
     exit 1
   }
 

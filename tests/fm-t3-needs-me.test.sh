@@ -279,8 +279,9 @@ test_list_carries_every_open_call() {
   captain hold w1 --reason "Grid or list for the print view?" >/dev/null 2>&1 || fail "hold should succeed"
   assert_equals "1" "$(list_calls)" "the hold sends the list in one call before it returns"
   assert_equals "\"$FM_THREAD\"" "$(bridge '.decisionList.replyTo')" "replies go to FirstMate's thread"
-  assert_equals '["entries","id","options","projectName","question","revision","since","title"]' \
-    "$(bridge '.decisionList.decisions[0] | keys')" "a decision carries exactly T3's fields"
+  assert_equals '["entries","id","kind","options","projectName","question","revision","since","title"]' \
+    "$(bridge '.decisionList.decisions[0] | keys')" "an item with no worker on a T3 without crew lineage carries exactly these fields"
+  assert_equals '"decision"' "$(bridge '.decisionList.decisions[0].kind')" "a plain hold is a decision"
   assert_equals '"w1"' "$(bridge '.decisionList.decisions[0].id')" "keyed by the task id"
   assert_equals '"Pick the print layout"' "$(bridge '.decisionList.decisions[0].title')" "titled by the task"
   assert_equals '"sample"' "$(bridge '.decisionList.decisions[0].projectName')" "naming the task's repo"
@@ -289,9 +290,9 @@ test_list_carries_every_open_call() {
   assert_equals "" "$(t3_fake_calls t3_thread_launch)" "and no thread is made"
   assert_absent "$HOME_DIR/state/t3-needs-me/w1.json" "nor any record per decision"
   captain hold w2 --reason "Give the word to buy the camera" --until 2099-01-02 >/dev/null 2>&1 || fail "dated hold should succeed"
-  assert_equals '"2099-01-02T00:00:00Z"' "$(bridge '.decisionList.decisions[] | select(.id == "w2") | .wakeAt')" \
-    "a dated hold waits under Scheduled until its date"
-  assert_equals 'null' "$(bridge '.decisionList.decisions[] | select(.id == "w1") | .wakeAt')" "an undated one does not"
+  assert_equals '"2099-01-02T00:00:00Z"' "$(bridge '.decisionList.decisions[] | select(.id == "w2") | .snoozed.until')" \
+    "a dated hold is snoozed until its date"
+  assert_equals 'null' "$(bridge '.decisionList.decisions[] | select(.id == "w1") | .snoozed')" "an undated one is not"
   captain hold w3 --reason "Choose after w2 lands" >/dev/null 2>&1 || fail "blocked hold should succeed"
   assert_equals '["w1","w2"]' "$(bridge '[.decisionList.decisions[].id]')" "a blocked call is left out"
   captain context w1 --text-file "$(say 'Grid, list, or cards?')" --question "Which layout?" --option "Grid" >/dev/null 2>&1 \
@@ -307,6 +308,35 @@ test_list_carries_every_open_call() {
   sync_now >/dev/null || fail "an idle pass should succeed"
   assert_equals "0" "$(list_calls)" "an empty list already sent is not sent again"
   pass "fm-t3-needs-me.sh: the Bridge list carries every open call and changes in the same step"
+}
+
+test_items_ride_on_their_cards() {
+  local kept='mcp:00000000-0000-4000-8000-0000000000k1' live='mcp:00000000-0000-4000-8000-0000000000s1' own
+  make_home cards
+  FM_T3_FM=$FM_THREAD t3_fake_set 'w.crewLineage = true;
+    w.threads[process.env.FM_T3_FM].providerInstanceId = "claudeAgent"; w.threads[process.env.FM_T3_FM].model = "claude-opus";'
+  FM_T3_K=$kept FM_T3_S=$live t3_fake_set '
+    for (const id of [process.env.FM_T3_K, process.env.FM_T3_S]) w.threads[id] = { threadId: id, projectId: "proj-fm", title: "worker",
+      status: "completed", activeRunId: null, archived: false, worktreePath: "/tmp/wt", items: [], runs: [] };'
+  (cd "$HOME_DIR" && tasks-axi add k1 "Kept scout" --repo sample && tasks-axi add s1 "Live ship" --repo sample) >/dev/null \
+    || fail "could not seed the worker rows"
+  printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\n' "$kept" > "$HOME_DIR/state/k1.meta"
+  printf 'kind=ship\nbackend=t3code\nt3_thread_id=%s\n' "$live" > "$HOME_DIR/state/s1.meta"
+  captain hold k1 --read --reason "The scout's summary" >/dev/null 2>&1 || fail "the read hold should succeed"
+  FM_CAPTAIN_HOLD_NOW=2026-11-01T00:00:00Z captain hold w1 --reason "First call from the scout" --origin k1 >/dev/null 2>&1 \
+    || fail "the first call should succeed"
+  FM_CAPTAIN_HOLD_NOW=2026-11-02T00:00:00Z captain hold w2 --reason "Second call from the scout" --origin k1 >/dev/null 2>&1 \
+    || fail "the second call should succeed"
+  captain hold s1 --reason "Keep going?" >/dev/null 2>&1 || fail "the ship's call should succeed"
+  assert_equals "{\"kind\":\"read\",\"thread\":{\"id\":\"$kept\",\"finished\":true}}" "$(entry k1 '{kind, thread}')" \
+    "a kept scout's report is To read on its own finished card"
+  assert_equals "{\"kind\":\"decision\",\"thread\":{\"id\":\"$kept\",\"finished\":true}}" "$(entry w1 '{kind, thread}')" \
+    "the oldest call raised for it rides on the same card"
+  own=$(jq -r '.w2' "$HOME_DIR/state/t3-needs-me/threads.json")
+  assert_equals "{\"id\":\"$own\",\"finished\":true}" "$(entry w2 .thread)" "a second call on that card gets a thread of its own"
+  assert_equals '"Second call from the scout"' "$(bridge ".threads[\"$own\"].title")" "titled with its question"
+  assert_equals "{\"id\":\"$live\",\"finished\":false}" "$(entry s1 .thread)" "a call on a live worker rides on its running card"
+  pass "fm-t3-needs-me.sh: each item rides on its worker's card, one decision per card, the rest on threads of their own"
 }
 
 test_list_with_only_blocked_calls_is_sent_once() {
@@ -391,21 +421,29 @@ test_list_dated_hold_waits_until_its_date() {
   FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w1 --reason "Pick the layout" --until 2099-01-04 >/dev/null 2>&1 \
     || fail "dated hold should succeed"
   at 2099-01-01T10:01:00Z needs_me sync >/dev/null || fail "sync after the dated hold should succeed"
-  assert_equals '"2099-01-04T00:00:00Z"' "$(entry w1 .wakeAt)" "a dated hold waits until 00:00 UTC on its date"
+  assert_equals '{"at":"2099-01-01T10:00:00Z","until":"2099-01-04T00:00:00Z"}' "$(entry w1 .snoozed)" \
+    "a dated hold is snoozed from when it was put off until 00:00 UTC on its date"
   at 2099-01-04T00:01:00Z needs_me sync >/dev/null || fail "sync on the due date should succeed"
-  assert_equals 'null' "$(entry w1 .wakeAt)" "the minute its date comes due it waits no longer"
+  assert_equals 'null' "$(entry w1 .snoozed)" "the minute its date comes due it is snoozed no longer"
   at 2099-01-05T00:02:00Z needs_me sync >/dev/null || fail "sync a day after the due date should succeed"
   assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "and stays listed after that day"
-  assert_equals 'null' "$(entry w1 .wakeAt)" "without a date"
   FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w2 --reason "Buy the camera" --until 2099-02-01 >/dev/null 2>&1 \
     || fail "a second dated hold should succeed"
   at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the second dated hold should succeed"
-  assert_equals '"2099-02-01T00:00:00Z"' "$(entry w2 .wakeAt)" "a deferred call waits for its own date"
+  assert_equals '"2099-02-01T00:00:00Z"' "$(entry w2 .snoozed.until)" "a deferred call waits for its own date"
   at 2099-01-05T09:00:00Z captain hold w2 --reason "Buy the camera now" >/dev/null 2>&1 || fail "re-hold should succeed"
   at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the re-hold should succeed"
-  assert_equals 'null' "$(entry w2 .wakeAt)" "re-asked early with no date, it waits no longer"
+  assert_equals '"2099-02-01T00:00:00Z"' "$(entry w2 .snoozed.until)" "FirstMate's own update never brings a snoozed item back"
   assert_equals '"Buy the camera now"' "$(entry w2 .question)" "and carries the new reason"
-  pass "fm-t3-needs-me.sh: a dated hold waits until its date, and a re-ask with no date brings it back"
+  at 2099-01-05T09:00:00Z captain unsnooze w2 >/dev/null 2>&1 || fail "unsnooze should succeed"
+  at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the unsnooze should succeed"
+  assert_equals 'null' "$(entry w2 .snoozed)" "bringing it back does"
+  at 2099-01-05T09:00:00Z captain snooze w2 >/dev/null 2>&1 || fail "snooze should succeed"
+  at 2099-01-05T09:00:00Z needs_me sync >/dev/null || fail "sync after the snooze should succeed"
+  assert_equals '{"at":"2099-01-05T09:00:00Z","until":null}' "$(entry w2 .snoozed)" "a snooze with no date waits until it is brought back"
+  at 2099-03-05T09:00:00Z needs_me sync >/dev/null || fail "sync two months later should succeed"
+  assert_equals 'null' "$(entry w2 .snoozed.until)" "however long that takes"
+  pass "fm-t3-needs-me.sh: a snoozed item returns at its time or when brought back, never on FirstMate's update"
 }
 
 test_list_keeps_an_open_call_however_long_it_waits() {
@@ -416,7 +454,7 @@ test_list_keeps_an_open_call_however_long_it_waits() {
   assert_equals "aged" "$(FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 home_env "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input | jq -r '.backlog.records[] | select(.id == "w1") | .hold_bucket')" "the hold reads as aged"
   FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS=0 sync_now >/dev/null || fail "sync should succeed"
   assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "an aged call is listed"
-  assert_equals 'null' "$(entry w1 .wakeAt)" "with no date to wait for"
+  assert_equals 'null' "$(entry w1 .snoozed)" "and not snoozed"
   at "$(jq -nr --argjson t "$(( $(date +%s) + 7 * 86400 ))" '$t | todateiso8601')" needs_me sync >/dev/null \
     || fail "a week later sync should succeed"
   assert_equals '["w1"]' "$(bridge '[.decisionList.decisions[].id]')" "and a week later it is still listed"
@@ -492,7 +530,7 @@ test_list_leaves_out_a_decision_t3_would_refuse() {
   out=$(sync_now)
   rc=$?
   expect_code 1 "$rc" "a decision outside T3's bounds is reported: $out"
-  assert_contains "$out" "decision w1 was left off the Bridge" "naming it"
+  assert_contains "$out" "item w1: left off the list" "naming it"
   assert_equals '["w2"]' "$(bridge '[.decisionList.decisions[].id]')" "and the rest still lands"
   pass "fm-t3-needs-me.sh: one decision T3 would refuse never blocks the rest"
 }
@@ -999,6 +1037,7 @@ test_reply_on_a_kept_card
 test_unsupported_t3_or_no_credential_does_nothing
 test_secondmate_home_takes_no_part
 test_list_carries_every_open_call
+test_items_ride_on_their_cards
 test_kept_review_alone_is_no_decision
 test_list_with_only_blocked_calls_is_sent_once
 test_list_resend_keeps_the_captains_answer

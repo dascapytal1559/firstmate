@@ -2412,6 +2412,40 @@ seed_working_child() {  # <mate-home> <id> <doing> [repo]
   printf 'working: %s\n' "$doing" > "$mate/state/$id.status"
 }
 
+test_to_read_and_snoozed_items() {
+  local home fakebin json
+  home=$(make_home to-read-snoozed)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] live-call - A live call (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose a route) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+- [ ] report-ready - A finished report (repo: sample) (kind: captain) (since 2026-07-10) (hold: the summary) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+- [ ] put-off - A call put off with no date (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose later) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+- [ ] back-tonight - A call back this evening (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose tonight) (hold-kind: captain) (hold-until: 2026-07-12)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+  Captain hold returns: 2026-07-11T20:00:00Z
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[].id] == ["live-call"])
+      and (.to_read == [{id:"report-ready", title:"A finished report", repo:"sample"}])
+      and (.gates | any(.[]; .id == "put-off" and (.reason | startswith("snoozed: "))))
+      and (.gates | any(.[]; .id == "back-tonight" and (.reason | startswith("until 2026-07-11T20:00:00Z: "))))
+      and (.gates | any(.[]; .id == "report-ready") | not)
+  ' >/dev/null || fail "To read and snoozed items are placed wrong: $json"
+  pass "bearings: a To read item is its own short list, never a decision, and snoozed items sit with the dated gates"
+}
+
 test_working_captain_holds_keep_their_bucket_surfaces() {
   local home mate fakebin id summary json expanded
   home=$(make_home working-hold-buckets)
@@ -3607,6 +3641,7 @@ fm_test_run \
   test_main_unstructured_current_is_disclosed_with_structured_sibling \
   test_main_orphan_counterfactual_meta_clears_inventory_warning \
   test_working_captain_holds_keep_their_bucket_surfaces \
+  test_to_read_and_snoozed_items \
   test_active_children_project_independent_of_home_captain_hold \
   test_nameless_legacy_summary_uses_its_durable_identifier \
   test_newest_filed_gates_are_selected_before_snapshot_bounds \

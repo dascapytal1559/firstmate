@@ -1330,3 +1330,34 @@ This is FirstMate's half; the card's input box and Archive button are the T3 for
   Nothing is deleted: the report and the task's records stay.
 
 The evidence is the review, needs-me, and T3 helper suites: the thread is tagged with no note, a kept-card reply names its task and refuses anything ambiguous, and archiving parks the calls the card carried while leaving another task's call, an already answered call, and a call raised after the archive alone, on both the watcher's pass and cleanup's.
+
+## 52. One list, kept in step both ways (13 November 2026)
+
+![The backlog pushes the whole list to T3's sidebar within about a second of any change; his Snooze, Bring back, and Archive come back, are applied to the backlog, pushed, and only then acknowledged; a ten-minute check covers crashes and restarts](media/captain-list-both-ways.svg)
+
+Why:
+
+> it's not automatically synced to a single source of truth for their state, so that they can be outdated. The idea that they can be outdated is not great.
+>
+> Rather than syncing once a minute, I would like to explore doing that in real time.
+>
+> — 13 November 2026
+
+This is FirstMate's half; the sidebar's labels, Snooze button, and Archive are the T3 fork's.
+
+- **The backlog is the record.**
+  Every open captain hold is one item on a card under FirstMate's: a decision, or, held `--read`, a finished report To read.
+  An item rides on its worker's card; a decision with no worker gets a thread of its own, titled with the question, with nothing posted into it ("Let's reduce the scope.").
+- **Real time, both ways.**
+  A listener, kept running by the watcher, pushes the whole list within about a second of any backlog change, whoever made it.
+  His Snooze, Bring back, and Archive are logged by T3; the listener applies each to the backlog, pushes the list, and only then acknowledges it, so the sidebar never shows something the backlog does not.
+  The minute pass for the list is gone; a ten-minute check covers crashes and restarts.
+- **Snooze uses T3's presets.**
+  "We just use theirs": a return can be a time of day, so the backlog now keeps an exact return time beside its date.
+  A snoozed item "stays snoozed unless we bring it back"; FirstMate's own updates never wake it.
+- **Archive is "not pursued".**
+  Park now means snooze, so an archived decision is recorded as "Archived in T3 on <date>: not pursued.", a report as read, and on a worker still running FirstMate is asked to wind it down through its normal safe cleanup.
+- **No more "Waiting for captain".**
+  The card's Needs you or To read comes from the list, so FirstMate's own label for it is gone.
+
+The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a lost archive caught by the check) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.
