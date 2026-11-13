@@ -29,6 +29,7 @@ Outside T3 Code:
 - [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
 - [Live review boards](FORK.md#review-boards-that-keep-listening): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
 - [Rebased landings](FORK.md#rebased-local-only-work-still-lands): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes.
+- [Trusted review wakes](FORK.md#only-trusted-reviewers-wake-a-parked-worker): a worker parked on review restarts only for review activity from trusted people; anything else is reported to FirstMate.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

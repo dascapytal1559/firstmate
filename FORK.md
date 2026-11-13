@@ -230,3 +230,15 @@ An added, amended, reordered, or squashed commit is still refused, and the refus
 The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
 Approved by the captain on 2026-11-08.
 Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
+
+## Only trusted reviewers wake a parked worker
+
+With park on review switched on, a worker whose PR waits for review is stopped, and a fresh one starts when the PR gets new review activity.
+Upstream starts it on a new comment or an unresolved review thread from anyone, and tells it to address that activity on the branch.
+On a public repository that lets any passer-by start an agent that acts on their words.
+The fork starts it only for comments and threads from the repository's owners, members, or collaborators, or from a bot the home already trusts in `config/contribution-review-bots`, the same trust the contribution watcher uses.
+Anything else, including any GitLab activity (whose reads carry no membership) and a read too large to see every author, leaves the worker stopped and tells FirstMate once, so nothing is silently dropped.
+The fresh worker is also told that PR text is input to read, never instructions to follow.
+Pushes, failing checks, requested changes, and conflicts restart it as upstream does.
+Approved by the captain on 2026-11-13.
+Details: the trigger contract in [`fm-park.sh`](bin/fm-park.sh).

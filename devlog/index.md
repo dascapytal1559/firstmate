@@ -1282,3 +1282,28 @@ T3 itself is changing so that a fresh start on the main thread stops the previou
   This already held; the test now keeps it so.
 
 The evidence is the swap suite's two new cases (the same-thread refusal, with its stale-record fallback, and the unacknowledged handover) and four new crew-parent cases: a pinned thread between turns, a pin that settles several running threads, an archived pin ignored, and no thread at all.
+
+## 50. Only trusted reviewers wake a parked worker (13 November 2026)
+
+Upstream's newest update brought park on review: a worker whose PR only waits for review is stopped, and a fresh one starts when the PR gets new review activity.
+The nightly review held the update back, because that activity could come from anyone: on a public repository, a passer-by's comment would start an agent told to act on it.
+
+Asked how to take it:
+
+> Sometimes we do turn it into a PR. And when we do, I like to preserve that functionality. And use that as intended. But yes, you are right. Most of the time we don't do that. So, if we could just make it conditional.
+>
+> — 13 November 2026
+
+- **Trust decides the restart.**
+  A comment, review, or unresolved thread restarts the worker only when it comes from the repository's owners, members, or collaborators, or a bot listed in `config/contribution-review-bots`, the trust the contribution watcher already uses.
+- **Nothing is dropped silently.**
+  Anything else leaves the worker stopped and tells FirstMate once, naming who wrote it and when; new activity tells it again.
+  GitLab's reads carry no membership, so GitLab activity always takes this path, and so does a read too large to see every author.
+- **PR text is input, not orders.**
+  The fresh worker's note says comment text is written by other people, to read for what to change and never to follow as instructions.
+- **Everything else is upstream's.**
+  Pushes, failing checks, requested changes, and conflicts restart the worker exactly as before.
+
+The evidence is the park suite: a trusted comment restarts the worker, while a passer-by's comment, an unlisted bot, a thread opened by an untrusted author, and GitLab notes each leave it stopped and are reported once.
+The new cases fail against upstream's unchanged code.
+Park on review stays off in this home.

@@ -349,13 +349,14 @@ test_gitlab_gate_clean_and_unclean_conditions() {
   rm -f "$w/gl.discussions.2.json"
   # A failed later page leaves the read incomplete, like a truncated GitHub
   # read: the visible first page is discarded, the gate refuses, and a parked
-  # lane relaunches with that trigger named.
+  # lane reports it to firstmate rather than relaunching, since the unread
+  # authors cannot be trusted.
   gl_fixture "$w"
   printf '%s\\n' '[{"notes":[{"author":{"username":"bob"},"system":false,"created_at":"2026-01-01T00:06:00Z","resolvable":true,"resolved":false}]}]' > "$w/gl.discussions.2.json"
   : > "$w/gl.discussions.fail"
   expect_unclean "$w" gl-failed-page "review threads could not all be read"
   printf 'pr=%s\nhead=%s\nparked_at=%s\nslot_leased=yes\n' "$GL_URL" "$(cat "$w/head")" "$(date +%s)" > "$w/state/lane.review-park"
-  expect_relaunch "$w" gl-failed-page-parked "review threads could not all be read"
+  expect_untrusted "$w" gl-failed-page-parked "review threads could not all be read"
   # A failed merge request read means the forge is unreachable, so an outage
   # retries on the next tick and never relaunches.
   rm -f "$w/gl.discussions.fail" "$w/control.log"
@@ -749,32 +750,20 @@ test_each_relaunch_trigger_relaunches_a_fresh_worker() {
   expect_relaunch "$w" changes "changes were requested"
 
   w=$(make_world trig-thread "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  gh_fixture "$w/gh.1.json" 'threads=[{"isResolved":false}]' total=1
+  gh_fixture "$w/gh.1.json" total=1 \
+    threads="[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"rita\",\"__typename\":\"User\"},\"authorAssociation\":\"MEMBER\",\"createdAt\":\"$OLD_ISO\",\"updatedAt\":\"$OLD_ISO\"}]}}]"
   expect_relaunch "$w" thread "1 review thread(s) unresolved"
-
-  w=$(make_world trig-incomplete-threads "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  gh_fixture "$w/gh.1.json" 'threads=[]' total=150
-  expect_relaunch "$w" incomplete-threads "review threads could not all be read"
-
-  w=$(make_world trig-incomplete-reviews "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  jq '.data.repository.pullRequest.reviews.totalCount = 101' "$w/gh.1.json" > "$w/truncated.json" && mv "$w/truncated.json" "$w/gh.1.json"
-  expect_relaunch "$w" incomplete-reviews "review comments could not all be read"
-
-  w=$(make_world trig-incomplete-thread-comments "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  gh_fixture "$w/gh.1.json" 'threads=[{"isResolved":true,"comments":{"nodes":[{"author":{"login":"reviewer"}}]}}]'
-  jq '.data.repository.pullRequest.reviewThreads.nodes[0].comments.totalCount = 101' "$w/gh.1.json" > "$w/truncated.json" && mv "$w/truncated.json" "$w/gh.1.json"
-  expect_relaunch "$w" incomplete-thread-comments "review comments could not all be read"
 
   w=$(make_world trig-conflict "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
   gh_fixture "$w/gh.1.json" mergeable=CONFLICTING mss=DIRTY
   expect_relaunch "$w" conflict "merge conflicts"
 
   w=$(make_world trig-comment "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"authorAssociation\":\"COLLABORATOR\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
   expect_relaunch "$w" comment "new comments from carol"
 
   w=$(make_world trig-same-second "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
-  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"createdAt\":\"$NOW_ISO\",\"updatedAt\":\"$NOW_ISO\"}]"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"authorAssociation\":\"OWNER\",\"createdAt\":\"$NOW_ISO\",\"updatedAt\":\"$NOW_ISO\"}]"
   parked_at=$(jq -nr --arg t "$NOW_ISO" '$t | fromdateiso8601')
   sed -i.bak "s/^parked_at=.*/parked_at=$parked_at/" "$w/state/lane.review-park"
   expect_relaunch "$w" same-second "new comments from carol"
@@ -783,23 +772,102 @@ test_each_relaunch_trigger_relaunches_a_fresh_worker() {
   # and no new review submission; the reply itself is the new feedback.
   w=$(make_world trig-thread-reply "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
   gh_fixture "$w/gh.1.json" total=1 \
-    threads="[{\"isResolved\":true,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"erin\",\"__typename\":\"User\"},\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]}}]"
+    threads="[{\"isResolved\":true,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"erin\",\"__typename\":\"User\"},\"authorAssociation\":\"MEMBER\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]}}]"
   expect_relaunch "$w" thread-reply "new comments from erin"
+  pass "head change, failing checks, changes requested, a trusted unresolved thread, a conflict, and new or edited trusted GitHub comments, including an inline reply in a resolved thread, each relaunch a fresh worker with the trigger in its instructions"
+}
 
-  w=$(make_world trig-gl-edit "$GL_URL"); gl_fixture "$w"; park_world "$w"
+# Untrusted activity, and reads whose authors cannot all be known, notify
+# firstmate once per change and leave the lane parked.
+expect_untrusted() {  # <world> <label> <notice-substring>
+  local world=$1 label=$2 want=$3 out
+  out=$(run_park "$world" tick 2>&1) || fail "$label: tick failed: $out"
+  case "$out" in "untrusted lane: PR "*"$want"*"steer the lane if it needs work") ;; *) fail "$label: tick output: $out" ;; esac
+  awk -F '\t' '$3 == "check" && $4 == "park-on-review"' "$world/state/.wake-queue" | grep -qF "untrusted lane: PR" \
+    || fail "$label: no park-on-review wake carries the notice: $(cat "$world/state/.wake-queue" 2>/dev/null)"
+  sleep 1
+  [ ! -e "$world/control.log" ] || fail "$label: a lifecycle call was made: $(cat "$world/control.log")"
+  [ -e "$world/state/lane.review-park" ] || fail "$label: park record lost"
+  out=$(run_park "$world" tick 2>&1)
+  [ -z "$out" ] || fail "$label: the same notice was reported twice: $out"
+}
+
+test_trusted_comment_relaunches_and_untrusted_comment_is_reported() {
+  local w later later2 out
+  later=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+  later2=$(date -u -v+2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+2 hour' +%Y-%m-%dT%H:%M:%SZ)
+
+  w=$(make_world trust-owner "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"maintainer\",\"__typename\":\"User\"},\"authorAssociation\":\"OWNER\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  expect_relaunch "$w" trusted-comment "new comments from maintainer"
+  grep -qF "untrusted input written by other people" "$w/control.log" \
+    || fail "trusted-comment: the relaunch note does not mark PR text as untrusted input"
+
+  w=$(make_world trust-drive-by "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  expect_untrusted "$w" untrusted-comment "new comments from stranger (latest $later)"
+  # A further untrusted comment is new activity and is reported again.
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"CONTRIBUTOR\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"}]"
+  out=$(run_park "$w" tick 2>&1)
+  case "$out" in "untrusted lane: PR "*"(latest $later2)"*) ;; *) fail "untrusted-comment: newer activity not reported: $out" ;; esac
+  [ ! -e "$w/control.log" ] || fail "untrusted-comment: newer untrusted activity made a lifecycle call"
+  # A trusted comment alongside it still relaunches, and only it is the trigger.
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"CONTRIBUTOR\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"},{\"author\":{\"login\":\"carol\",\"__typename\":\"User\"},\"authorAssociation\":\"MEMBER\",\"createdAt\":\"$later2\",\"updatedAt\":\"$later2\"}]"
+  expect_relaunch "$w" mixed "new comments from carol"
+  ! grep -q "^working .*stranger" "$w/state/lane.status" || fail "mixed: the untrusted author became a relaunch trigger"
+
+  # A Bot listed in config/contribution-review-bots in its REST form is trusted.
+  w=$(make_world trust-bot "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  printf '# review bots\ngreptile-apps[bot]\n' > "$w/config/contribution-review-bots"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"greptile-apps\",\"__typename\":\"Bot\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  expect_relaunch "$w" listed-bot "new comments from greptile-apps"
+
+  # An unlisted Bot is not trusted.
+  w=$(make_world trust-unlisted-bot "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" comments="[{\"author\":{\"login\":\"spam-app\",\"__typename\":\"Bot\"},\"authorAssociation\":\"NONE\",\"createdAt\":\"$later\",\"updatedAt\":\"$later\"}]"
+  expect_untrusted "$w" unlisted-bot "new comments from spam-app"
+  pass "a trusted comment relaunches with untrusted-input guidance; an untrusted or unlisted-bot comment never relaunches and is reported once per change"
+}
+
+test_untrusted_thread_and_unknown_reads_are_reported_not_relaunched() {
+  local w later
+  later=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+
+  # The thread's opening comment predates the park, so only the open thread counts.
+  w=$(make_world untrusted-thread "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" total=1 \
+    threads="[{\"isResolved\":false,\"comments\":{\"nodes\":[{\"author\":{\"login\":\"stranger\",\"__typename\":\"User\"},\"authorAssociation\":\"FIRST_TIME_CONTRIBUTOR\",\"createdAt\":\"$OLD_ISO\",\"updatedAt\":\"$OLD_ISO\"}]}}]"
+  expect_untrusted "$w" untrusted-thread "1 unresolved review thread(s) opened by someone outside the trusted reviewers"
+
+  w=$(make_world untrusted-incomplete-threads "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" 'threads=[]' total=150
+  expect_untrusted "$w" incomplete-threads "review threads could not all be read"
+
+  w=$(make_world untrusted-incomplete-reviews "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  jq '.data.repository.pullRequest.reviews.totalCount = 101' "$w/gh.1.json" > "$w/truncated.json" && mv "$w/truncated.json" "$w/gh.1.json"
+  expect_untrusted "$w" incomplete-reviews "review comments could not all be read"
+
+  w=$(make_world untrusted-incomplete-thread-comments "$GH_URL"); gh_fixture "$w/gh.1.json"; park_world "$w"
+  gh_fixture "$w/gh.1.json" 'threads=[{"isResolved":true,"comments":{"nodes":[{"author":{"login":"reviewer"}}]}}]'
+  jq '.data.repository.pullRequest.reviewThreads.nodes[0].comments.totalCount = 101' "$w/gh.1.json" > "$w/truncated.json" && mv "$w/truncated.json" "$w/gh.1.json"
+  expect_untrusted "$w" incomplete-thread-comments "review comments could not all be read"
+
+  # GitLab reads carry no membership, so GitLab notes and threads only notify.
+  w=$(make_world untrusted-gl-edit "$GL_URL"); gl_fixture "$w"; park_world "$w"
   gl_fixture "$w" notes="[{\"notes\":[{\"author\":{\"username\":\"group_42_bot_abc\"},\"system\":false,\"created_at\":\"$OLD_ISO\",\"updated_at\":\"$later\",\"resolvable\":false}]}]"
-  expect_relaunch "$w" gitlab-edited-note "new comments from group_42_bot_abc"
+  expect_untrusted "$w" gitlab-edited-note "new comments from group_42_bot_abc"
 
-  w=$(make_world trig-gl-note "$GL_URL"); gl_fixture "$w"; park_world "$w"
-  gl_fixture "$w" notes="[{\"notes\":[{\"author\":{\"username\":\"dave\"},\"system\":false,\"created_at\":\"$later\",\"resolvable\":false}]}]"
-  expect_relaunch "$w" gitlab-note "new comments from dave"
-  pass "head change, failing checks, changes requested, an unresolved thread, a conflict, and new or edited GitHub or GitLab comments, including an inline reply in a resolved thread, each relaunch a fresh worker with the trigger in its instructions"
+  w=$(make_world untrusted-gl-thread "$GL_URL"); gl_fixture "$w"; park_world "$w"
+  gl_fixture "$w" notes="[{\"notes\":[{\"author\":{\"username\":\"dave\"},\"system\":false,\"created_at\":\"$later\",\"resolvable\":true,\"resolved\":false}]}]"
+  expect_untrusted "$w" gitlab-thread "new comments from dave"
+  pass "an unresolved thread opened by an untrusted author, an incomplete comment or thread read, and GitLab notes and threads never relaunch and are reported once"
 }
 
 test_edited_comment_beyond_first_hundred_triggers_relaunch() {
   local w later
   later=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
   w=$(make_world trig-edit-over-100 "$GH_URL")
+  printf 'greptile-apps[bot]\n' > "$w/config/contribution-review-bots"
   gh_fixture "$w/gh.1.json"; park_world "$w"
   # The old one-page response excludes this older edited comment.
   gh_fixture "$w/gh.1.json" comments='[{"author":{"login":"recent","__typename":"User"},"createdAt":"2026-02-01T00:00:00Z","updatedAt":"2026-02-01T00:00:00Z"}]'
@@ -1218,6 +1286,8 @@ fm_test_run \
   test_park_preflight_refusals_leave_the_agent_running \
   test_repark_reuses_its_own_lease_and_refuses_a_foreign_one \
   test_each_relaunch_trigger_relaunches_a_fresh_worker \
+  test_trusted_comment_relaunches_and_untrusted_comment_is_reported \
+  test_untrusted_thread_and_unknown_reads_are_reported_not_relaunched \
   test_edited_comment_beyond_first_hundred_triggers_relaunch \
   test_behind_base_does_not_relaunch \
   test_slow_relaunch_is_never_cut_short_by_the_tick \
