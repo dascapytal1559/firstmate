@@ -3127,6 +3127,7 @@ Run it from the firstmate checkout so the condition path is absolute; the runner
 The first idle reading after a worker's turn ends fires the action once, and firstmate gets the outcome as an ordinary process-event wake.
 `--stable 1` is what makes that prompt: a higher count waits for the next worker event or interval for each further reading.
 A worker that ends its turn without a status write or turn-end marker, such as a T3 Code worker whose agent does not mark turn ends, is caught by the interval instead.
+The check never counts the main session, so restarting T3 Code itself also waits for every turn to finish through a [clean restart](t3code-backend.md#clean-restart).
 The adapter automates only the exact deterministic subset: anything needing judgment, and anything destructive, irreversible, or security-sensitive, keeps the ordinary check-fires-then-firstmate-decides flow, and the adapter's header and `--help` own its commands, flags, and outcome document.
 
 **Capture and publish results**

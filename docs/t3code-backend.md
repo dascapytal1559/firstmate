@@ -405,6 +405,32 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
 - **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
 - **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers every working or waiting worker, since T3 resumed none of them.
 
+<a id="clean-restart"></a>
+
+### Clean restart
+
+A restart Firstmate causes itself, such as installing a new T3 build, waits until no turn anywhere would be cut, FirstMate's own included.
+[`bin/fm-fleet-idle.sh`](../bin/fm-fleet-idle.sh) counts only this home's workers, so on its own it can restart T3 in the middle of the main's reply.
+[`bin/fm-t3-restart-request.sh`](../bin/fm-t3-restart-request.sh) closes that gap through the T3 Code fork's restart registry:
+
+1. Once no worker is busy, `drain` requests the restart with a reason naming the build, so T3 shows the captain a notice that it will restart, holds every new message, and lets running turns finish.
+2. It returns 0 only when T3 reports drained, every turn finished, and the caller then restarts T3; the server start releases the held messages in order.
+3. When T3 has not drained within `--within` seconds, `drain` cancels the request, which releases the held messages, and reports it.
+   A signal cancels it the same way, as when its watch is retired or replaced by a newer build, or its action times out.
+4. A request the captain cancels from T3's notice, one replaced by another reason, or a T3 that restarted on its own means no restart.
+   Another reason's pending request is never requested over or cancelled.
+
+The usual shape is a [fleet-idle watch](configuration.md#process-to-event-sources-stateprocevent) whose action runs `drain` and then the restart, with the watch's `--action-timeout` above `--within`:
+
+```sh
+bin/fm-procevent-when.sh arm <name> --on-worker-event --interval 60 --stable 1 --action-timeout 2400 \
+  --condition "$PWD/bin/fm-fleet-idle.sh" -q --action <script that runs drain, then restarts T3>...
+```
+
+Inside that script, run `bin/fm-t3-restart-request.sh drain --reason "<reason>" --within 1800` and restart T3 only on exit 0.
+If the restart then cannot happen, the script runs `bin/fm-t3-restart-request.sh cancel --reason "<reason>"`, because a drained request keeps holding messages until a server start.
+The script's header owns its exit codes and the reason and adoption rules; `bin/fm-t3-mcp.mjs` `restart-status`, `restart-request`, and `restart-cancel` own the registry calls.
+
 ### Fresh session with /clear
 
 T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context.
@@ -517,7 +543,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-needs-me.test.sh tests/fm-rules.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-needs-me.test.sh tests/fm-t3-restart-request.test.sh tests/fm-rules.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 bin/fm-test-run.sh tests/fm-t3-clear-session.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh

@@ -162,6 +162,14 @@ The action still fires at most once, and FirstMate gets the outcome as an ordina
 The watch's interval stays as the backstop for a worker whose agent does not mark turn ends.
 Details: [the fleet-idle pattern](docs/configuration.md#process-to-event-sources-stateprocevent).
 
+## Clean T3 restarts
+
+Installing a new T3 build first asks T3 for the restart through the T3 Code fork's restart registry, once no worker is busy.
+T3 shows the captain the coming restart, holds new messages, and lets every running turn finish, FirstMate's own included; the install starts only when T3 reports drained.
+A wait past its limit, or a stopped install, cancels the request so no message stays held.
+Upstream T3 Code has no such registry.
+Details: [clean restart](docs/t3code-backend.md#clean-restart).
+
 ## The live FirstMate's thread on record
 
 Anything that must reach FirstMate, such as an incident listener or a notifier, can read the live session's T3 thread id from `state/t3-main-thread`.

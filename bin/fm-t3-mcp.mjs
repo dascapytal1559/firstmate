@@ -263,6 +263,20 @@
 //     by the thread reading back coordinator:true, else exit 1
 //     (pin_unproven); exit 5 and 6 as thread-for-root. Repeating it is
 //     harmless.
+//   fm-t3-mcp.mjs restart-status
+//   fm-t3-mcp.mjs restart-request --reason <text>
+//   fm-t3-mcp.mjs restart-cancel
+//     The T3 Code fork's restart registry (its fork/README.md "Restart
+//     registry"), for bin/fm-t3-restart-request.sh. Each prints T3's status
+//     {pending, reason, requestedAt, activeTurns, drained, serverStartedAt},
+//     refused as exit 1 (restart_malformed) unless every field has the
+//     fork's shape. restart-request sets the pending restart with that
+//     reason (trimmed, 1 to 500 characters), or replaces only the reason of
+//     one already pending, and must read back pending with exactly that
+//     reason; restart-cancel clears it and releases the messages it held,
+//     and must read back not pending; either mismatch exits 1
+//     (restart_unproven). Exit 4 (restart_unsupported) when this T3 lacks a
+//     tool the verb needs.
 //   fm-t3-mcp.mjs crew-status --file <json-file>
 //     One pass of bin/fm-t3-crew-status.sh over the crew cards, in one
 //     session. <json-file> is {cards: [{thread, between, working}]}: the
@@ -455,6 +469,8 @@ const COORDINATOR_FEATURE = "coordinatorRestartNote";
 // The T3 Code fork's restart registry read, whose serverStartedAt is set once
 // per server process.
 const RESTART_STATUS_TOOL = "t3_restart_status";
+// The fork's bound on a restart request's trimmed reason.
+const RESTART_REASON_MAX = 500;
 // The pairing code must cover every scope T3 grants a full-access mcp-client:
 // T3 0.1.0 adds settings:write and source-control:write to the read and
 // operate scopes of the 0.0.46 nightlies, and refuses a code that lacks one.
@@ -980,6 +996,57 @@ async function status(flags) {
     pendingRequestPush,
     ...(cred.warning ? { credentialWarning: cred.warning } : {}),
   };
+}
+
+// The restart registry's status as T3 answers it, refused unless every field
+// has the fork's shape, so a caller never reads a missing drained as false.
+function restartAnswer(s) {
+  const iso = (v) => typeof v === "string" && v !== "";
+  const ok =
+    typeof s?.pending === "boolean" &&
+    typeof s.drained === "boolean" &&
+    Number.isInteger(s.activeTurns) &&
+    s.activeTurns >= 0 &&
+    iso(s.serverStartedAt) &&
+    (s.pending ? iso(s.reason) && iso(s.requestedAt) : s.reason === null && s.requestedAt === null);
+  if (!ok) throw new Refusal("restart_malformed", "T3 answered the restart registry with an unexpected shape", 1);
+  return {
+    ok: true,
+    pending: s.pending,
+    reason: s.reason,
+    requestedAt: s.requestedAt,
+    activeTurns: s.activeTurns,
+    drained: s.drained,
+    serverStartedAt: s.serverStartedAt,
+  };
+}
+
+async function restartSession(flags, tools) {
+  const { session } = await verifiedSession(flags);
+  const missing = tools.filter((t) => !session.toolSchemas.has(t));
+  if (missing.length) throw new Refusal("restart_unsupported", `this T3 has no restart registry (${missing.join(", ")} absent)`, 4);
+  return session;
+}
+
+async function restartStatusVerb(flags) {
+  const session = await restartSession(flags, [RESTART_STATUS_TOOL]);
+  return restartAnswer(await session.call(RESTART_STATUS_TOOL, {}));
+}
+
+async function restartRequest(flags) {
+  const reason = need(flags, "reason").trim();
+  if (!reason || reason.length > RESTART_REASON_MAX) usage(`--reason must be 1 to ${RESTART_REASON_MAX} characters after trimming`);
+  const session = await restartSession(flags, [RESTART_STATUS_TOOL, "t3_restart_request", "t3_restart_cancel"]);
+  const out = restartAnswer(await session.call("t3_restart_request", { reason }));
+  if (!out.pending || out.reason !== reason) throw new Refusal("restart_unproven", "T3 accepted the restart request but answered with another one", 1);
+  return out;
+}
+
+async function restartCancel(flags) {
+  const session = await restartSession(flags, [RESTART_STATUS_TOOL, "t3_restart_request", "t3_restart_cancel"]);
+  const out = restartAnswer(await session.call("t3_restart_cancel", {}));
+  if (out.pending) throw new Refusal("restart_unproven", "T3 accepted the cancel but still reports a pending restart", 1);
+  return out;
 }
 
 // state: whether the thread exists, and its archive and run state. A thread
@@ -2757,6 +2824,9 @@ const VERBS = {
   fence,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
+  "restart-status": restartStatusVerb,
+  "restart-request": restartRequest,
+  "restart-cancel": restartCancel,
   "crew-status": crewStatus,
   decisions,
   "objectives-payload": objectivesPayloadVerb,

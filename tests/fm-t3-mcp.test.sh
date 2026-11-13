@@ -587,6 +587,50 @@ test_status_reports_server_started_at() {
   pass "fm-t3-mcp status: serverStartedAt is T3's restart identity, new on every restart and absent where T3 has none"
 }
 
+test_restart_registry_verbs() {
+  fresh_case restart-registry '{"restartStatus":true}'
+  mcp restart-request --reason "install build x"
+  expect_code 4 "$RC" "a T3 with only the restart status cannot take a request"
+  assert_contains "$OUT" restart_unsupported "the refusal names the missing registry"
+  assert_equals "" "$(t3_fake_calls t3_restart_request)" "an unsupported request reaches nothing"
+  mcp restart-status
+  expect_code 0 "$RC" "the status alone needs only t3_restart_status: $ERR"
+  assert_equals false "$(field "$OUT" pending)" "nothing is pending yet"
+
+  t3_fake_set 'w.restartRegistry = true; w.activeTurns = 2'
+  mcp restart-request --reason "  install build x  "
+  expect_code 0 "$RC" "a request against the fork: $ERR"
+  assert_equals '{"reason":"install build x"}' "$(t3_fake_calls t3_restart_request)" "the reason is sent trimmed"
+  assert_equals "true install build x 2 false" \
+    "$(field "$OUT" pending) $(field "$OUT" reason) $(field "$OUT" activeTurns) $(field "$OUT" drained)" \
+    "the request answers T3's status: pending, not drained while turns run"
+  t3_fake_set 'w.activeTurns = 0'
+  mcp restart-status
+  assert_equals "true true" "$(field "$OUT" pending) $(field "$OUT" drained)" "no turn in flight reads drained"
+  mcp restart-cancel
+  expect_code 0 "$RC" "cancel: $ERR"
+  assert_equals "false false" "$(field "$OUT" pending) $(field "$OUT" drained)" "a cancelled request is gone"
+
+  mcp restart-request --reason ""
+  expect_code 2 "$RC" "an empty reason is invalid use"
+  mcp restart-request --reason "$(printf 'x%.0s' $(seq 1 501))"
+  expect_code 2 "$RC" "a reason past 500 characters is invalid use"
+
+  t3_fake_set 'w.restartAnswer = { pending: false, reason: null, requestedAt: null, activeTurns: 0, drained: false, serverStartedAt: "2026-11-13T00:00:00.000Z" }'
+  mcp restart-request --reason "install build y"
+  expect_code 1 "$RC" "a request T3 answers as not pending is unproven"
+  assert_contains "$OUT" restart_unproven "the request mismatch is named"
+  t3_fake_set 'w.restartAnswer = { pending: true, reason: "install build y", requestedAt: "2026-11-13T00:00:00.000Z", activeTurns: 0, drained: true, serverStartedAt: "2026-11-13T00:00:00.000Z" }'
+  mcp restart-cancel
+  expect_code 1 "$RC" "a cancel T3 answers as still pending is unproven"
+  assert_contains "$OUT" restart_unproven "the cancel mismatch is named"
+  t3_fake_set 'w.restartAnswer = { pending: true, reason: "install build y", activeTurns: 0, serverStartedAt: "2026-11-13T00:00:00.000Z" }'
+  mcp restart-request --reason "install build y"
+  expect_code 1 "$RC" "an answer without drained is never read as not drained"
+  assert_contains "$OUT" restart_malformed "the malformed answer is named"
+  pass "fm-t3-mcp restart-*: request, status, and cancel speak the fork's registry, prove the answer, and refuse a T3 without it"
+}
+
 test_read_limit_matches_t3_cap() {
   local thread
   fresh_case read-limit
@@ -1802,6 +1846,7 @@ test_crew_status
 test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_started_at
+test_restart_registry_verbs
 test_read_limit_matches_t3_cap
 test_interrupt_confirms_only_the_interrupted_run
 test_send_lost_reply_is_unconfirmed_and_retry_is_one_delivery

@@ -395,7 +395,7 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|fm-t3-crew-status.test.sh|fm-t3-needs-me.test.sh|fm-tmux-agent-liveness.test.sh|\
+    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|fm-t3-crew-status.test.sh|fm-t3-needs-me.test.sh|fm-t3-restart-request.test.sh|fm-tmux-agent-liveness.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
@@ -941,6 +941,7 @@ tests/fm-supervision-host-park.test.sh 329326
 tests/fm-supervision-host.test.sh 435581
 tests/fm-t3-crew-status.test.sh 75000
 tests/fm-t3-needs-me.test.sh 90000
+tests/fm-t3-restart-request.test.sh 50000
 tests/fm-tangle-guard.test.sh 8501
 tests/fm-task-delivery.test.sh 32789
 tests/fm-task-inbox.test.sh 31965

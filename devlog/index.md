@@ -1219,3 +1219,32 @@ The gap was in Firstmate: a Codex worker launched with `--effort max` quietly st
 
 The evidence is a portable regression with a fake catalog (a new `fm-codex-effort-catalog` suite plus the spawn and bootstrap suites), and one short live `codex exec` of Sol at max under the ChatGPT login.
 That run accepted the setting and answered, but its JSON output does not echo the effective model or effort, so the launch flag is proven and the effective level is not.
+
+## 48. A T3 build installs only after every reply finishes (13 November 2026)
+
+![Before, an idle fleet installed at once and cut FirstMate's reply; after, T3 is asked for the restart, holds new messages, and restarts only once every turn has finished](media/t3-clean-restart.svg)
+
+A quiet-time install of a new T3 Code build restarted T3 while FirstMate's own turn was running, because the quiet check counted only the workers.
+The turn showed an orange "Cancelled because the server shut down" row before T3 resumed it.
+His answer:
+
+> I remember you used to do this restart step slightly differently, which is that you say T3 code is gonna restart in like 30 seconds and then you let the message finish and then T three code restarts. So it's a true clean restart. I wonder I mean the cleanness I like. I pro I prefer.
+>
+> — 13 November 2026
+
+What was built:
+
+- **Ask first, then wait.**
+  Once no worker is busy, FirstMate asks T3 for the restart with the build's name as the reason.
+  T3 shows the captain that it will restart, holds every new message, and lets running turns finish, FirstMate's own included.
+- **Restart only when drained.**
+  The install starts only when T3 reports that no turn is running anywhere, so no reply is cut; the held messages then run in order once T3 is back.
+- **Never left holding messages.**
+  A wait that runs past its limit cancels the request and says so, which releases the messages.
+  So does stopping the install, as when a newer build replaces it.
+  If the captain cancels the restart from T3's notice, or T3 restarts on its own, nothing is installed.
+  The chosen wait is the one he picked: the request goes in only once the workers are idle, so the hold lasts about as long as FirstMate's reply.
+
+The evidence is a new regression suite against a fake T3 with the restart registry: drained at once, waiting on running turns, the timeout cancel, a cancel from T3, a replaced request, a restart on its own, and a stop that kills the whole process group, which still cancels.
+That last case first failed, and found a real gap: a stop that landed while T3 was still answering the request skipped the cancel.
+The live T3 answered the new status call read-only; no restart was requested on it.

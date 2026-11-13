@@ -103,6 +103,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
+| `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds, kept reviews, and current state |
 | `fm-t3-review.sh`        | Keep a finished T3 scout's thread and copy for the captain: publish the handoff note, notice his close, and gate cleanup on it |
 | `fm-t3-review-lib.sh`    | The one reader of a task's kept-review record, shared by the card, watcher, recovery, and cleanup |
