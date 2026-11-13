@@ -29,7 +29,8 @@
 #     by bin/fm-captain-hold.sh (its header owns them). hold_flavor is "read"
 #     for a To read item and "decision" otherwise (null where hold_bucket is
 #     null); hold_snoozed_at is when a dated or snoozed item was put off (its
-#     snoozed line, else the hold-set stamp), else null; hold_returns is the
+#     snoozed line, else the hold-set stamp, else `since` for a legacy hold
+#     without one), else null; hold_returns is the
 #     exact return instant of a hold dated to a time of day, else null.
 #     Repeated blocker tokens remain ordered; a blocker resolves only when its
 #     structured record is Done, and missing ids stay open.
@@ -610,7 +611,7 @@ backlog_json() (  # [<backlog-path>] - defaults to this home's $BACKLOG
                else "live" end)
           | .hold_flavor = (if .hold_bucket == null then null elif .hold_read then "read" else "decision" end)
           | .hold_snoozed_at = (if .hold_bucket == "dated" or .hold_bucket == "snoozed"
-              then (.hold_snoozed_at // .hold_set) else null end)
+              then (.hold_snoozed_at // .hold_set // .since) else null end)
           | .captain_actionable = (.hold_bucket == "live" and .hold_flavor == "decision")
           | del(.hold_read, .hold_returns_at)
         else . end)

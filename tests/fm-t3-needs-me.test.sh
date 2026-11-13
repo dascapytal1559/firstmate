@@ -419,6 +419,24 @@ test_list_drops_an_option_detail_from_an_older_record() {
   pass "fm-t3-needs-me.sh: an older record's option detail is dropped on the way to the Bridge"
 }
 
+test_legacy_dated_hold_stays_on_the_list() {
+  make_home list-legacy-dated
+  # A hold from before the hold-set stamp: dated, with only its row's since.
+  cat > "$HOME_DIR/data/backlog.md" <<'MD'
+## In flight
+
+## Queued
+- [ ] old-call - An old dated call (repo: sample) (kind: captain) (since 2026-07-10) (hold: pick it up later) (hold-kind: captain) (hold-until: 2099-01-04)
+
+## Done
+MD
+  at 2099-01-01T10:00:00Z needs_me sync >/dev/null || fail "a pass with a legacy dated hold should succeed"
+  assert_equals '["old-call"]' "$(bridge '[.decisionList.decisions[].id]')" "the legacy dated hold stays on the list"
+  assert_equals '{"at":"2026-07-10T00:00:00Z","until":"2099-01-04T00:00:00Z"}' "$(entry old-call .snoozed)" \
+    "put off since its row was filed, until its date"
+  pass "fm-t3-needs-me.sh: a legacy dated hold without a hold-set stamp stays on the list, snoozed since it was filed"
+}
+
 test_list_dated_hold_waits_until_its_date() {
   make_home list-dated
   FM_CAPTAIN_HOLD_NOW=2099-01-01T10:00:00Z captain hold w1 --reason "Pick the layout" --until 2099-01-04 >/dev/null 2>&1 \
@@ -1046,6 +1064,7 @@ test_list_with_only_blocked_calls_is_sent_once
 test_list_resend_keeps_the_captains_answer
 test_list_carries_the_context_payload
 test_list_drops_an_option_detail_from_an_older_record
+test_legacy_dated_hold_stays_on_the_list
 test_list_dated_hold_waits_until_its_date
 test_list_keeps_an_open_call_however_long_it_waits
 test_list_restores_what_t3_lost
