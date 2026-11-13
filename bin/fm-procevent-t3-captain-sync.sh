@@ -7,8 +7,10 @@
 #   fm-procevent-t3-captain-sync.sh terminal <result-file>
 #
 # relisten   Exit 0: the listener runs for as long as its home does, so the
-#            runner starts it again in the same claim whenever it stops,
-#            which is how a listener that died comes back without firstmate.
+#            runner starts it again in the same claim when it stops cleanly
+#            or with exit 75; a listener that crashed (exit 1) releases the
+#            claim, and the watcher's next reconcile, or the ten-minute
+#            check's arming, starts it again without firstmate.
 # terminal   Exit 1: no result ends this source. The listener prints nothing
 #            on stdout, so anything captured is unexpected and reaches
 #            firstmate as an ordinary wake.

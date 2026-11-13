@@ -20,39 +20,53 @@
 #     config/crew-dispatch.json, data/rules/inventory.json); a change runs
 #     one sync pass 250 ms after the last event. It also holds a
 #     t3_decisions_actions call open (bin/fm-t3-mcp.mjs actions, 25 s at a
-#     time) and applies each action the captain took as `apply` below, then
-#     one sync pass, then acknowledges it, so by the time T3 drops its
-#     overlay the list already shows the truth. An action that keeps failing
-#     is refused, with its error, on its third failure. When T3 cannot be
-#     reached it retries with backoff (1 s up to 30 s) and, once back, pushes
-#     the whole list before it reads the actions T3 kept; a T3 without the
-#     action log is asked again every 5 minutes. It prints nothing on stdout
-#     and logs to state/t3-captain-sync/listen.log.
+#     time) as the signal that the captain acted, and on each action runs
+#     apply-pending below. When T3 cannot be reached it retries with backoff
+#     (1 s up to 30 s) and, once back, pushes the whole list before it reads
+#     the actions T3 kept; a T3 without the action log is asked again every
+#     5 minutes. It prints nothing on stdout and logs to
+#     state/t3-captain-sync/listen.log.
+#   fm-t3-captain-sync.sh apply-pending
+#     Apply every action T3 holds unacknowledged, in T3's order, as `apply`
+#     below, then one sync pass, then acknowledge them, so by the time T3
+#     drops its overlay the list already shows the truth. One round at a
+#     time: the listener and `check` share state/t3-captain-sync/actions.lock.
+#     An action that fails holds back every later action on the same item
+#     until it is applied or refused, and it is refused, with its error, on
+#     its third failure (counted in state/t3-captain-sync/attempts.json).
+#     Exit 0 every action settled; 75 one still waits, to try again (the
+#     listener does in 30 s); 1 T3 could not be read or acknowledged.
 #   fm-t3-captain-sync.sh apply --file <action-json>
 #     Apply one action from T3's log to the backlog, idempotently, so a
 #     replay changes nothing: snooze and unsnooze through
 #     bin/fm-captain-hold.sh snooze --at (with --until) and unsnooze; archive
 #     and thread-archived through bin/fm-t3-review.sh closed --at for a kept
-#     review's thread, else bin/fm-captain-hold.sh archive --at. Archive on a
-#     worker still running (its card not finished) also leaves one wake,
-#     state/t3-captain-sync/<worker>.wake, asking firstmate to wind the
-#     worker down through its normal safe cleanup; the thread itself stays.
-#     thread-unarchived changes nothing (a kept review reopened is the next
-#     check's). The item's thread is the one the last accepted pass sent
-#     (state/t3-needs-me/list.json). Exit 0 applied; 3 refused, with the
-#     reason on stdout for T3 to show; 1 failed, to retry.
+#     review's thread, else bin/fm-captain-hold.sh archive --at. Archive on an
+#     item of a kept review's card archives that card's thread in T3 first,
+#     since the card is then gone, so the record and the thread agree.
+#     Archive on a decision on a worker still running (its card not
+#     finished) also leaves one wake, state/t3-captain-sync/<worker>.wake,
+#     asking firstmate to wind the worker down through its normal safe
+#     cleanup; the thread itself stays. A thread FirstMate archived itself
+#     (bin/backends/t3code.sh marks it first) is never the captain's: its
+#     thread-archived changes nothing, so its items stay open and move to
+#     their own threads on the next pass. thread-unarchived changes nothing
+#     (a kept review reopened is the next check's). The item's thread is the
+#     one the last accepted pass sent (state/t3-needs-me/list.json). Exit 0
+#     applied; 3 refused, with the reason on stdout for T3 to show; 1
+#     failed, to retry.
 #   fm-t3-captain-sync.sh check
 #     The ten-minute safety net (bin/fm-watch.sh, and once at session start):
 #     arms the listener if it is not registered and confirms it listens;
 #     publishes or closes kept reviews (bin/fm-t3-review.sh reconcile); one
-#     full push; the actions T3 holds unacknowledged, applied and
-#     acknowledged as the listener does; and every thread the list names
+#     full push; apply-pending; and every thread the list names
 #     that now reads archived or gone, applied as thread-archived, in case
 #     T3's record of it was lost. FM_T3_CAPTAIN_SYNC_ARM=0 skips the arming,
 #     for tests.
 #   fm-t3-captain-sync.sh migrate [--t3-settings <settings.json>]
 #     One-time move to the sidebar list: every kept review
-#     (t3_review pending or waiting) is held To read; every report pinned to
+#     (t3_review pending or waiting) is held To read (a decision already open
+#     on it stays one); every report pinned to
 #     the Bridge becomes an item with its report attached (its own task when
 #     that is open: held To read, or left as it is when it already waits on
 #     the captain; else a new To read item `read-<id>`), and is unpinned. A
@@ -97,13 +111,21 @@ taking_part() {
 [ "$#" -ge 1 ] || usage
 VERB=$1
 shift
-case "$VERB" in listen|apply|check|migrate) ;; *) usage ;; esac
+case "$VERB" in listen|apply-pending|apply|check|migrate) ;; *) usage ;; esac
 taking_part || exit 0
 command -v jq >/dev/null 2>&1 || { echo "t3-captain-sync: jq is required"; exit 1; }
 mkdir -p "$OWN" || { echo "t3-captain-sync: could not create $OWN"; exit 1; }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-captain-sync.XXXXXX") || { echo "t3-captain-sync: no temporary directory"; exit 1; }
-trap 'rm -rf -- "$WORK"' EXIT
+ACTIONS_LOCK="$OWN/actions.lock"
+ACTIONS_LOCK_HELD=0
+ATTEMPTS="$OWN/attempts.json"
+ACTION_ATTEMPTS=3
+release_actions_lock() {
+  [ "$ACTIONS_LOCK_HELD" = 0 ] || fm_lock_release "$ACTIONS_LOCK" || true
+  ACTIONS_LOCK_HELD=0
+}
+trap 'release_actions_lock; rm -rf -- "$WORK"' EXIT
 
 hold() { "$SCRIPT_DIR/fm-captain-hold.sh" "$@" </dev/null; }
 # shellcheck source=bin/fm-backend.sh
@@ -111,6 +133,12 @@ hold() { "$SCRIPT_DIR/fm-captain-hold.sh" "$@" </dev/null; }
 mcp() {
   fm_backend_source t3code >/dev/null 2>&1 || { echo "the T3 adapter could not load" >&2; return 1; }
   fm_backend_t3code_mcp "$@" </dev/null
+}
+
+# True when FirstMate archived <thread> itself (bin/backends/t3code.sh).
+archived_by_firstmate() {  # <thread>
+  fm_backend_source t3code >/dev/null 2>&1 || return 1
+  [ -e "$(fm_backend_t3code_archive_mark "$1")" ]
 }
 
 # The task whose record names <thread>, if exactly one does.
@@ -129,13 +157,13 @@ thread_task() {
 }
 
 leave_wind_down_wake() {  # <worker> <item>
-  local reason="check: t3-captain $1: the captain archived $2 on $1's card while $1 was still working, so $2 was closed as not pursued; wind $1 down through its normal safe cleanup, never discarding unlanded work without asking"
+  local reason="check: t3-captain $1: the captain archived decision $2 on $1's card while $1 was still working, so $2 was closed as not pursued; wind $1 down through its normal safe cleanup, never discarding unlanded work without asking"
   { printf '%s\n' "$reason" > "$OWN/$1.wake.tmp" && mv -f "$OWN/$1.wake.tmp" "$OWN/$1.wake"; } \
     || echo "t3-captain-sync: could not leave the wind-down notice for $1" >&2
 }
 
 cmd_apply() {
-  local file='' id type at until thread finished worker review out rc=0
+  local file='' id type at until thread finished kind worker review out rc=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --file) file=${2:-}; shift 2 || usage ;;
@@ -150,6 +178,7 @@ cmd_apply() {
   valid_id "$id" || { echo "the item id $id is not one FirstMate uses"; return 3; }
   thread=$(jq -r --arg id "$id" '[.items[]? | select(.id == $id)][0].thread.id // ""' "$SENT" 2>/dev/null)
   finished=$(jq -r --arg id "$id" '[.items[]? | select(.id == $id)][0].thread.finished | if . == false then false else true end' "$SENT" 2>/dev/null)
+  kind=$(jq -r --arg id "$id" '[.items[]? | select(.id == $id)][0].kind // ""' "$SENT" 2>/dev/null)
   case "$type" in
     snooze)
       if [ -n "$until" ]; then
@@ -160,17 +189,24 @@ cmd_apply() {
       ;;
     unsnooze) out=$(hold unsnooze "$id" 2>&1) || rc=$? ;;
     archive|thread-archived)
+      if [ "$type" = thread-archived ] && [ -n "$thread" ] && archived_by_firstmate "$thread"; then
+        echo "FirstMate archived $id's thread itself, so $id stays open"
+        return 0
+      fi
       worker=''
       [ -z "$thread" ] || worker=$(thread_task "$thread") || worker=''
       review=''
       [ -z "$worker" ] || review=$(sed -n 's/^t3_review=//p' "$STATE/$worker.meta" | tail -n 1)
-      if [ -n "$review" ]; then
+      if [ -n "$review" ] && [ "$type" = archive ]; then
+        out=$(mcp archive --thread "$thread" 2>&1) || rc=$?
+      fi
+      if [ "$rc" = 0 ] && [ -n "$review" ]; then
         out=$("$SCRIPT_DIR/fm-t3-review.sh" closed "$worker" --at "$at" </dev/null 2>&1) || rc=$?
       fi
       if [ "$rc" = 0 ]; then
         out=$(hold archive "$id" --at "$at" 2>&1) || rc=$?
       fi
-      if [ "$rc" = 0 ] && [ -n "$worker" ] && [ -z "$review" ] && [ "$finished" = false ]; then
+      if [ "$rc" = 0 ] && [ -n "$worker" ] && [ -z "$review" ] && [ "$finished" = false ] && [ "$kind" = decision ]; then
         leave_wind_down_wake "$worker" "$id"
       fi
       ;;
@@ -192,35 +228,68 @@ cmd_apply() {
   return 1
 }
 
-# The actions T3 holds unacknowledged, applied and acknowledged in one round.
+# apply-pending: see the header.
 apply_pending() {
-  local rc=0 n i seq out acks='[]' arc
+  local rc=0 n i seq item type out acks='[]' arc held=' ' tries waiting=0
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait_max "$ACTIONS_LOCK" 60 \
+    || { echo "t3-captain-sync: another round still holds the captain's actions; they wait for the next"; return 75; }
+  ACTIONS_LOCK_HELD=1
   mcp actions --after 0 --wait-ms 0 > "$WORK/actions.json" 2>"$WORK/actions.err" || rc=$?
   case "$rc" in
     0) ;;
-    4) return 0 ;;
-    *) echo "t3-captain-sync: the captain's actions could not be read: $(head -n 1 "$WORK/actions.err")"; return 1 ;;
+    4) release_actions_lock; return 0 ;;
+    *) release_actions_lock; echo "t3-captain-sync: the captain's actions could not be read: $(head -n 1 "$WORK/actions.err")"; return 1 ;;
   esac
+  jq -e 'type == "object"' "$ATTEMPTS" >/dev/null 2>&1 || echo '{}' > "$ATTEMPTS"
+  # Counts of actions T3 no longer holds are forgotten.
+  jq --slurpfile a "$WORK/actions.json" '($a[0].actions | map(.seq | tostring)) as $live
+    | with_entries(select(.key as $k | $live | index($k)))' "$ATTEMPTS" > "$WORK/attempts.json" \
+    && mv -f "$WORK/attempts.json" "$ATTEMPTS"
   n=$(jq '.actions | length' "$WORK/actions.json")
-  [ "$n" -gt 0 ] || return 0
   i=0
   while [ "$i" -lt "$n" ]; do
-    jq -c ".actions[$i]" "$WORK/actions.json" > "$WORK/action.json"
+    jq -c "[.actions[]] | sort_by(.seq) | .[$i]" "$WORK/actions.json" > "$WORK/action.json"
+    i=$((i + 1))
     seq=$(jq -r '.seq' "$WORK/action.json")
+    item=$(jq -r '.itemId // ""' "$WORK/action.json")
+    type=$(jq -r '.type // ""' "$WORK/action.json")
+    case "$held" in
+      *" $item "*) waiting=1; echo "t3-captain-sync: $type on $item (#$seq) waits for the action before it"; continue ;;
+    esac
     arc=0
     out=$(cmd_apply --file "$WORK/action.json" 2>&1) || arc=$?
-    case "$arc" in
-      0) acks=$(jq -c --argjson seq "$seq" '. + [{seq: $seq, outcome: "applied"}]' <<< "$acks") ;;
-      3) acks=$(jq -c --argjson seq "$seq" --arg m "$out" '. + [{seq: $seq, outcome: "refused", message: ($m | .[:500])}]' <<< "$acks") ;;
-      *) echo "t3-captain-sync: action $seq is not applied yet: $out" ;;
-    esac
-    i=$((i + 1))
+    if [ "$arc" != 0 ] && [ "$arc" != 3 ]; then
+      tries=$(( $(jq -r --arg s "$seq" '.[$s] // 0' "$ATTEMPTS") + 1 ))
+      if [ "$tries" -ge "$ACTION_ATTEMPTS" ]; then
+        arc=3
+        out="FirstMate could not apply this: $out"
+      else
+        jq --arg s "$seq" --argjson n "$tries" '.[$s] = $n' "$ATTEMPTS" > "$WORK/attempts.json" && mv -f "$WORK/attempts.json" "$ATTEMPTS"
+        held="$held$item "
+        waiting=1
+        echo "t3-captain-sync: $type on $item (#$seq) failed, attempt $tries: $out"
+        continue
+      fi
+    fi
+    jq --arg s "$seq" 'del(.[$s])' "$ATTEMPTS" > "$WORK/attempts.json" && mv -f "$WORK/attempts.json" "$ATTEMPTS"
+    if [ "$arc" = 0 ]; then
+      acks=$(jq -c --argjson seq "$seq" '. + [{seq: $seq, outcome: "applied"}]' <<< "$acks")
+      echo "t3-captain-sync: applied $type on $item (#$seq)"
+    else
+      acks=$(jq -c --argjson seq "$seq" --arg m "$out" '. + [{seq: $seq, outcome: "refused", message: ($m | .[:500])}]' <<< "$acks")
+      echo "t3-captain-sync: refused $type on $item (#$seq): $out"
+    fi
   done
-  "$SCRIPT_DIR/fm-t3-needs-me.sh" sync </dev/null || true
-  [ "$acks" != '[]' ] || return 0
-  printf '%s\n' "$acks" > "$WORK/ack.json"
-  mcp actions --after 0 --wait-ms 0 --ack-file "$WORK/ack.json" >/dev/null 2>"$WORK/actions.err" \
-    || { echo "t3-captain-sync: the applied actions could not be acknowledged: $(head -n 1 "$WORK/actions.err")"; return 1; }
+  if [ "$acks" != '[]' ]; then
+    "$SCRIPT_DIR/fm-t3-needs-me.sh" sync </dev/null >/dev/null 2>&1 || true
+    printf '%s\n' "$acks" > "$WORK/ack.json"
+    mcp actions --after 0 --wait-ms 0 --ack-file "$WORK/ack.json" >/dev/null 2>"$WORK/actions.err" \
+      || { release_actions_lock; echo "t3-captain-sync: the applied actions could not be acknowledged: $(head -n 1 "$WORK/actions.err")"; return 1; }
+  fi
+  release_actions_lock
+  [ "$waiting" = 0 ] || return 75
 }
 
 # Every listed thread that now reads archived or gone, applied as T3 would
@@ -306,7 +375,7 @@ cmd_migrate() {
     case "$review" in pending|waiting) ;; *) continue ;; esac
     reason=$(review_summary "$id") || reason="Report ready: data/$id/report.md"
     if hold hold "$id" --read --reason "$reason" >/dev/null 2>"$WORK/hold.err"; then
-      echo "t3-captain-sync: kept review $id is To read"
+      echo "t3-captain-sync: kept review $id waits on the captain"
     else
       echo "t3-captain-sync: kept review $id could not be held To read: $(grep . "$WORK/hold.err" | tail -n 1)"
       rc=1
@@ -314,7 +383,7 @@ cmd_migrate() {
   done
   # The pinned reports: unpinning an id nobody pinned answers the whole list.
   pinned=$(mcp reports-unpin --id fm-migrate-list 2>"$WORK/unpin.err") || {
-    if grep -q 'reports_unsupported' "$WORK/unpin.err"; then
+    if [ "$(printf '%s' "$pinned" | jq -r '.error.code // ""' 2>/dev/null)" = reports_unsupported ]; then
       echo "t3-captain-sync: this T3 has no pinned reports to move"
       return "$rc"
     fi
@@ -364,6 +433,7 @@ cmd_migrate() {
 
 case "$VERB" in
   listen) cmd_listen "$@" ;;
+  apply-pending) [ "$#" = 0 ] || usage; apply_pending ;;
   apply) cmd_apply "$@" ;;
   check) cmd_check "$@" ;;
   migrate) cmd_migrate "$@" ;;

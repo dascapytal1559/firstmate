@@ -44,7 +44,8 @@
 # Call, render as Charted Next gates stating why (the blocking work, the until
 # date or time, "snoozed", or the floored age), and are counted in omitted[].
 # A live or aged To read item (hold_flavor read) is never a decision: it is
-# listed in to_read instead of Captain's Call or a gate.
+# listed in to_read instead of Captain's Call or a gate; under --all-decisions
+# every To read item is, whatever its bucket.
 # --all-decisions reveals every captain hold available within the bounded snapshot
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
@@ -167,7 +168,7 @@ Default fields: schema, home, generated, priorities{text}, objectives{text}, prs
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,question,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed},
-  to_read{id,title,repo} (this home's live or aged To read items, never decisions),
+  to_read{id,title,repo} (this home's live or aged To read items, every one with --all-decisions; never decisions),
   ideas{total,list,newest{id,title,repo,owner,filed}}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
@@ -687,7 +688,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       gates: ($return_catchup_gate
               + ($gates_all | newest_filed_first
                  | if $all_queued == 1 then . else .[:$gates_n] end)),
-      to_read: [ .backlog.records[] | select(.structured and waiting_to_read)
+      to_read: [ .backlog.records[]
+                 | select(.structured and (waiting_to_read
+                     or ($all_decisions == 1 and .hold_flavor == "read" and .hold_bucket != null)))
                  | {id, title:(.title | trunc(70)), repo:(.repo // null)} ],
       ideas: {total:($ideas_all | length),
               list:"bin/fm-tasks-axi.sh list --state queued --kind idea",

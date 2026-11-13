@@ -2431,6 +2431,10 @@ test_to_read_and_snoozed_items() {
   Captain hold set: 2026-07-10T00:00:00Z
   Captain hold snoozed: 2026-07-11T00:00:00Z
   Captain hold returns: 2026-07-11T20:00:00Z
+- [ ] read-later - A report put off (repo: sample) (kind: captain) (since 2026-07-10) (hold: read it later) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+  Captain hold snoozed: 2026-07-11T00:00:00Z
 
 ## Done
 EOF
@@ -2441,8 +2445,17 @@ EOF
       and (.to_read == [{id:"report-ready", title:"A finished report", repo:"sample"}])
       and (.gates | any(.[]; .id == "put-off" and (.reason | startswith("snoozed: "))))
       and (.gates | any(.[]; .id == "back-tonight" and (.reason | startswith("until 2026-07-11T20:00:00Z: "))))
+      and (.gates | any(.[]; .id == "read-later" and (.reason | startswith("snoozed: "))))
       and (.gates | any(.[]; .id == "report-ready") | not)
   ' >/dev/null || fail "To read and snoozed items are placed wrong: $json"
+  # --all-decisions drops every hold's gate, so a snoozed To read item must
+  # still show, in to_read, rather than nowhere.
+  json=$(run "$home" "$fakebin" --json --all-decisions)
+  printf '%s' "$json" | jq -e '
+    ([.to_read[].id] | sort) == ["read-later", "report-ready"]
+      and ([.decisions_open[].id] | index("read-later") | not)
+      and (.gates | any(.[]; .id == "read-later") | not)
+  ' >/dev/null || fail "--all-decisions hides a snoozed To read item: $json"
   pass "bearings: a To read item is its own short list, never a decision, and snoozed items sit with the dated gates"
 }
 

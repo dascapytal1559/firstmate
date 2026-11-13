@@ -303,7 +303,9 @@ T3 keeps the items as one list that FirstMate replaces whole, and an identical l
 - a blocked, answered, released, or closed item is left out.
 
 His actions reach the backlog at once: T3 logs Snooze, Bring back, Archive, and every archive or restore of a listed thread, and the listener applies each through `bin/fm-captain-hold.sh` (`snooze`, `unsnooze`, `archive`, or `bin/fm-t3-review.sh closed` for a kept review), pushes the list, and only then acknowledges it.
-Archive closes a decision as "Archived in T3 on <date>: not pursued." and marks a To read item read; on a worker still running it also wakes FirstMate with a `check: t3-captain <id>` notice to wind the worker down through its normal safe cleanup, and the thread itself stays.
+They apply in T3's order: an action that fails holds back every later action on the same item until it is applied or, on its third failure, refused, and the listener and the ten-minute check never apply actions at the same time.
+Archive closes a decision as "Archived in T3 on <date>: not pursued." and marks a To read item read; on a kept review's card it archives that card's thread too, since the card is then gone; on a decision on a worker still running it also wakes FirstMate with a `check: t3-captain <id>` notice to wind the worker down through its normal safe cleanup, and the thread itself stays.
+FirstMate's own archive of a thread (teardown, through `bin/backends/t3code.sh`) is never his: it closes nothing, and the items on that card move to threads of their own on the next pass.
 A reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and T3 shows the item as Replied until FirstMate closes or updates it.
 
 A ten-minute check (`bin/fm-t3-captain-sync.sh check`, from the watcher) is the safety net for crashes and restarts: it confirms the listener runs, sends the whole list, applies any action T3 still holds, and closes an item whose thread reads archived though T3's record of it was lost.

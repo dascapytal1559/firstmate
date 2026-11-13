@@ -10,8 +10,7 @@
 // unexpected process-event result.
 
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
-import os from "node:os";
+import { appendFileSync, readdirSync, readFileSync, renameSync, statSync, watch } from "node:fs";
 import path from "node:path";
 
 const DEBOUNCE_MS = 250;
@@ -19,7 +18,6 @@ const ACTIONS_WAIT_MS = 25_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 const UNSUPPORTED_RETRY_MS = 300_000;
-const ACTION_ATTEMPTS = 3;
 const ACTION_RETRY_MS = 30_000;
 const LOG_MAX_BYTES = 256 * 1024;
 
@@ -161,20 +159,18 @@ addWatch(flags.state, (f) => f.endsWith(".meta") && metaChanged(f), "task record
 
 // --- the captain's actions ---------------------------------------------------
 
-async function applyAction(action, work) {
-  const file = path.join(work, `action-${action.seq}.json`);
-  writeFileSync(file, `${JSON.stringify(action)}\n`);
-  const r = await run(path.join(flags.bin, "fm-t3-captain-sync.sh"), ["apply", "--file", file]);
-  return { code: r.code, message: (firstLine(r.stdout) || firstLine(r.stderr)).slice(0, 500) };
+// One apply-pending round (bin/fm-t3-captain-sync.sh owns the order, the
+// retries, and the acknowledgement); 0 when every action T3 held settled.
+async function applyPending() {
+  const r = await run(path.join(flags.bin, "fm-t3-captain-sync.sh"), ["apply-pending"]);
+  for (const line of r.stdout.split("\n")) if (line.trim()) log(line.replace(/^t3-captain-sync: /, ""));
+  if (r.code !== 0 && r.code !== 75) log(`actions: ${firstLine(r.stderr) || `exit ${r.code}`}`);
+  return r.code;
 }
 
 async function actionLoop() {
-  const work = mkdtempSync(path.join(os.tmpdir(), "fm-t3-captain-sync-"));
-  process.on("exit", () => rmSync(work, { recursive: true, force: true }));
-  const ackFile = path.join(work, "ack.json");
   let highest = 0;
-  let acks = [];
-  const failing = new Map(); // seq -> {action, attempts, nextTry}
+  let retryAt = null; // when the actions T3 still holds are tried again
   let backoff = BACKOFF_MIN_MS;
   let fullPush = true;
   for (;;) {
@@ -182,24 +178,12 @@ async function actionLoop() {
       await syncNow();
       fullPush = false;
     }
-    const due = [...failing.values()].filter((f) => f.nextTry <= Date.now());
-    const soonest = Math.min(...[...failing.values()].map((f) => f.nextTry - Date.now()), ACTIONS_WAIT_MS);
-    const args = [path.join(flags.bin, "fm-t3-mcp.mjs"), "actions", "--after", String(highest), "--wait-ms", String(due.length ? 0 : Math.max(0, soonest)),
-      "--token-file", path.join(flags.config, "t3code-token")];
-    if (acks.length) {
-      writeFileSync(ackFile, `${JSON.stringify(acks)}\n`);
-      args.push("--ack-file", ackFile);
-    }
-    const r = await run(process.execPath, args);
+    const wait = retryAt === null ? ACTIONS_WAIT_MS : Math.max(0, Math.min(ACTIONS_WAIT_MS, retryAt - Date.now()));
+    const r = await run(process.execPath, [path.join(flags.bin, "fm-t3-mcp.mjs"), "actions", "--after", String(highest),
+      "--wait-ms", String(wait), "--token-file", path.join(flags.config, "t3code-token")]);
     if (r.code !== 0) {
-      let code = "";
-      try {
-        code = JSON.parse(r.stdout)?.error?.code ?? "";
-      } catch {
-        // Not JSON: a transport failure.
-      }
       if (r.code === 4) {
-        log(`actions: ${firstLine(r.stderr) || code}; asking again in ${UNSUPPORTED_RETRY_MS / 1000} s`);
+        log(`actions: ${firstLine(r.stderr) || "unsupported"}; asking again in ${UNSUPPORTED_RETRY_MS / 1000} s`);
         await sleep(UNSUPPORTED_RETRY_MS);
       } else {
         log(`actions: ${firstLine(r.stderr) || `exit ${r.code}`}; retrying in ${backoff / 1000} s`);
@@ -212,43 +196,10 @@ async function actionLoop() {
       continue;
     }
     backoff = BACKOFF_MIN_MS;
-    acks = [];
-    const out = JSON.parse(r.stdout);
-    const batch = [...due.map((f) => f.action)];
-    for (const a of out.actions) {
-      highest = Math.max(highest, a.seq);
-      if (!failing.has(a.seq) || failing.get(a.seq).nextTry <= Date.now()) {
-        if (!batch.some((b) => b.seq === a.seq)) batch.push(a);
-      }
-    }
-    if (!batch.length) continue;
-    batch.sort((a, b) => a.seq - b.seq);
-    for (const action of batch) {
-      const { code, message } = await applyAction(action, work);
-      if (code === 0) {
-        acks.push({ seq: action.seq, outcome: "applied" });
-        failing.delete(action.seq);
-        log(`applied ${action.type} on ${action.itemId} (#${action.seq})`);
-      } else if (code === 3) {
-        acks.push({ seq: action.seq, outcome: "refused", ...(message ? { message } : {}) });
-        failing.delete(action.seq);
-        log(`refused ${action.type} on ${action.itemId} (#${action.seq}): ${message}`);
-      } else {
-        const f = failing.get(action.seq) ?? { action, attempts: 0 };
-        f.attempts += 1;
-        f.nextTry = Date.now() + ACTION_RETRY_MS;
-        if (f.attempts >= ACTION_ATTEMPTS) {
-          acks.push({ seq: action.seq, outcome: "refused", message: `FirstMate could not apply this: ${message}`.slice(0, 500) });
-          failing.delete(action.seq);
-          log(`gave up on ${action.type} on ${action.itemId} (#${action.seq}): ${message}`);
-        } else {
-          failing.set(action.seq, f);
-          log(`failed ${action.type} on ${action.itemId} (#${action.seq}), attempt ${f.attempts}: ${message}`);
-        }
-      }
-    }
-    // The list shows the truth before T3 hears the acknowledgement.
-    if (acks.length) await syncNow();
+    const { actions } = JSON.parse(r.stdout);
+    for (const a of actions) highest = Math.max(highest, a.seq);
+    if (!actions.length && (retryAt === null || retryAt > Date.now())) continue;
+    retryAt = (await applyPending()) === 0 ? null : Date.now() + ACTION_RETRY_MS;
   }
 }
 

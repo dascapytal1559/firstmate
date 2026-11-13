@@ -19,7 +19,8 @@
 #     (nothing is posted into the thread), records t3_review=pending with
 #     its revision and stable key, holds the scout's task for the captain as
 #     To read (bin/fm-captain-hold.sh hold --read, the summary's first line as
-#     the reason), so the backlog is what says it waits to be read, and only
+#     the reason; a decision already open on it stays one), so the backlog is
+#     what says it waits to be read, and only
 #     then publishes (as publish below). The key is derived from this home, the task, its spawn
 #     generation, the report, and the handoff, so running retain again with
 #     the same words changes nothing, and a revised report or handoff is a
@@ -70,7 +71,9 @@
 # cleanup, which holds that task's lock and settles it itself; any other hold
 # on the review's own task is not its call and is left to cleanup. Nothing is
 # deleted: the report, the handoff, and the task's data stay. A call that
-# cannot be closed is reported and retried on the next pass.
+# cannot be closed is reported, and the close wake names it for firstmate to
+# close with bin/fm-captain-hold.sh archive; a record already closed is never
+# passed over again.
 #
 # Record fields (state/<id>.meta): t3_review (pending|waiting|closed),
 # t3_review_target (the thread), t3_review_revision, t3_review_request (the

@@ -455,9 +455,17 @@ fm_backend_t3code_send_key() {  # <thread-id> <key>
 # active delegated thread below it (bin/fm-t3-mcp.mjs close owns the stop and
 # that proof). Archiving keeps the transcript visible in T3. Idempotent: an
 # archived thread with nothing active below it, or one the verified server no
-# longer has, is already the end state.
+# longer has, is already the end state. The thread is marked first as
+# archived by FirstMate, never by the captain, so the captain's list never
+# reads this archive as his "not pursued" (bin/fm-t3-captain-sync.sh apply).
+fm_backend_t3code_archive_mark() {  # <thread-id> -> mark path
+  printf '%s/t3-captain-sync/fm-archived/%s' "${FM_STATE_OVERRIDE:-$FM_HOME/state}" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+}
+
 fm_backend_t3code_kill() {  # <thread-id>
-  local out
+  local out mark
+  mark=$(fm_backend_t3code_archive_mark "$1")
+  { mkdir -p "${mark%/*}" && : > "$mark"; } || { echo "error: could not mark T3 thread $1 as archived by FirstMate" >&2; return 1; }
   out=$(fm_backend_t3code_mcp close --thread "$1") || return 1
   [ "$(printf '%s' "$out" | fm_backend_t3code_json_get closed)" = true ]
 }

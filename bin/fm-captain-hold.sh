@@ -64,12 +64,13 @@
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
 # `--until` puts the item off until <when>: a YYYY-MM-DD date (00:00 UTC) or
 # an ISO date-time with Z or an offset, the time of day a T3 snooze preset
-# picks. The backlog's own `tasks-axi hold --until` takes dates only, so it
-# gets the first UTC date on or after the instant, and the exact instant goes
-# on the `Captain hold returns:` header line below. `--read` marks the item To
-# read: a finished report with nothing to decide, which is not a captain call
-# (`complete` refuses one). Every hold names its flavor, so a hold without
-# `--read` is a decision.
+# picks. The backlog's own `tasks-axi hold --until` takes dates only and lifts
+# at local midnight, so it gets the first local date on or after the instant,
+# and the exact instant goes on the `Captain hold returns:` header line below.
+# `--read` marks the item To read: a finished report with nothing to decide,
+# which is not a captain call (`complete` refuses one); on an open decision it
+# changes nothing, since reading is part of deciding. Every hold names its
+# flavor, so a hold without `--read` is a decision.
 #
 # The hold header is the run of `Captain hold <key>: <value>` lines right after
 # the hold-set stamp, written only by this script and read by
@@ -356,6 +357,7 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
 
 CREW_CARD_SYNC=0
 NEEDS_ME_SYNC=0
+CARD_SYNC_DETACHED=0
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
@@ -373,6 +375,12 @@ captain_hold_cleanup() {
   # After the locks, before returning: a T3 crew card and the captain's Bridge
   # decisions follow the hold (each script's header owns how), and a slow or
   # failed sync never changes this command's result; its report goes to stderr.
+  # A PR settlement runs inside the bounded contribution poll, so it starts
+  # both syncs detached and never waits on them or mixes in their output.
+  if [ "$CARD_SYNC_DETACHED" = 1 ]; then
+    { "$SCRIPT_DIR/fm-t3-crew-status.sh" sync; "$SCRIPT_DIR/fm-t3-needs-me.sh" sync; } </dev/null >/dev/null 2>&1 &
+    return 0
+  fi
   [ "$CREW_CARD_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-crew-status.sh" sync >&2 || true
   [ "$CREW_CARD_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
 }
@@ -1010,13 +1018,13 @@ write_hold_header() {
 # normalize_when <value>: a `--until` value as "<tasks-axi date> <instant>":
 # a YYYY-MM-DD date is itself and has no instant ("-"); an ISO date-time with
 # Z or an offset is that instant in UTC (YYYY-MM-DDTHH:MM:SSZ) and the first
-# UTC date on or after it, so the backlog's own date gate never lifts before
-# the instant. Anything else fails.
+# local date on or after it, so the backlog's own date gate, which lifts at
+# local midnight, never lifts before the instant. Anything else fails.
 normalize_when() {  # <value>
   case "$1" in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) printf '%s -\n' "$1"; return 0 ;;
   esac
-  perl -MTime::Local=timegm -e '
+  perl -MTime::Local=timegm,timelocal -e '
     my $v = $ARGV[0];
     $v =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d)(?:\.\d+)?)?(Z|([+-])(\d\d):?(\d\d))$/ or exit 1;
     my $t = eval { timegm($6 // 0, $5, $4, $3, $2 - 1, $1) };
@@ -1024,7 +1032,8 @@ normalize_when() {  # <value>
     $t -= ($8 eq "-" ? -1 : 1) * ($9 * 3600 + $10 * 60) if defined $8;
     my @u = gmtime($t);
     my $instant = sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", $u[5] + 1900, $u[4] + 1, $u[3], $u[2], $u[1], $u[0]);
-    my @d = ($u[2] || $u[1] || $u[0]) ? gmtime($t + 86400) : @u;
+    my @d = localtime($t);
+    @d = localtime(timelocal(0, 0, 12, $d[3], $d[4], $d[5]) + 86400) if $t > timelocal(0, 0, 0, $d[3], $d[4], $d[5]);
     printf("%04d-%02d-%02d %s\n", $d[5] + 1900, $d[4] + 1, $d[3], $instant);
   ' "$1" || fail "--until must be a YYYY-MM-DD date or an ISO date-time with Z or an offset: $1"
 }
@@ -1311,9 +1320,16 @@ command_hold() {
     existing_held=$(show_field_value "$show" held)
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then
       preserve_hold_set=1
+      decoded=$(decode_shown_value "$(show_field "$show" body)")
+      # An open decision never becomes a To read item: reading is part of
+      # deciding, so its question stays as it is.
+      if [ "$flavor" = read ] && [ "$(body_hold_header "$decoded" flavor)" != read ]; then
+        printf 'fm-captain-hold: task %s already waits on the captain as a decision; it stays one\n' "$id" >&2
+        printf '%s\n' "$id"
+        return 0
+      fi
       # A re-hold keeps a snooze still running: an update never brings the
       # item back, only `unsnooze` or its return time does.
-      decoded=$(decode_shown_value "$(show_field "$show" body)")
       snoozed=$(body_hold_header "$decoded" snoozed)
       if [ -n "$snoozed" ] && [ -z "$until" ] \
         && snooze_running "$(show_field_value "$show" hold_until)" "$(body_hold_header "$decoded" returns)" "$hold_set"; then
@@ -1528,8 +1544,9 @@ command_read_done() {  # <task-id>
   [ "$(body_hold_header "$(decode_shown_value "$(show_field "$show" body)")" flavor)" = read ] \
     || fail "task $id is a decision, not a To read item; record the captain's answer with answer"
   if [ "$(show_field "$show" state)" = in_flight ]; then
-    write_hold_header "$id" "$(show_field "$show" body)" flavor= snoozed= returns= || exit 1
     tasks_axi unhold "$id" >/dev/null || fail "could not lift the read hold on $id"
+    task_show_or_fail "$id" "task $id disappeared while lifting its read hold"
+    write_hold_header "$id" "$(show_field "$show" body)" flavor= snoozed= returns= || exit 1
   else
     tasks_axi "done" "$id" >/dev/null || fail "could not close read item $id"
   fi
@@ -2138,7 +2155,7 @@ pr_hold_fingerprint() { # <show-output>
   for word in ${words[@]+"${words[@]}"}; do links="$links${word#*:},"; done
   read -r -a words <<< "$(show_field_value "$1" title)"
   for word in ${words[@]+"${words[@]}"}; do
-    case "$links" in *",$word,"*) ;; *) title="$title $word" ;; esac
+    case "$links" in *,"$word",*) ;; *) title="$title $word" ;; esac
   done
   sha256_text "$(show_field "$1" hold_reason)
 $title
@@ -2240,7 +2257,7 @@ Settlement policy: $(jq -r .on "$policy") -> $action"
     fi
     write_resolution_record "$id" "$mode" "$body"
   fi
-  CREW_CARD_SYNC=1
+  CARD_SYNC_DETACHED=1
   if [ "$action" = close ]; then close_answered "$id" 0
   else tasks_axi unhold "$id" >/dev/null; fi
   remove_interrupted_answer_stamp "$id"
