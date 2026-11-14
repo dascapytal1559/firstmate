@@ -1103,15 +1103,15 @@ test_ship_and_scout_teach_detached_jobs() {
       "$kind brief does not give its worker the exact detached-job launcher for its own task"
     assert_grep "start '$id' --timeout <secs> -- <command> [args...]" "$brief" \
       "$kind brief does not show the full form of a detached job with a timeout"
-    assert_grep "Then append \`paused [at=<epoch>]: job <n>" "$brief" \
-      "$kind brief does not tell the worker to declare its wait on the job and end its turn"
+    assert_grep "Then follow it in the foreground with \`FM_HOME='$home' '$ROOT/bin/fm-job.sh' follow '$id' <n>\`" "$brief" \
+      "$kind brief does not tell the worker to follow the job in the foreground"
     assert_grep "A no-mistakes run is not a detached job" "$brief" \
       "$kind brief does not keep no-mistakes runs out of the detached-job rule"
   done
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-detached-jobs-mate --secondmate --no-projects >/dev/null 2>&1
   assert_no_grep "fm-job.sh" "$home/data/brief-detached-jobs-mate/brief.md" \
     "a secondmate charter should not carry the worker's detached-job rule"
-  pass "fm-brief.sh: ship and scout briefs teach long commands as detached jobs with a paused wait"
+  pass "fm-brief.sh: ship and scout briefs teach long commands as detached jobs they follow"
 }
 
 test_scout_and_secondmate_load_decision_hold_policy() {

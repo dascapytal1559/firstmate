@@ -16,7 +16,9 @@
 #      records a job whose runner vanished as lost, and leaves running jobs
 #      and jobs of tasks no longer recorded alone.
 #   5. `reap` stops a task's running jobs and removes their records.
-#   6. A start for a task this home does not record is refused.
+#   6. `follow` streams a job's log until it ends, exits with its code, leaves
+#      the job running when cut, and re-attaches to a running or ended job.
+#   7. A start for a task this home does not record is refused.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -301,6 +303,36 @@ test_reap_stops_and_removes() {
   pass "reap stops a task's running jobs and removes their records"
 }
 
+test_follow_streams_survives_a_cut_and_reattaches() {
+  local h r out rc fpid
+  h=$(new_home follow)
+  job "$h" start t1 -- bash -c 'echo first; sleep 2; echo second; exit 4' >/dev/null || fail "start failed"
+  r=$(rec "$h" 1)
+  remember_runner "$r"
+  # A follow cut mid-job leaves the job running.
+  job "$h" follow t1 1 > "$h/cut.out" 2>&1 &
+  fpid=$!
+  sleep 0.5
+  kill -KILL "$fpid" 2>/dev/null
+  wait "$fpid" 2>/dev/null
+  [ -z "$(field "$r" outcome)" ] || fail "the job should still run after its follow was cut"
+  # A new follow re-attaches, streams the whole log, and ends with the job.
+  rc=0
+  out=$(env FM_JOB_FOLLOW_POLL=0.2 PATH="$FAKEBIN:$PATH" FM_HOME="$h" "$JOB" follow t1 1) || rc=$?
+  expect_code 4 "$rc" "follow exits with the job's exit code"
+  assert_contains "$out" "first" "follow prints the log from its start"
+  assert_contains "$out" "second" "follow prints lines written while it waits"
+  assert_contains "$out" "job 1 ended: failed (exit 4)" "follow prints the result"
+  assert_contains "$out" "log: $h/state/t1.jobs/1/log" "follow names the log"
+  [ -n "$(field "$r" notified)" ] || fail "a follow that saw the end marks the result delivered"
+  # Following an ended job prints the result at once.
+  rc=0
+  out=$(job "$h" follow t1 1) || rc=$?
+  expect_code 4 "$rc" "a follow of an ended job still exits with its code"
+  assert_contains "$out" "job 1 ended: failed (exit 4)" "a follow of an ended job prints its result"
+  pass "follow streams a job, survives being cut, re-attaches, and returns the job's exit code"
+}
+
 test_unknown_task_refused() {
   local h rc
   h=$(new_home refuse)
@@ -322,4 +354,5 @@ test_deliver_stops_a_command_its_runner_left
 test_live_deliver_and_lost
 test_watcher_tick_delivers
 test_reap_stops_and_removes
+test_follow_streams_survives_a_cut_and_reattaches
 test_unknown_task_refused
