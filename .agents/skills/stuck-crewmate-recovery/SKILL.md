@@ -10,8 +10,8 @@ metadata:
 # stuck-crewmate-recovery
 
 Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, or when a steer failed to land.
-A finished T3 scout the digest marks as a kept review is not a recovery case either: it idles for the captain by design, and once he closes its thread it is cleaned up through ordinary teardown, never relaunched or steered (`scout-completion`).
 A stale or dead-endpoint report for a worker whose pull request has already landed is not a recovery case: the work is finished, so close the task through ordinary teardown (`AGENTS.md` section 7 for firstmate, the landed-work rule in `bin/fm-branch-prompt.sh` for the supervision branch) instead of this playbook, never with `--force`.
+When that teardown defers because the worker is still working (exit 5), leave a healthy worker to finish and retry at a later wake; interrupt first only a worker this playbook finds genuinely wedged, then retry.
 
 A lane parked on review (`bin/fm-crew-state.sh` reads `source: review-park`) stopped its agent on purpose and is not a recovery case; relaunch it only through `bin/fm-park.sh resume`.
 

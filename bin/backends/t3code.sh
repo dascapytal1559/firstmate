@@ -395,6 +395,15 @@ fm_backend_t3code_agent_state() {  # <thread-id>
   printf '%s' "${row#* }"
 }
 
+# fm_backend_t3code_takes_turn_when_dead: 0 iff the thread's last run failed
+# (a usage limit, a provider error). Its agent reads dead, yet T3 accepts a new
+# message on the same thread and carries on in the same conversation, so a
+# steer may ring it. A missing or archived thread, or one T3 cannot read, is
+# not accepting: it fails here.
+fm_backend_t3code_takes_turn_when_dead() {  # <thread-id>
+  [ "$(fm_backend_t3code_probe "$1")" = error ]
+}
+
 fm_backend_t3code_target_exists() {  # <thread-id>
   case "$(fm_backend_t3code_agent_state "$1")" in
     alive|dead) return 0 ;;

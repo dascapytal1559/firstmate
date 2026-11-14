@@ -217,37 +217,6 @@
 //     declares stop (T3's Stop: the turn, the queue, and every delegated
 //     task), else the run alone with a plain interrupt, and the thread is
 //     then archived with archive's proof.
-//   fm-t3-mcp.mjs review-support
-//     Whether this T3 can keep a finished thread for its reader
-//     (docs/t3code-backend.md "Retained reviews"): it offers t3_thread_note
-//     (nothing posts one any more, but it marks the fork that ships the
-//     review actions, even from a schema that does not list its actions) and
-//     its t3_thread_organize schema, where it lists actions, lists tag,
-//     disable_auto_settle, and fence. Prints {supported, missing[]}; changes
-//     nothing.
-//   fm-t3-mcp.mjs review-publish --thread <id> --tag <tag>
-//     Keep a retained review's thread for its reader in one session: the
-//     tag, then disable_auto_settle, then the read-back that proves both (the
-//     thread reads tags containing <tag> and autoSettleDisabled true). It
-//     posts nothing into the thread and starts no run. Prints outcome
-//     published, closed (the thread reads archived, or the verified server
-//     no longer has it, at any step: a close wins over publication), or busy
-//     (a run, queued message, or pending request is open; nothing is changed,
-//     retry later). A read-back without the tags or autoSettleDisabled field
-//     is a T3 too old for this, never false: exit 4 (review_unsupported), as
-//     is a T3 that review-support refuses. A read-back that disagrees exits 1
-//     (review_unproven). Repeating the call is harmless.
-//   fm-t3-mcp.mjs fence --thread <id> --worktree <abs-path> --label <label>
-//     Retire a stopped thread from running before its worktree goes back to
-//     its owner: t3_thread_organize fence with that label, the thread's own
-//     worktreePath as expectedWorktreePath, which must be <worktree> by real
-//     path (else exit 4, fence_mismatch, nothing sent), then the read-back of
-//     executionFence with that label and path (else exit 1,
-//     fence_unproven). An already matching fence is the end state. A thread
-//     the verified server no longer has needs no fence (fenced:false,
-//     missing:true). A read without the tags field is a T3 too old for
-//     fences: exit 4 (review_unsupported). T3 refuses a fence while a run,
-//     queued message, or request is open, so close the thread first.
 //   fm-t3-mcp.mjs thread-for-root --root <abs-path>
 //     The one unarchived, worktree-less thread with an active run on the live
 //     project rooted at <root>, across every t3_thread_list page; a fork
@@ -306,50 +275,8 @@
 //     statusLabel, which therefore has no label to clear), or failed with its
 //     error; one card's failure never stops the others. The label is checked
 //     here rather than in REQUIRED_TOOLS, so such a T3 costs only the label.
-//   fm-t3-mcp.mjs decisions --file <json-file>
-//     One pass of bin/fm-t3-needs-me.sh sync over the captain's list
-//     (docs/t3code-backend.md "Captain's list"), in one session.
-//     <json-file> is {root, parent, list[], threads?}: root is the home's
-//     absolute path; parent the FirstMate thread id the last pass found, or
-//     null; list[] every item the list shows, each {id, title, projectName?,
-//     since?, question, options[], entries[], revision, kind?, thread?
-//     {id, finished}, snoozed? {at, until|null}, launch? {title}}; and threads
-//     the item threads file, {<item id>: <thread id>}. The
-//     FirstMate thread is the cached parent while it is still a live,
-//     worktree-less thread of the project rooted at root, else that
-//     project's one pinned coordinator while it is such a thread, else
-//     thread-for-root's (firstmate-thread's lookup); with none the
-//     pass changes nothing and answers parent:null. An item marked launch
-//     with no thread in the file first gets one: a crew thread of the
-//     FirstMate thread in its project, titled launch.title, on the FirstMate
-//     thread's model, with no message, recorded in the file at once (a T3
-//     without crew lineage launches none). Then the list replaces T3's whole
-//     list in one t3_decisions_set call with replyTo the FirstMate thread,
-//     and every thread in the file its item no longer rides on (the item
-//     left the list, or moved to a worker's card) is archived and dropped. An item outside T3's bounds is left out
-//     and named in rejected[] {id, problem}, as is a thread that could not be
-//     launched or archived ({thread: true}), so none blocks the rest. T3 must
-//     answer with that replyTo and exactly the ids and revisions sent, else
-//     exit 1 (decisions_unproven). Prints {parent, projectId, decisions (T3's
-//     answer, each {id, revision, answered}), rejected[], items (each sent
-//     {id, kind, revision, thread}), retired[] {id, threadId}}. Exit 4
-//     (decisions_unsupported) when this T3 has no t3_decisions_set.
-//   fm-t3-mcp.mjs actions [--after <seq>] [--wait-ms <n>] [--ack-file <json-file>]
-//     One t3_decisions_actions call (the T3 Code fork's action log of what
-//     the captain did to his items): it first acknowledges the
-//     --ack-file's [{seq, outcome: applied|refused, message?}], which leave
-//     the log, then answers the actions after --after, waiting up to
-//     --wait-ms (at most 30000) for one. Prints {actions[] {seq, commandId,
-//     itemId, revision, type, until?, at}, lastSeq}; an answer of another
-//     shape exits 1 (actions_malformed). Exit 4 (actions_unsupported) when
-//     this T3 has no t3_decisions_actions.
-//   fm-t3-mcp.mjs reports-unpin --id <id>
-//     t3_reports_unpin for bin/fm-t3-captain-sync.sh migrate: unpins that
-//     report (an id never pinned changes nothing) and prints the reports
-//     still pinned, {reports[] {id, title, pinnedAt}}. Exit 4
-//     (reports_unsupported) when this T3 has no pinned reports.
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
-//     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
+//     Local, no T3 call: the Bridge payload bin/fm-t3-bridge.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
 //     bin/fm-objectives.sh. Each objective row becomes one bullet:
 //     `**Name:** text` becomes `- **Name** — text`, and a trailing sentence
@@ -388,25 +315,6 @@
 //     through t3_routing_set (markdown null clears it). T3 must answer with
 //     exactly that markdown, else exit 1 (routing_unproven). Exit 4
 //     (routing_unsupported) when this T3 has no t3_routing_set.
-//   fm-t3-mcp.mjs rules-payload --file <json-file>
-//     Local, no T3 call: the Bridge's rules section (docs/t3code-backend.md
-//     "Rules"), from <json-file>, the home's data/rules/inventory.json
-//     ({rules[], pendingEdits[]?}). Every rule must hold to the T3 fork's
-//     t3_rules_set contract: exactly the fields id, group, source?, text,
-//     status ("approved" or "pending"), approvedOn? (YYYY-MM-DD, approved
-//     only) and recommendation (pending only, and required there: choice one
-//     of keep, keep-narrower, make-rule, fact, drop, a label, note?,
-//     proposedText?); ids distinct and made of [A-Za-z0-9._-] (the ids
-//     bin/fm-rules.sh records); at most 400 rules; text, note and
-//     proposedText at most 2000 characters. Anything else exits 1
-//     (rules_malformed) naming the first fault; nothing is cut. Prints
-//     {rules (the contract fields only, in file order), count, pending}.
-//   fm-t3-mcp.mjs rules --file <json-file>
-//     Replaces the Bridge's rules with <json-file>'s {rules} through
-//     t3_rules_set (an empty list clears them). T3 answers with counts
-//     {rules, pending, sent}; rules must be the number of rules sent and
-//     pending the number of those pending, else exit 1 (rules_unproven).
-//     Exit 4 (rules_unsupported) when this T3 has no t3_rules_set.
 //
 // Every verb accepts --token-file <path>. It defaults to
 // $FM_T3CODE_TOKEN_FILE, else ${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token,
@@ -1849,122 +1757,6 @@ function threadOf(out) {
   return out?.thread ?? out ?? {};
 }
 
-// --- Retained reviews (docs/t3code-backend.md "Retained reviews") ---------
-
-const REVIEW_NOTE_TOOL = "t3_thread_note";
-const REVIEW_ACTIONS = ["tag", "disable_auto_settle", "fence"];
-
-// The action values a tool's tools/list schema enumerates, or null when it
-// does not enumerate them.
-function toolActions(session, tool) {
-  const action = session.toolSchemas?.get(tool)?.properties?.action;
-  const values = action?.enum ?? action?.anyOf?.flatMap((s) => (s?.const !== undefined ? [s.const] : s?.enum ?? []));
-  return Array.isArray(values) && values.length ? values : null;
-}
-
-function reviewMissing(session) {
-  const missing = [];
-  if (!session.toolSchemas?.has(REVIEW_NOTE_TOOL)) missing.push(REVIEW_NOTE_TOOL);
-  const actions = toolActions(session, "t3_thread_organize");
-  if (actions) for (const a of REVIEW_ACTIONS) if (!actions.includes(a)) missing.push(`t3_thread_organize ${a}`);
-  return missing;
-}
-
-function requireReviewSupport(session) {
-  const missing = reviewMissing(session);
-  if (missing.length) {
-    throw new Refusal("review_unsupported", `this T3 cannot keep a thread for its reader: it lacks ${missing.join(", ")}`, 4, { missing });
-  }
-}
-
-// A read that lacks the review fields comes from a T3 too old for them; it
-// never means "not tagged" or "not protected".
-function requireReviewFields(t, threadId) {
-  if (!Array.isArray(t.tags) || typeof t.autoSettleDisabled !== "boolean") {
-    throw new Refusal("review_unsupported", `T3 read thread ${threadId} back without tags or autoSettleDisabled, so it is too old to keep a thread for its reader`, 4);
-  }
-}
-
-async function reviewSupport(flags) {
-  const { session } = await verifiedSession(flags);
-  const missing = reviewMissing(session);
-  return { ok: true, supported: missing.length === 0, missing };
-}
-
-// One read of <threadId>: null when the verified server no longer has it.
-async function readThreadOrNull(session, threadId) {
-  try {
-    return threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
-  } catch (err) {
-    if (isNotFound(err)) return null;
-    throw err;
-  }
-}
-
-const closedOutcome = (threadId, t) => ({ ok: true, threadId, outcome: "closed", ...(t ? { archived: true } : { missing: true }) });
-
-async function reviewPublish(flags) {
-  const threadId = need(flags, "thread");
-  const tag = need(flags, "tag").trim();
-  if (!tag || tag.length > 64 || /\n/.test(tag)) usage("--tag must be one line of 1 to 64 characters");
-  const { session } = await verifiedSession(flags);
-  requireReviewSupport(session);
-  let t = await readThreadOrNull(session, threadId);
-  if (!t || isArchived(t)) return closedOutcome(threadId, t);
-  requireReviewFields(t, threadId);
-  if ((t.activeRunId ?? null) !== null || (t.pendingRequestCount ?? 0) > 0) return { ok: true, threadId, outcome: "busy", activeRunId: t.activeRunId ?? null };
-  // Each step that fails re-reads the thread: an archive or delete that raced
-  // it is the captain's close, which wins over publication.
-  const step = async (fn) => {
-    try {
-      return { out: await fn() };
-    } catch (err) {
-      if (!(err instanceof Refusal) || err.exit === 2) throw err;
-      const now = await readThreadOrNull(session, threadId);
-      if (!now || isArchived(now)) return { closed: closedOutcome(threadId, now) };
-      throw err;
-    }
-  };
-  for (const args of [{ action: "tag", tag }, { action: "disable_auto_settle" }]) {
-    const r = await step(() => session.call("t3_thread_organize", { threadId, ...args }));
-    if (r.closed) return r.closed;
-  }
-  t = await readThreadOrNull(session, threadId);
-  if (!t || isArchived(t)) return closedOutcome(threadId, t);
-  requireReviewFields(t, threadId);
-  if (!t.tags.includes(tag) || t.autoSettleDisabled !== true) {
-    throw new Refusal("review_unproven", `thread ${threadId} reads tags ${JSON.stringify(t.tags)} and autoSettleDisabled ${t.autoSettleDisabled}, not the tag "${tag}" with automatic settling off`, 1);
-  }
-  return { ok: true, threadId, outcome: "published", tags: t.tags, autoSettleDisabled: true };
-}
-
-async function fence(flags) {
-  const threadId = need(flags, "thread");
-  const worktree = need(flags, "worktree");
-  if (!path.isAbsolute(worktree)) usage("--worktree must be an absolute path");
-  const label = need(flags, "label");
-  if (label.length > 256) usage("--label must be at most 256 characters");
-  const { session } = await verifiedSession(flags);
-  requireReviewSupport(session);
-  let t = await readThreadOrNull(session, threadId);
-  if (!t) return { ok: true, threadId, fenced: false, missing: true };
-  requireReviewFields(t, threadId);
-  const own = t.worktreePath ?? null;
-  if (own === null || realOrRaw(own) !== realOrRaw(worktree)) {
-    throw new Refusal("fence_mismatch", `thread ${threadId} works in ${own ?? "its project folder"}, not ${worktree}; nothing was fenced`, 4, { worktreePath: own });
-  }
-  const matches = (f) => f && f.label === label && f.worktreePath === own;
-  if (!matches(t.executionFence)) {
-    await session.call("t3_thread_organize", { threadId, action: "fence", fenceLabel: label, expectedWorktreePath: own });
-    t = await readThreadOrNull(session, threadId);
-    if (!t) return { ok: true, threadId, fenced: false, missing: true };
-    if (!matches(t.executionFence)) {
-      throw new Refusal("fence_unproven", `thread ${threadId} did not read back fenced with label "${label}" on ${own}`, 1, { executionFence: t.executionFence ?? null });
-    }
-  }
-  return { ok: true, threadId, fenced: true, executionFence: t.executionFence };
-}
-
 // One approval entry of T3's pending-request list or read, normalized to
 // what a supervisor decides on: detail is the command or file it asks for.
 function approvalEntry(e) {
@@ -2372,49 +2164,17 @@ async function crewStatus(flags) {
   return { ok: true, cards };
 }
 
-// --- the captain's list (docs/t3code-backend.md "Captain's list") ---------
-
-// T3's bounds on one Bridge decision (the T3 Code fork's Decision schema):
-// text is trimmed, then must be non-empty and at most its length. Returns the
-// first problem, or null.
-export const DECISION_LIST_MAX = 200;
-export function bridgeDecisionProblem(d) {
-  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
-  const optionalText = (v, max) => v === undefined || text(v, max);
-  const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
-  if (!d || typeof d !== "object" || Array.isArray(d)) return "a decision must be an object";
-  if (!text(d.id, 200)) return "id must be non-empty text of at most 200 characters";
-  if (!text(d.title, 200)) return "title must be non-empty text of at most 200 characters";
-  if (!text(d.question, 4000)) return "question must be non-empty text of at most 4000 characters";
-  if (!optionalText(d.projectName, 200)) return "projectName must be non-empty text of at most 200 characters";
-  if (d.since !== undefined && !time(d.since)) return `since ${d.since} is not a date`;
-  if (d.kind !== undefined && !["decision", "read"].includes(d.kind)) return `kind ${d.kind} is neither decision nor read`;
-  if (d.thread !== undefined && !(text(d.thread?.id, 200) && typeof d.thread.finished === "boolean")) return "thread needs an id and finished true or false";
-  if (d.snoozed !== undefined && !(time(d.snoozed?.at) && (d.snoozed.until === null || time(d.snoozed.until)))) return "snoozed needs a time at and a time or null until";
-  if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
-  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o?.label, 200)) return "an option needs a label of at most 200 characters";
-  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
-  for (const e of d.entries) {
-    if (!time(e?.at)) return `entry time ${e?.at} is not a date`;
-    if (!["raised", "update"].includes(e.kind)) return `entry kind ${e.kind} is neither raised nor update`;
-    if (!text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs text of at most 8192 characters and a changed line of at most 500";
-    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
-    for (const x of e.attachments ?? []) if (!text(x?.kind, 32) || !text(x?.path, 2048) || !optionalText(x?.label, 200)) return "an attachment needs a kind of at most 32 characters, a path of at most 2048, and a label of at most 200";
-  }
-  return null;
-}
+// --- FirstMate's own thread ------------------------------------------------
 
 const isArchived = (t) => t.archived === true || Boolean(t.archivedAt);
 
 // The FirstMate thread of the project rooted at <root>, whether or not it is
-// running a turn right now: the cached id while it is still a live,
-// worktree-less thread of that project; else the project's one pinned
-// coordinator while it is such a thread; else thread-for-root's live thread.
-// {threadId, projectId, source} with source cached, coordinator, or live; null
-// when there is none; several live threads and no usable pin refuse as
-// thread-for-root does (exit 6).
-async function firstmateThread(session, rootPath, cached) {
+// running a turn right now: the project's one pinned coordinator while it is
+// an unarchived, worktree-less, non-subagent thread of that project; else
+// thread-for-root's live thread. {threadId, projectId, source} with source
+// coordinator or live; null when there is none; several live threads and no
+// usable pin refuse as thread-for-root does (exit 6).
+async function firstmateThread(session, rootPath) {
   const project = await projectForRoot(session, rootPath);
   if (!project) return null;
   const usable = (t) => t.projectId === project.id && !isArchived(t) && (t.worktreePath ?? null) === null
@@ -2427,7 +2187,6 @@ async function firstmateThread(session, rootPath, cached) {
       throw err;
     }
   };
-  if (cached && await usableId(cached)) return { threadId: cached, projectId: project.id, source: "cached" };
   const pinned = [];
   let cursor;
   for (let page = 0; page < 1000; page++) {
@@ -2446,194 +2205,14 @@ async function firstmateThread(session, rootPath, cached) {
 }
 
 // firstmate-thread: the thread a worker spawned from the home rooted at
-// <root> names as its crew parent (bin/fm-spawn.sh), found as
-// firstmateThread finds it with no cached id, so a spawn made between the
-// FirstMate thread's turns still finds its pinned coordinator.
+// <root> names as its crew parent (bin/fm-spawn.sh), so a spawn made between
+// the FirstMate thread's turns still finds its pinned coordinator.
 async function firstmateThreadVerb(flags) {
   const rootPath = need(flags, "root");
   if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
   const { session } = await verifiedSession(flags);
-  const found = await firstmateThread(session, rootPath, null);
+  const found = await firstmateThread(session, rootPath);
   return { ok: true, threadId: found?.threadId ?? null, source: found?.source ?? null };
-}
-
-// The item threads file: {<item id>: <thread id>}, {} when absent or unreadable.
-function readItemThreads(file) {
-  if (!file) return {};
-  try {
-    const map = JSON.parse(readFileSync(file, "utf8"));
-    return map && typeof map === "object" && !Array.isArray(map) ? map : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeItemThreads(file, map) {
-  if (!file) return;
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(map)}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
-}
-
-// A thread of its own for an item no worker carries: a crew thread of the
-// FirstMate thread in its project, titled with the question, on the FirstMate
-// thread's own model, with no message, so no run starts. Null where this T3
-// cannot list crew (the caller skips it), since only crew cards carry an item.
-async function launchItemThread(session, parent, title, selection) {
-  const out = await session.call("t3_thread_launch", {
-    projectId: parent.projectId,
-    title,
-    modelSelection: selection,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    workspaceStrategy: { type: "root" },
-    parentThreadId: parent.threadId,
-  });
-  if (!out?.threadId) throw new Refusal("launch_unconfirmed", "t3_thread_launch returned no threadId", 1);
-  return out.threadId;
-}
-
-// One pass: one t3_decisions_set call carrying every item the captain's list
-// shows, proven by T3's answer. Items marked `launch` get a thread of their
-// own first, recorded in the item threads file at once; a recorded thread
-// its item no longer rides on (it left the list, or moved to a worker's card)
-// is archived after the call and dropped.
-async function decisions(flags) {
-  let input;
-  try {
-    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
-  } catch (err) {
-    usage(`--file is not readable JSON: ${err.message}`);
-  }
-  if (!input || typeof input.root !== "string" || !path.isAbsolute(input.root) || !Array.isArray(input.list)) {
-    usage("--file needs root (an absolute path) and list[]");
-  }
-  const { session } = await verifiedSession(flags);
-  if (!session.toolSchemas.has("t3_decisions_set")) throw new Refusal("decisions_unsupported", "this T3 has no t3_decisions_set", 4);
-  const parent = await firstmateThread(session, input.root, input.parent ?? null);
-  if (!parent) return { ok: true, parent: null, projectId: null, decisions: [], rejected: [], items: [] };
-  const rejected = [];
-  const sent = [];
-  const seen = new Set();
-  const itemThreads = readItemThreads(input.threads);
-  let selection;
-  const crew = toolOffers(session, "t3_thread_launch", "parentThreadId");
-  for (const item of input.list) {
-    if (!item || typeof item !== "object" || item.launch === undefined) continue;
-    const { launch: wanted } = item;
-    delete item.launch;
-    if (!crew) continue;
-    try {
-      if (itemThreads[item.id] === undefined) {
-        selection ??= (await session.call("t3_thread_configure", { threadId: parent.threadId }))?.modelSelection;
-        if (!selection) throw new Refusal("launch_unconfirmed", `the FirstMate thread ${parent.threadId} reads no model selection`, 1);
-        const threadId = await launchItemThread(session, parent, wanted.title, selection);
-        itemThreads[item.id] = threadId;
-        writeItemThreads(input.threads, itemThreads);
-      }
-      item.thread = { id: itemThreads[item.id], finished: true };
-    } catch (err) {
-      rejected.push({ id: item.id, problem: `its own thread could not be launched (${err.message}); it is sent without one`, thread: true });
-    }
-  }
-  for (const d of input.list) {
-    let problem = bridgeDecisionProblem(d);
-    if (!problem && seen.has(d.id)) problem = "its id is already on the list";
-    if (!problem && sent.length >= DECISION_LIST_MAX) problem = `the list already holds T3's ${DECISION_LIST_MAX} decisions`;
-    if (problem) {
-      rejected.push({ id: typeof d?.id === "string" ? d.id : null, problem });
-      continue;
-    }
-    seen.add(d.id);
-    sent.push(d);
-  }
-  const out = await session.call("t3_decisions_set", { replyTo: parent.threadId, decisions: sent });
-  const stored = Array.isArray(out?.decisions) ? out.decisions : null;
-  const want = sent.map((d) => `${d.id}#${d.revision}`).sort().join("\n");
-  const got = stored === null ? null : stored.map((d) => `${d?.id}#${d?.revision}`).sort().join("\n");
-  if ((out?.replyTo ?? null) !== parent.threadId || got !== want) {
-    throw new Refusal("decisions_unproven", `T3 accepted the decision list but answered with ${stored === null ? "no list" : `${stored.length} decision(s)`} for replyTo ${out?.replyTo ?? null}, not the ${sent.length} sent for ${parent.threadId}`, 1);
-  }
-  const retired = [];
-  const riding = new Map(input.list.map((d) => [d?.id, d?.thread?.id]));
-  for (const [id, threadId] of Object.entries(itemThreads)) {
-    if (riding.get(id) === threadId) continue;
-    try {
-      await archiveThread(session, threadId, ARCHIVE_TIMEOUT_MS);
-      delete itemThreads[id];
-      writeItemThreads(input.threads, itemThreads);
-      retired.push({ id, threadId });
-    } catch (err) {
-      rejected.push({ id, problem: `its thread ${threadId} could not be archived (${err.message}); the next pass retries`, thread: true });
-    }
-  }
-  const items = sent.map((d) => ({ id: d.id, kind: d.kind ?? "decision", revision: d.revision, thread: d.thread ?? null }));
-  return { ok: true, parent: parent.threadId, projectId: parent.projectId, decisions: stored, rejected, items, retired };
-}
-
-// actions: one t3_decisions_actions call, which acknowledges the --ack-file's
-// actions and then returns those after --after, waiting up to --wait-ms for
-// one. Every action and the answer's lastSeq are checked against the T3 Code
-// fork's DecisionAction shape.
-const ACTION_TYPES = ["snooze", "unsnooze", "archive", "thread-archived", "thread-unarchived"];
-const ACTIONS_WAIT_MAX_MS = 30_000;
-export function decisionActionProblem(a) {
-  const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
-  if (!a || typeof a !== "object" || Array.isArray(a)) return "an action must be an object";
-  if (!(Number.isInteger(a.seq) && a.seq > 0)) return `seq must be a positive integer, not ${a.seq}`;
-  if (typeof a.itemId !== "string" || a.itemId === "") return "itemId must be text";
-  if (!(Number.isInteger(a.revision) && a.revision > 0)) return `revision must be a positive integer, not ${a.revision}`;
-  if (!ACTION_TYPES.includes(a.type)) return `type ${a.type} is not one of ${ACTION_TYPES.join(", ")}`;
-  if (a.until !== undefined && a.until !== null && !time(a.until)) return `until ${a.until} is not a time`;
-  if (!time(a.at)) return `at ${a.at} is not a time`;
-  return null;
-}
-
-async function actionsVerb(flags) {
-  const intFlag = (name, max) => {
-    if (flags[name] === undefined) return undefined;
-    if (!/^[0-9]+$/.test(flags[name]) || Number(flags[name]) > max) usage(`--${name} must be an integer from 0 to ${max}`);
-    return Number(flags[name]);
-  };
-  const after = intFlag("after", Number.MAX_SAFE_INTEGER);
-  const waitMs = intFlag("wait-ms", ACTIONS_WAIT_MAX_MS);
-  let ack;
-  if (flags["ack-file"] !== undefined) {
-    try {
-      ack = JSON.parse(readFileSync(flags["ack-file"], "utf8"));
-    } catch (err) {
-      usage(`--ack-file is not readable JSON: ${err.message}`);
-    }
-    if (!Array.isArray(ack) || ack.some((a) => !(Number.isInteger(a?.seq) && a.seq > 0) || !["applied", "refused"].includes(a.outcome))) {
-      usage("--ack-file must hold [{seq, outcome: applied|refused, message?}]");
-    }
-  }
-  const { session } = await verifiedSession(flags);
-  if (!session.toolSchemas.has("t3_decisions_actions")) throw new Refusal("actions_unsupported", "this T3 has no t3_decisions_actions", 4);
-  const out = await session.call(
-    "t3_decisions_actions",
-    { ...(after !== undefined ? { after } : {}), ...(waitMs !== undefined ? { waitMs } : {}), ...(ack?.length ? { ack } : {}) },
-    { timeoutMs: (waitMs ?? 0) + 15_000 },
-  );
-  if (!Array.isArray(out?.actions) || !(Number.isInteger(out?.lastSeq) && out.lastSeq >= 0)) {
-    throw new Refusal("actions_malformed", "T3 answered t3_decisions_actions without actions[] and lastSeq", 1);
-  }
-  for (const a of out.actions) {
-    const problem = decisionActionProblem(a);
-    if (problem) throw new Refusal("actions_malformed", `T3 answered t3_decisions_actions with an action whose ${problem}`, 1);
-  }
-  return { ok: true, actions: out.actions, lastSeq: out.lastSeq };
-}
-
-// reports-unpin: one t3_reports_unpin call, for the one-time move of the
-// Bridge's pinned reports into the captain's list.
-async function reportsUnpin(flags) {
-  const id = need(flags, "id");
-  const { session } = await verifiedSession(flags);
-  if (!session.toolSchemas.has("t3_reports_unpin")) throw new Refusal("reports_unsupported", "this T3 has no pinned reports", 4);
-  const out = await session.call("t3_reports_unpin", { id });
-  if (!Array.isArray(out?.reports)) throw new Refusal("reports_malformed", "T3 answered t3_reports_unpin without reports[]", 1);
-  return { ok: true, reports: out.reports.map((r) => ({ id: r?.id, title: r?.title, pinnedAt: r?.pinnedAt })) };
 }
 
 // --- objectives (docs/t3code-backend.md "Objectives") ---------------------
@@ -2869,109 +2448,6 @@ async function routing(flags) {
   return { ok: true, modelRouting: got };
 }
 
-// --- rules (docs/t3code-backend.md "Rules") --------------------------------
-
-export const RULES_MAX = 400;
-export const RULE_TEXT_MAX = 2000;
-const RULE_FIELDS = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
-const RECOMMENDATION_FIELDS = new Set(["choice", "label", "note", "proposedText"]);
-export const RULE_CHOICES = ["keep", "keep-narrower", "make-rule", "fact", "drop"];
-const RULE_ID = /^[A-Za-z0-9._-]+$/;
-
-// The t3_rules_set list from a data/rules/inventory.json value, or a Refusal
-// naming the first fault. Nothing is cut: a rule out of bounds is refused.
-export function rulesPayload(source) {
-  const bad = (what) => {
-    throw new Refusal("rules_malformed", `data/rules/inventory.json: ${what}`, 1);
-  };
-  const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-  const text = (v) => typeof v === "string" && v.trim() !== "";
-  if (!isObject(source)) bad("the top-level value must be an object");
-  const extra = Object.keys(source).find((k) => k !== "rules" && k !== "pendingEdits");
-  if (extra !== undefined) bad(`unknown top-level field ${extra}`);
-  if (!Array.isArray(source.rules)) bad("rules must be an array");
-  if (source.pendingEdits !== undefined && !Array.isArray(source.pendingEdits)) bad("pendingEdits must be an array");
-  if (source.rules.length > RULES_MAX) bad(`${source.rules.length} rules, past the ${RULES_MAX} the Bridge takes`);
-  const seen = new Set();
-  const rules = source.rules.map((r, i) => {
-    const at = `rules[${i}]${isObject(r) && text(r.id) ? ` (${r.id})` : ""}`;
-    if (!isObject(r)) bad(`${at} must be an object`);
-    const unknown = Object.keys(r).find((k) => !RULE_FIELDS.has(k));
-    if (unknown !== undefined) bad(`${at} has unknown field ${unknown}`);
-    if (typeof r.id !== "string" || !RULE_ID.test(r.id)) bad(`${at}.id must be letters, digits, dots, underscores or hyphens`);
-    if (seen.has(r.id)) bad(`${at} repeats id ${r.id}`);
-    seen.add(r.id);
-    if (!text(r.group)) bad(`${at} needs group`);
-    if (r.source !== undefined && !text(r.source)) bad(`${at}.source must be non-empty text`);
-    if (!text(r.text)) bad(`${at} needs text`);
-    if (r.text.length > RULE_TEXT_MAX) bad(`${at}.text is ${r.text.length} characters, past ${RULE_TEXT_MAX}`);
-    if (r.status !== "approved" && r.status !== "pending") bad(`${at}.status must be "approved" or "pending"`);
-    const out = { id: r.id, group: r.group };
-    if (r.source !== undefined) out.source = r.source;
-    out.text = r.text;
-    out.status = r.status;
-    if (r.status === "approved") {
-      if (r.recommendation !== undefined) bad(`${at} is approved, so it takes no recommendation`);
-      if (r.approvedOn !== undefined) {
-        const m = typeof r.approvedOn === "string" && /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.approvedOn);
-        const day = m && new Date(`${r.approvedOn}T00:00:00Z`);
-        if (!m || Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== r.approvedOn) bad(`${at}.approvedOn must be a YYYY-MM-DD date`);
-        out.approvedOn = r.approvedOn;
-      }
-      return out;
-    }
-    if (r.approvedOn !== undefined) bad(`${at} is pending, so it takes no approvedOn`);
-    const rec = r.recommendation;
-    if (!isObject(rec)) bad(`${at} is pending, so it needs a recommendation`);
-    const unknownRec = Object.keys(rec).find((k) => !RECOMMENDATION_FIELDS.has(k));
-    if (unknownRec !== undefined) bad(`${at}.recommendation has unknown field ${unknownRec}`);
-    if (!RULE_CHOICES.includes(rec.choice)) bad(`${at}.recommendation.choice must be one of ${RULE_CHOICES.join(", ")}`);
-    if (!text(rec.label)) bad(`${at}.recommendation needs label`);
-    out.recommendation = { choice: rec.choice, label: rec.label };
-    for (const k of ["note", "proposedText"]) {
-      if (rec[k] === undefined) continue;
-      if (!text(rec[k])) bad(`${at}.recommendation.${k} must be non-empty text`);
-      if (rec[k].length > RULE_TEXT_MAX) bad(`${at}.recommendation.${k} is ${rec[k].length} characters, past ${RULE_TEXT_MAX}`);
-      out.recommendation[k] = rec[k];
-    }
-    return out;
-  });
-  return { ok: true, rules, count: rules.length, pending: rules.filter((r) => r.status === "pending").length };
-}
-
-async function rulesPayloadVerb(flags) {
-  let source;
-  try {
-    source = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
-  } catch (err) {
-    throw new Refusal("rules_malformed", `data/rules/inventory.json is not readable JSON: ${err.message}`, 1);
-  }
-  return rulesPayload(source);
-}
-
-async function rulesVerb(flags) {
-  let input;
-  try {
-    input = JSON.parse(readFileSync(need(flags, "file"), "utf8"));
-  } catch (err) {
-    usage(`--file is not readable JSON: ${err.message}`);
-  }
-  let rules;
-  try {
-    ({ rules } = rulesPayload({ rules: input?.rules }));
-  } catch (err) {
-    usage(`--file rules are outside the contract: ${err.message}`);
-  }
-  const { session } = await verifiedSession(flags);
-  if (!session.toolSchemas.has("t3_rules_set")) throw new Refusal("rules_unsupported", "this T3 has no Bridge rules", 4);
-  const out = await session.call("t3_rules_set", { rules });
-  const pending = rules.filter((r) => r.status === "pending").length;
-  if (out?.rules !== rules.length || out?.pending !== pending) {
-    throw new Refusal("rules_unproven", `T3 accepted the rules but counted ${out?.rules} rules and ${out?.pending} pending, not ${rules.length} and ${pending}`, 1);
-  }
-  return { ok: true, rules: out.rules, pending: out.pending };
-}
-
 const VERBS = {
   login,
   status,
@@ -2994,9 +2470,6 @@ const VERBS = {
   watch,
   archive,
   close,
-  "review-support": reviewSupport,
-  "review-publish": reviewPublish,
-  fence,
   "thread-for-root": threadForRoot,
   "pin-coordinator": pinCoordinator,
   "firstmate-thread": firstmateThreadVerb,
@@ -3004,15 +2477,10 @@ const VERBS = {
   "restart-request": restartRequest,
   "restart-cancel": restartCancel,
   "crew-status": crewStatus,
-  decisions,
-  actions: actionsVerb,
-  "reports-unpin": reportsUnpin,
   "objectives-payload": objectivesPayloadVerb,
   objectives,
   "routing-payload": routingPayloadVerb,
   routing,
-  "rules-payload": rulesPayloadVerb,
-  rules: rulesVerb,
 };
 
 async function main(argv) {

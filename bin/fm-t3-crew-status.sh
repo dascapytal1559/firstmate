@@ -5,11 +5,14 @@
 # The label is a projection and this script keeps no record of its own: every
 # pass computes it afresh for every recorded T3 ship and scout from the
 # authoritative reads, and compares it with the live card. Those reads are the
-# worker's current state, as bin/fm-crew-state.sh reads it; its steering
-# inbox; and its thread in T3. What waits on the captain is not a label: T3
-# shows it on the card from the captain's list (bin/fm-t3-needs-me.sh).
+# backlog's captain holds, as bin/fm-fleet-snapshot.sh reads them; the worker's
+# current state, as bin/fm-crew-state.sh reads it; its steering inbox; and its
+# thread in T3. A hold counts for a worker while it is open (not Done, hold
+# kind captain) and on the worker's own task or raised for it (its
+# hold_origin); a worker's needs-decision line alone is no captain wait.
 #
 # Labels, first match wins:
+#   Waiting for captain  a hold counts for the worker, and it is between turns.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
@@ -136,6 +139,14 @@ sync_pass() {
     [ -z "$pids" ] || wait $pids
     return 0
   fi
+  if ! { "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
+    && jq -r '.backlog.records[] | select(.structured and .state != "done" and .hold_kind == "captain")
+      | .id, (.hold_origin // empty)' "$WORK/snapshot.json" > "$WORK/held"; }; then
+    # shellcheck disable=SC2086  # one pid per word
+    wait $pids
+    echo "t3-crew-status: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err" | grep . || echo unreadable); the next pass retries"
+    return 1
+  fi
   # shellcheck disable=SC2086  # one pid per word
   wait $pids
   n=0
@@ -150,7 +161,9 @@ sync_pass() {
       *) run='' ;;
     esac
     working=$run
-    if [ -n "$run" ]; then
+    if grep -Fqx -- "$worker" "$WORK/held"; then
+      between='Waiting for captain'
+    elif [ -n "$run" ]; then
       between=$run
     else
       case "$state" in

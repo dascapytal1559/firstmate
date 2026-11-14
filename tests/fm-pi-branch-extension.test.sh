@@ -5190,6 +5190,90 @@ EOF
   pass "scopeForUnreadWake resolves unique Orca terminal owners and refuses conflicting aliases alongside another eligible row"
 }
 
+# A T3 task's stale rows are keyed by its thread id (t3_thread_id=), not its
+# window (fm_backend_target_of_meta in bin/fm-backend.sh). The dispatcher must
+# resolve that key to its task so the row follows the task's own decision
+# state, and an unresolved one must not drag an unrelated routine row to main.
+test_branch_dispatch_resolves_t3_thread_keyed_stale_row() {
+  local repo home out status
+  repo="$TMP_ROOT/dispatch-t3-root"
+  home="$TMP_ROOT/dispatch-t3-home"
+  mkdir -p "$repo/.pi/extensions/lib" "$home/state" "$home/projects/approved"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$repo/.pi/extensions/lib/fm-branch-dispatch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-native-contract.ts" "$repo/.pi/extensions/lib/fm-native-contract.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
+  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { rmSync, writeFileSync } from "node:fs";
+
+const { branchOfferForWake, scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
+const state = `${process.env.FM_HOME}/state`;
+const project = `${process.env.FM_HOME}/projects/approved`;
+const thread = "mcp:0b6f3c1e-7a2d-4c55-9e10-3f4a5b6c7d8e";
+const staleRow = `1\t2\tstale\t${thread}\tstale: ${thread} (no progress)`;
+const t3Meta = `project=${project}\nwindow=fm-t3-task\nbackend=t3code\nt3_thread_id=${thread}\n`;
+const reset = () => {
+  for (const name of ["t3-task.meta", "t3-task.status", "other.meta", "other.status"]) rmSync(`${state}/${name}`, { force: true });
+  writeFileSync(`${state}/t3-task.meta`, t3Meta);
+  writeFileSync(`${state}/t3-task.status`, "working: implementing\n");
+  writeFileSync(`${state}/other.meta`, `project=${project}\nwindow=fm-other\n`);
+  writeFileSync(`${state}/other.status`, "working: implementing\n");
+};
+
+// A working T3 worker's stale row resolves to its task and is branch-owned.
+reset();
+writeFileSync(`${state}/.wake-queue`, staleRow);
+let offer = branchOfferForWake(state, `stale: ${thread} (no progress)`, false, true);
+if (!offer.eligible || offer.scope.corrupted || offer.scope.eligibleSeqs.join(",") !== "2") {
+  throw new Error(`a working T3 worker's stale row was not branch-owned: ${JSON.stringify(offer.scope)}`);
+}
+if (offer.scope.taskByWakeKey[thread] !== "t3-task" || !offer.scope.projects.includes(project)) {
+  throw new Error(`the T3 thread key did not resolve to its task and project: ${JSON.stringify(offer.scope)}`);
+}
+
+// A routine signal beside a T3 stale row is no longer dragged to main.
+reset();
+writeFileSync(`${state}/.wake-queue`, `1\t1\tsignal\tother.status\tsignal: other.status\n${staleRow}`);
+offer = branchOfferForWake(state, "signal: other.status", false, true);
+if (!offer.eligible || offer.scope.corrupted || offer.scope.eligibleSeqs.slice().sort().join(",") !== "1,2") {
+  throw new Error(`a routine signal beside a T3 stale row left the branch: ${JSON.stringify(offer.scope)}`);
+}
+
+// A recovery trigger stays main's even though the T3 row is now claimable.
+reset();
+writeFileSync(`${state}/.wake-queue`, staleRow);
+offer = branchOfferForWake(state, "check: rearm-resurface", false, true);
+if (offer.eligible || offer.scope.corrupted || offer.scope.eligibleSeqs.join(",") !== "2") {
+  throw new Error(`a recovery trigger with a T3 stale row must stay main's with the row still claimable: ${JSON.stringify(offer)}`);
+}
+
+// A captain-held T3 task's stale row inherits that decision state and stays main's.
+reset();
+writeFileSync(`${state}/t3-task.status`, "captain-held [key=route]: awaiting the captain\n");
+writeFileSync(`${state}/.wake-queue`, staleRow);
+offer = branchOfferForWake(state, `stale: ${thread} (no progress)`, false, true);
+if (offer.eligible || offer.scope.eligibleSeqs.length !== 0) {
+  throw new Error(`a captain-held T3 task's stale row was offered to the branch: ${JSON.stringify(offer.scope)}`);
+}
+
+// Two records claiming one thread id leave the whole wake to main.
+reset();
+writeFileSync(`${state}/other.meta`, `project=${project}\nwindow=fm-other\nbackend=t3code\nt3_thread_id=${thread}\n`);
+writeFileSync(`${state}/.wake-queue`, `1\t1\tsignal\tother.status\tsignal: other.status\n${staleRow}`);
+const scope = scopeForUnreadWake(state, false);
+if (scope.eligible || !scope.corrupted || scope.eligibleSeqs.length !== 0) {
+  throw new Error(`conflicting T3 thread ownership must leave the whole wake to MAIN: ${JSON.stringify(scope)}`);
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "a T3 thread-keyed stale row must resolve to its task: $out"
+  pass "scopeForUnreadWake resolves T3 thread owners, keeps held and recovery wakes on main, and refuses a shared thread id"
+}
+
 
 test_branch_dispatch_keeps_project_with_canonical_owner() {
   local out status
@@ -6280,6 +6364,7 @@ test_large_unprocessed_backlog_replays_in_batches
 test_undated_unprocessed_outcome_surfaces_and_stays_unprocessed
 test_branch_dispatch_classifies_main_only_rows_and_writes_the_eligible_snapshot
 test_branch_dispatch_resolves_terminal_keyed_orca_stale_row
+test_branch_dispatch_resolves_t3_thread_keyed_stale_row
 test_branch_dispatch_keeps_project_with_canonical_owner
 test_branch_dispatch_routes_secondmate_signal_by_new_span
 test_branch_cache_key_is_per_home_stable

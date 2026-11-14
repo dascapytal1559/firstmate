@@ -91,7 +91,9 @@
 # has moved on to another PR. Only the detached cleanup removes its request,
 # after its outcome report is saved (teardown leaves it), so a cleanup killed
 # mid-teardown is retried; a request whose task record is gone is dropped by
-# the tick. bin/fm-watch.sh runs
+# the tick. A teardown that defers because the lane's worker is still working
+# (its exit 5) publishes no outcome and keeps the request, so the tick retries
+# it until the worker stops; land itself then exits 5. bin/fm-watch.sh runs
 # land --if-eligible --detach for every merged lane from its merged-poll path
 # after the merge outcome is recorded, also when bin/fm-pr-merge.sh recorded it
 # first, which makes the watcher the one owner of a merged lane's teardown.
@@ -782,6 +784,11 @@ cmd_land() {
     4)
       printf 'cleaned up %s: PR %s merged; lane torn down, but its returned pool slot was lost\n' "$id" "$pr"
       printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  )' || true
+      ;;
+    5)
+      # The worker is still working: no outcome line, so the request stays.
+      printf 'cleanup deferred %s: PR %s merged; its worker is still working\n' "$id" "$pr" >&2
+      return 5
       ;;
     *)
       why=$(printf '%s\n' "$out" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$out" | tail -1)

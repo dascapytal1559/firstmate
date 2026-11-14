@@ -1331,14 +1331,18 @@ fm_busy_classify_meta() {  # <meta-file> <id> <state-dir> [tail40]
   fm_busy_classify "$backend" "$target" "$harness" "$id" "$state" "$tail40"
 }
 
-# fm_busy_is_busy: boolean activity guard. T3 native uncertainty returns 0
-# to defer delivery until idle is proven. Other unknown sources, idle, and
-# dead return 1.
-fm_busy_is_busy() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
-  local verdict
-  verdict=$(fm_busy_classify "$@")
-  case "$verdict" in
+# fm_busy_verdict_is_busy: the boolean activity guard over one classify
+# verdict, for a caller that also reports the verdict it acted on. T3 native
+# uncertainty returns 0 to defer the caller's action until idle is proven.
+# Other unknown sources, idle, and dead return 1.
+fm_busy_verdict_is_busy() {  # <verdict>
+  case "$1" in
     busy\ *|unknown\ t3code-native) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# fm_busy_is_busy: fm_busy_verdict_is_busy over a fresh classification.
+fm_busy_is_busy() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
+  fm_busy_verdict_is_busy "$(fm_busy_classify "$@")"
 }

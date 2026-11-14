@@ -1665,6 +1665,80 @@ test_send_records_its_cause_and_rings_with_it() {
   pass "fm-send.sh to a T3 worker: the turn's prompt is kept in the steer's record and rides its doorbell, and a refused cause never stops the doorbell"
 }
 
+# A worker stopped by a failed run (a usage limit, a provider error) still takes
+# a new message on the same thread. The steer rings it once and succeeds,
+# without claiming the agent exited.
+test_steer_rings_a_failed_thread() {
+  local id out rc thread=mcp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+  id=$(t3_uid t3failed-send)
+  make_t3_control_task send-failed "$id" "$thread" failed
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-send.sh" "$id" "resume after the reset" 2>&1); rc=$?
+  expect_code 0 "$rc" "a steer to a failed T3 thread should succeed"$'\n'"$out"
+  assert_not_contains "$out" "has exited" "a failed T3 thread's steer must not claim the agent exited"
+  assert_not_contains "$out" "not typed" "a failed T3 thread's steer must not report a skipped doorbell"
+  [ "$(t3_fake_calls t3_thread_send | wc -l | tr -d ' ')" = 1 ] \
+    || fail "a steer to a failed thread must send exactly one message, got: $(t3_fake_calls t3_thread_send)"
+  assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the message sent is the steering doorbell"
+  pass "fm-send.sh to a failed T3 thread: one doorbell is sent and the steer succeeds"
+}
+
+# An archived or missing thread takes no turn: the steer is recorded, nothing is
+# sent, and the message names the thread rather than an exited agent.
+test_steer_refuses_archived_or_missing_thread() {
+  local mode id out rc thread=mcp:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e
+  for mode in archived missing; do
+    id=$(t3_uid "t3gone-$mode")
+    make_t3_control_task "send-$mode" "$id" "$thread" completed
+    case "$mode" in
+      archived) t3_world "$(t3_thread_json "$thread" completed true)" ;;
+      missing) t3_world ;;
+    esac
+    out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$ROOT/bin/fm-send.sh" "$id" "anyone there" 2>&1); rc=$?
+    expect_code 0 "$rc" "a steer to a $mode thread still records and exits 0"$'\n'"$out"
+    assert_contains "$out" "missing or archived" "a $mode thread's refusal names the thread, not an exited agent"
+    assert_not_contains "$out" "has exited" "a $mode thread must not be reported as an exited agent"
+    [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "a $mode thread must receive no message, got: $(t3_fake_calls t3_thread_send)"
+    [ -n "$(find "$CTRL_STATE/$id.inbox" -maxdepth 1 -name '*.msg')" ] || fail "the steer to a $mode thread must stay durably recorded"
+  done
+  pass "fm-send.sh to an archived or missing T3 thread: nothing is sent and the record stays for recovery"
+}
+
+# The watcher rings an unread message on a failed thread, once, and does not
+# escalate it as an exited agent or defer it behind T3's uncertain busy reading.
+# An archived thread still escalates without a ring.
+test_watcher_rings_a_failed_thread() {
+  local mode id thread=mcp:7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f state rec
+  for mode in failed archived; do
+    id=$(t3_uid "t3watch-$mode")
+    make_t3_control_task "watch-$mode" "$id" "$thread" completed
+    case "$mode" in
+      failed) t3_world "$(t3_thread_json "$thread" failed false)" ;;
+      archived) t3_world "$(t3_thread_json "$thread" completed true)" ;;
+    esac
+    state=$CTRL_STATE
+    rec=$(bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" "$3" "please continue"' _ "$ROOT" "$state" "$id")
+    : > "$CASE_DIR/wakes"
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$CONFIG" FM_ROOT_OVERRIDE="$ROOT" FM_TASK_INBOX_GRACE_SECS=0 WAKES="$CASE_DIR/wakes" \
+      bash -c '. "$0/bin/fm-watch.sh"; wake() { printf "%s\n" "$1" >> "$WAKES"; }; inbox_steer_check "$1" "$2"' "$ROOT" "$thread" "$id" >/dev/null 2>&1 || true
+    case "$mode" in
+      failed)
+        [ "$(t3_fake_calls t3_thread_send | wc -l | tr -d ' ')" = 1 ] \
+          || fail "the watcher must ring a failed thread's unread message once, got: $(t3_fake_calls t3_thread_send)"
+        assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the watcher sends the steering doorbell"
+        [ ! -s "$CASE_DIR/wakes" ] || fail "ringing a failed thread must not wake firstmate: $(cat "$CASE_DIR/wakes")"
+        [ -f "$state/$id.inbox/.ring-state" ] || fail "the ring must enter the re-ring ladder"
+        ;;
+      archived)
+        [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "an archived thread must not be rung"
+        assert_contains "$(cat "$CASE_DIR/wakes")" "unread firstmate instruction" "an archived thread still escalates its unread message"
+        ;;
+    esac
+  done
+  pass "watcher: a failed T3 thread's unread message is rung once instead of escalated; an archived thread still escalates"
+}
+
 test_kill_stops_delegated_threads() {
   local call
   t3_case kill-children
@@ -2235,11 +2309,12 @@ test_uncertain_launch_message_keeps_task_record() {
   pass "fm-spawn.sh --backend t3code: a launch brief whose reply is lost is reported unconfirmed and keeps its task record"
 }
 
-test_scout_teardown_stops_and_archives_before_slot_return() {
+test_scout_teardown_archives_before_slot_return() {
   local proj wt data state id out rc neutral fb thread=mcp:2c8f0d4e-7b1a-4f3c-9e2d-abcdef012345
   id=$(t3_uid t3teardownz1)
-  t3_case teardown running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown completed
+  # A finished scout: a plain cleanup refuses while the worker's turn runs.
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
@@ -2257,14 +2332,14 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
     "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
   rc=$?
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
-  [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] || fail "teardown must interrupt then archive exactly once, got '$(t3_dispatch_types)'"
+  [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "teardown of a finished scout must archive exactly once with no interrupt, got '$(t3_dispatch_types)'"
   local archive_line return_line
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
   return_line=$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')
   [ "$return_line" -gt 0 ] || fail "teardown must return the slot through treehouse"
   [ "$archive_line" -lt "$return_line" ] || fail "the thread must be archived before the slot is returned (archive line $archive_line, return line $return_line)"
   assert_absent "$state/$id.meta" "teardown should remove task metadata"
-  pass "fm-teardown.sh backend=t3code: interrupts and archives the thread with a proven close, then returns the slot"
+  pass "fm-teardown.sh backend=t3code: archives a finished scout's thread with a proven close, then returns the slot"
 }
 
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete() {
@@ -2841,8 +2916,8 @@ test_spawn_rejected_lease_is_neither_cleaned_nor_returned() {
 test_teardown_keeps_tracked_claude_local_md_and_codex_config() {
   local proj wt data state id out rc neutral fb thread=mcp:5a9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
   id=$(t3_uid t3teardownz2)
-  t3_case teardown-tracked-claude-local running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown-tracked-claude-local completed
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   printf 'project instructions\n' > "$wt/CLAUDE.local.md"
@@ -3052,6 +3127,7 @@ test_t3_restart_recovery() {
   [ -n "$(find "$RS_STATE/$wp.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null)" ] || fail "the recovery steer is a durable inbox record"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "the T3 server restarted at" "the steer tells the worker what happened"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "fm-job.sh status" "the steer sends a worker to check its detached job, not rerun it"
+  assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "follow <your task id> <job> --from-end" "the steer re-attaches a worker from the log's last lines"
   assert_not_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "any command that was still running" "the steer no longer claims a detached job ended with the session"
 
   # The rung workers end their turns without answering, the case the marker
@@ -3376,7 +3452,7 @@ test_spawn_codex_scout_thread_environment_carries_traceparent
 test_spawn_secondmate_runs_thread_in_home_with_env
 test_spawn_codex_secondmate_rides_thread_environment
 test_spawn_refuses_t3code_when_token_rejected
-test_scout_teardown_stops_and_archives_before_slot_return
+test_scout_teardown_archives_before_slot_return
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete
 test_pooled_t3_secondmate_home_returned_only_after_provider_exits
 test_teardown_refuses_when_t3_is_unreachable
@@ -3430,3 +3506,6 @@ test_kill_stops_delegated_threads
 test_turn_start_carries_its_cause_and_never_drops_the_message
 test_spawn_records_and_sends_its_turns_cause
 test_send_records_its_cause_and_rings_with_it
+test_steer_rings_a_failed_thread
+test_steer_refuses_archived_or_missing_thread
+test_watcher_rings_a_failed_thread

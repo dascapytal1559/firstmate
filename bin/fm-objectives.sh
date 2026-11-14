@@ -8,7 +8,7 @@
 # Prints {"priorities":[...],"objectives":[...]} and exits 0.
 #
 # Read-only. fm-bearings-snapshot.sh projects these as its priorities and objectives
-# fields, the /ahoy recap runs this directly, and fm-t3-needs-me.sh builds T3's
+# fields, the /ahoy recap runs this directly, and fm-t3-bridge.sh builds T3's
 # Bridge objectives from its output. Writing and editing either file is not this
 # script's concern.
 set -u

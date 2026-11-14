@@ -41,6 +41,27 @@
 # lift the deferral (it authorizes discarding unlanded WORK, never the
 # captain's question), and bin/fm-captain-hold.sh answer stays the only act
 # that closes the call.
+# REFUSES, exiting 5 with nothing stopped or removed, while a ship or scout
+# task's worker is still working. Closing the endpoint and reaping the copy's
+# processes ends whatever the worker is running, and landed work proves the
+# code landed, never that the worker stopped: its brief may place a step after
+# the merge (observed 2026-11-14: a production step killed 51 seconds in). Two
+# mechanical readings refuse, and neither judges whether the work matters:
+#   - the worker's turn is running: bin/fm-busy-lib.sh's activity guard
+#     (fm_busy_verdict_is_busy) says so and the endpoint's agent is not
+#     confirmed gone (the recovery-grade classifier's dead or missing, or, on
+#     a backend with no classifier, an endpoint that no longer exists), so a
+#     turn record a crashed agent left behind never blocks cleanup;
+#   - one of its detached jobs is still running (bin/fm-job.sh live).
+# Exit 5 means only "the worker is still working; retry once it stops", so a
+# caller can defer without reading text. Cleanup never waits for the worker
+# itself: the caller retries at a later wake. The check runs before the
+# landed-work proof, which keeps a deferred retry cheap, and again immediately
+# before the first step that stops or removes anything. --force lifts it,
+# because ending a worker's unfinished step is the discard --force authorizes;
+# a wedged worker is stopped first with bin/fm-control.sh <task-id> interrupt
+# (or exit), never forced. A secondmate is exempt: idle is its healthy state
+# and its retirement has its own gates.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch other than the local no-mistakes
@@ -88,15 +109,6 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
-# A T3 scout kept for the captain (bin/fm-t3-review.sh) refuses every cleanup,
-# --force included, until its review is recorded closed or T3 reads its thread
-# archived or deleted; an unreadable T3 refuses too. Once closed it passes the
-# same gates as any scout, its close is read again just before its thread is
-# stopped (a restored thread reopens nothing), and after the thread is
-# stopped and archived it must
-# also read back fenced on its recorded worktree (bin/fm-t3-mcp.mjs fence)
-# before the copy is returned; a fence that cannot be proven keeps the lease
-# and the records.
 # A scratch copy (kind=scout) and a --force run discard untracked content.
 # Treehouse's return resets with `git clean -fd`, which never deletes a nested
 # git repository, so the pool slot stays dirty and later checkouts skip it.
@@ -111,8 +123,10 @@
 # no longer a readable worktree is reported at once with the lost pool slot and
 # what remains. Teardown then finishes every cleanup step, reports the lost slot
 # instead of a clean return, and exits 4. Exit 4 means only "cleaned up, but a
-# returned pool slot was lost"; refusals and errors exit 1, and an invalid
-# request exits 2. A local retirement of a remote secondmate whose remote run
+# returned pool slot was lost" and exit 5 only the still-working refusal above;
+# other refusals and errors exit 1 (a held supervision lease exits as
+# bin/fm-lease-lib.sh defines), and an invalid request exits 2. A local
+# retirement of a remote secondmate whose remote run
 # exits 4 still completes locally, forwards only the remote lost-slot warning
 # to stderr, and then exits 4.
 # Before destructive cleanup, teardown validates task check artifacts as
@@ -219,10 +233,11 @@
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
-#   --force skips ordinary-task dirty and landed-work checks, skips scout report
-#   checks and closes the scout as discarded with no report recorded, and
-#   discards secondmate child work for kind=secondmate. Only use it when the
-#   captain has explicitly said to discard the work.
+#   --force skips the still-working refusal and ordinary-task dirty and
+#   landed-work checks, skips scout report checks and closes the scout as
+#   discarded with no report recorded, and discards secondmate child work for
+#   kind=secondmate. Only use it when the captain has explicitly said to
+#   discard the work.
 #   --legacy-record accepts a task record that predates the spawn_gen field:
 #   teardown then proceeds only when the recorded endpoint is confirmed dead or
 #   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
@@ -340,7 +355,9 @@
 #     outside the worktree). Just before Fix 2, `fm-job.sh reap` stops every
 #     job of this task that is still running and removes its job records;
 #     a job whose process group survives KILL refuses cleanup with the
-#     records kept, like a Fix 2 survivor.
+#     records kept, like a Fix 2 survivor. Without --force the still-working
+#     refusal has already deferred cleanup while a job runs, so the reap
+#     stops one only under --force, or one started after that check.
 # After Fix 1 and Fix 2, when config/pipeline-spend opts this home in, a ship
 # task whose local copy this teardown owns has its no-mistakes pipeline spend
 # recorded by bin/fm-pipeline-spend.sh, which owns the attribution and the
@@ -404,6 +421,7 @@ for _teardown_source in \
   fm-timeout-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
+  fm-busy-lib.sh \
   fm-lock-lib.sh \
   fm-classify-lib.sh \
   fm-gate-refuse-lib.sh \
@@ -438,6 +456,8 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -450,8 +470,6 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
-# shellcheck source=bin/fm-t3-review-lib.sh
-. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # The bounded remote-ref refresh is shared with the done-claim gate.
@@ -1345,28 +1363,6 @@ if [ "$BACKEND" = t3code ]; then
   fm_backend_runtime_check t3code || exit 1
   [ "$TEARDOWN_META_KIND" != secondmate ] || t3code_secondmate_lsof_check "$ID" "$(fm_meta_get "$META" home)" || exit 1
 fi
-# A finished T3 scout kept for the captain (bin/fm-t3-review.sh) is his until
-# he archives its report or its thread in T3; nothing here may close it first.
-# The live read decides, so a close racing publication wins, and an
-# unreadable T3 is never taken for a close. --force does not lift this: it
-# discards unlanded work, never the captain's open conversation. A closed
-# review continues through every ordinary gate below and is fenced before its
-# copy is returned (the T3 kill block).
-T3_REVIEW=
-if [ "$BACKEND" = t3code ]; then
-  T3_REVIEW=$(fm_t3_review_state "$META")
-  if [ -n "$T3_REVIEW" ]; then
-    t3_review_rc=0
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || t3_review_rc=$?
-    if [ "$t3_review_rc" != 0 ]; then
-      echo "REFUSED: $ID is a finished review kept for the captain in T3 and cannot be cleaned up yet (the reason is above); nothing was changed." >&2
-      echo "It is cleaned up once he archives its report on the card, or archives or deletes its thread there, and T3 can fence it (the watcher then asks for this cleanup)." >&2
-      exit 1
-    fi
-    T3_REVIEW=closed
-  fi
-fi
 if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
   "$FM_ROOT/bin/fm-guard.sh" || true
 fi
@@ -1963,11 +1959,7 @@ backlog_refresh_reminder() {
   else
     backlog_display="${DATA%/}/backlog.md"
   fi
-  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ] \
-    && FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-tasks-axi.sh" show "$ID" --full 2>/dev/null </dev/null | grep -q 'Captain hold flavor: read'; then
-    printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held To read for the captain with its deliverable recorded. It stays To read until he archives it in T3, or mark it with bin/fm-captain-hold.sh read-done once he says he read it."
-  elif [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
+  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
     printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   elif [ "$BACKLOG_CLOSED" = 1 ]; then
     printf '%s\n' "Backlog: $ID is closed in $backlog_display. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
@@ -3773,6 +3765,42 @@ remove_secondmate_registry_entry() {
 require_exclusive_task_worktree_slot || exit 1
 require_owned_task_worktree_slot || exit 1
 
+# The still-working refusal (contract: script header): returns 5 while the
+# worker's turn or one of its detached jobs is running. The activity guard also
+# holds a T3 turn state the server could not report, which the message names.
+teardown_refuse_working_worker() {
+  local agent harness verdict jobs
+  [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ] || return 0
+  if [ -n "$T" ]; then
+    agent=$(fm_backend_agent_state "$BACKEND" "$T")
+    [ "$agent" != unverified ] || fm_backend_target_exists "$BACKEND" "$T" || agent=missing
+    case "$agent" in
+      dead|missing) ;;
+      *)
+        harness=$(fm_meta_get "$META" harness)
+        verdict=$(fm_busy_classify "$BACKEND" "$T" "$harness" "$ID" "$STATE")
+        if fm_busy_verdict_is_busy "$verdict"; then
+          case "$verdict" in
+            busy\ *) echo "REFUSED: task $ID's worker is still running a turn ($verdict); nothing was stopped or removed" >&2 ;;
+            *) echo "REFUSED: task $ID's worker may still be running a turn: its turn state could not be read ($verdict); nothing was stopped or removed" >&2 ;;
+          esac
+          echo "Cleanup would stop it mid-step. Retry once the turn ends; if the worker is wedged, stop it first with bin/fm-control.sh $ID interrupt (or exit)." >&2
+          return 5
+        fi
+        ;;
+    esac
+  fi
+  jobs=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-job.sh" live 2>/dev/null \
+    | awk -F '\t' -v id="$ID" '$1 == id' || true)
+  if [ -n "$jobs" ]; then
+    echo "REFUSED: task $ID still has a detached job running; nothing was stopped or removed" >&2
+    echo "Cleanup would stop it. Retry once it ends (bin/fm-job.sh status $ID), or stop it with bin/fm-job.sh stop $ID <job>." >&2
+    return 5
+  fi
+  return 0
+}
+teardown_refuse_working_worker || exit $?
+
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
 if [ "$KIND" = secondmate ]; then
@@ -3930,6 +3958,7 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
+teardown_refuse_working_worker || exit $?
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
 fi
@@ -4138,26 +4167,10 @@ if [ "$BACKEND" = t3code ]; then
   # first: the archived thread stays in T3. Failing here never stops cleanup.
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-t3-crew-status.sh" clear "$ID" >&2 || true
-  if [ "$T3_REVIEW" = closed ]; then
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || {
-      echo "error: $ID's kept review thread $T no longer reads closed in T3, so it is left running for the captain" >&2
-      endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
-    }
-  fi
   fm_backend_kill t3code "$T" || {
     echo "error: could not stop and archive T3 thread $T for $ID; start T3 Code (or archive the thread there) and re-run teardown" >&2
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
   }
-  # A kept review the captain archived can be reopened in T3 at any time, so
-  # its copy goes back only once T3 refuses to run the thread again there
-  # (bin/fm-t3-mcp.mjs fence owns that proof). A deleted thread needs none.
-  if [ "$T3_REVIEW" = closed ]; then
-    fm_backend_t3code_mcp fence --thread "$T" --worktree "$WT" --label "firstmate cleaned up $ID; its copy went back to the pool" >/dev/null || {
-      echo "error: could not retire T3 thread $T from running before its copy goes back; the copy stays leased until T3 can prove it" >&2
-      endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
-    }
-  fi
 fi
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then

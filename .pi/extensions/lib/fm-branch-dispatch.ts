@@ -408,10 +408,13 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
       const project = fields.find((line) => line.startsWith("project="))?.slice(8) ?? "";
       const window = fields.find((line) => line.startsWith("window="))?.slice(7) ?? "";
       if (fields.includes("kind=secondmate")) secondmates.add(task);
-      // An Orca task's stale rows name its terminal handle, not its window
-      // (bin/fm-watch.sh keys Orca endpoints by terminal=), so index both.
+      // Orca and T3 tasks' stale rows name their backend endpoint, not their
+      // window (fm_backend_target_of_meta in bin/fm-backend.sh keys Orca
+      // endpoints by terminal= and T3 endpoints by t3_thread_id=), so index
+      // each alongside the window.
       const terminal = fields.find((line) => line.startsWith("terminal="))?.slice(9) ?? "";
-      const aliases = [task, `${task}.status`, `${task}.turn-ended`, window, terminal];
+      const t3Thread = fields.find((line) => line.startsWith("t3_thread_id="))?.slice(13) ?? "";
+      const aliases = [task, `${task}.status`, `${task}.turn-ended`, window, terminal, t3Thread];
       for (const key of aliases) {
         if (!key) continue;
         const owner = taskByKey.get(key);

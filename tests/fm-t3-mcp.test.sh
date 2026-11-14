@@ -631,45 +631,6 @@ test_restart_registry_verbs() {
   pass "fm-t3-mcp restart-*: request, status, and cancel speak the fork's registry, prove the answer, and refuse a T3 without it"
 }
 
-test_actions_and_reports_unpin_verbs() {
-  local ack="$TMP_ROOT/ack.json"
-  fresh_case actions
-  mcp actions --wait-ms 0
-  expect_code 4 "$RC" "a T3 without the action log is refused"
-  assert_contains "$OUT" actions_unsupported "the refusal names it"
-  t3_fake_set 'w.actionsTool = true; w.actions = [
-    { seq: 1, commandId: "c1", itemId: "w1", revision: 1, type: "snooze", until: null, at: "2026-11-13T01:00:00.000Z" },
-    { seq: 2, commandId: "c2", itemId: "w2", revision: 3, type: "thread-archived", at: "2026-11-13T02:00:00.000Z" }];'
-  mcp actions --after 1 --wait-ms 0
-  expect_code 0 "$RC" "the log is read: $ERR"
-  assert_equals '[2]' "$(field "$OUT" actions | jq -c '[.[].seq]')" "only actions after --after"
-  assert_equals 2 "$(field "$OUT" lastSeq)" "with the log's last seq"
-  printf '%s\n' '[{"seq":1,"outcome":"applied"},{"seq":2,"outcome":"refused","message":"no such item"}]' > "$ack"
-  mcp actions --wait-ms 0 --ack-file "$ack"
-  expect_code 0 "$RC" "acknowledging: $ERR"
-  assert_equals '[]' "$(field "$OUT" actions)" "acknowledged actions leave the log"
-  assert_equals '{"seq":2,"outcome":"refused","message":"no such item"}' \
-    "$(jq -c '.acks[1] | {seq, outcome, message}' "$T3_FAKE_WORLD")" "a refusal carries its message"
-  mcp actions --wait-ms 30001
-  expect_code 2 "$RC" "a wait past 30 s is invalid use"
-  printf '%s\n' '[{"seq":1,"outcome":"done"}]' > "$ack"
-  mcp actions --ack-file "$ack"
-  expect_code 2 "$RC" "an unknown outcome is invalid use"
-  t3_fake_set 'w.actions = [{ seq: 3, itemId: "w1", revision: 1, type: "explode", at: "2026-11-13T01:00:00.000Z" }]'
-  mcp actions --wait-ms 0
-  expect_code 1 "$RC" "an action of another shape is refused"
-  assert_contains "$OUT" actions_malformed "and named"
-
-  mcp reports-unpin --id fm-migrate-list
-  expect_code 4 "$RC" "a T3 without pinned reports is refused"
-  t3_fake_set 'w.reportsTool = true; w.pinnedReports = [{ id: "r1", title: "Report one", pinnedAt: "2026-11-11T00:00:00.000Z" }]'
-  mcp reports-unpin --id nobody
-  assert_equals '["r1"]' "$(field "$OUT" reports | jq -c '[.[].id]')" "an id never pinned answers the whole list"
-  mcp reports-unpin --id r1
-  assert_equals '[]' "$(field "$OUT" reports)" "and a pinned one is unpinned"
-  pass "fm-t3-mcp actions and reports-unpin: the action log is read, waited on, and acknowledged; reports unpin"
-}
-
 test_read_limit_matches_t3_cap() {
   local thread
   fresh_case read-limit
@@ -1589,117 +1550,6 @@ if (!w.threads.stranger.activeRunId) { console.error("an unrelated thread was st
   pass "fm-t3-mcp close: Stop ends a worker's delegated threads at any depth, and the close proof refuses while one still runs"
 }
 
-review_thread() {  # <id> <status> [archived] [worktree] -> one hand-written thread in the world
-  FM_T3_ID=$1 FM_T3_STATUS=$2 FM_T3_ARCHIVED=${3:-false} FM_T3_WT=${4:-$WT} t3_fake_set '
-const run = process.env.FM_T3_STATUS === "running" ? "run-1" : null;
-w.threads = w.threads || {};
-w.threads[process.env.FM_T3_ID] = { threadId: process.env.FM_T3_ID, projectId: "proj-1", status: process.env.FM_T3_STATUS, activeRunId: run,
-  archived: process.env.FM_T3_ARCHIVED === "true", worktreePath: process.env.FM_T3_WT, pendingRequestCount: 0, items: [],
-  runs: run ? [{ runId: run, ordinal: 1, status: "running" }] : [] };'
-}
-
-notes_on() {  # <thread-id> -> how many note items the thread holds
-  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((w.threads[process.argv[2]].items || []).filter((i) => i.note).length))' "$T3_FAKE_WORLD" "$1"
-}
-
-test_review_publish_keeps_the_thread_without_a_note() {
-  fresh_case review-publish '{"reviews":true}'
-  review_thread scout completed
-  mcp review-support
-  expect_code 0 "$RC" "review-support reads the gate: $ERR"
-  assert_equals 'true' "$(field "$OUT" supported)" "the fork keeps threads for their reader"
-  mcp review-publish --thread scout --tag 'waiting for captain'
-  expect_code 0 "$RC" "publication succeeds on an idle thread: $ERR"
-  assert_equals published "$(field "$OUT" outcome)" "the thread is kept"
-  assert_equals '["waiting for captain"]' "$(field "$OUT" tags)" "the read-back carries the exact tag"
-  assert_equals 0 "$(notes_on scout)" "nothing is posted into the thread"
-  [ -z "$(t3_fake_calls t3_thread_note)" ] || fail "publication never calls the note tool"
-  node -e 'const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).threads.scout;
-if ((t.runs || []).length || t.activeRunId || t.status !== "completed") { console.error("publication started a run"); process.exit(1); }
-if (t.autoSettleDisabled !== true) { console.error("automatic settling stayed on"); process.exit(1); }' "$T3_FAKE_WORLD" \
-    || fail "publication must start no run and switch automatic settling off"
-  assert_equals 'tag disable_auto_settle' "$(t3_fake_calls t3_thread_organize | while read -r c; do field "$c" action; printf ' '; done | sed 's/ $//')" \
-    "publication tags the thread and protects it from automatic settling, nothing else"
-  mcp review-publish --thread scout --tag 'waiting for captain'
-  expect_code 0 "$RC" "a repeat is harmless: $ERR"
-  assert_equals published "$(field "$OUT" outcome)" "a repeat is published again"
-  assert_equals '["waiting for captain"]' "$(field "$OUT" tags)" "a repeat adds no second tag"
-  pass "fm-t3-mcp review-publish: the exact tag and automatic settling off, proven by read-back, with no note, and harmless on a repeat"
-}
-
-test_review_publish_waits_yields_and_refuses() {
-  fresh_case review-busy '{"reviews":true}'
-  review_thread busy running
-  review_thread shut completed true
-  mcp review-publish --thread busy --tag 'waiting for captain'
-  expect_code 0 "$RC" "a busy thread is no failure: $ERR"
-  assert_equals busy "$(field "$OUT" outcome)" "a running thread waits for its turn to end"
-  mcp review-publish --thread shut --tag 'waiting for captain'
-  assert_equals 'closed true' "$(field "$OUT" outcome) $(field "$OUT" archived)" "an archived thread is closed"
-  mcp review-publish --thread gone --tag 'waiting for captain'
-  assert_equals 'closed true' "$(field "$OUT" outcome) $(field "$OUT" missing)" "a deleted thread is closed"
-  assert_equals '' "$(t3_fake_mutations)" "nothing changes on a busy, archived, or deleted thread"
-
-  fresh_case review-race '{"reviews":true,"archiveOnTag":true}'
-  review_thread raced completed
-  mcp review-publish --thread raced --tag 'waiting for captain'
-  expect_code 0 "$RC" "a close racing publication is no failure: $ERR"
-  assert_equals closed "$(field "$OUT" outcome)" "the captain's close wins over publication"
-
-  fresh_case review-old
-  review_thread old completed
-  mcp review-support
-  assert_equals false "$(field "$OUT" supported)" "an upstream T3 cannot keep threads"
-  assert_contains "$(field "$OUT" missing)" t3_thread_note "the probe names what is missing"
-  mcp review-publish --thread old --tag 'waiting for captain'
-  expect_code 4 "$RC" "an upstream T3 is refused before anything is sent"
-  assert_equals review_unsupported "$(field "$OUT" error.code)" "the refusal says the T3 is too old"
-  assert_equals '' "$(t3_fake_mutations)" "an old T3 gets no call"
-
-  fresh_case review-unread '{"reviews":true,"reviewsUnread":true}'
-  review_thread unread completed
-  mcp review-publish --thread unread --tag 'waiting for captain'
-  expect_code 4 "$RC" "a read-back without the review fields is a T3 too old, not false"
-  assert_equals review_unsupported "$(field "$OUT" error.code)" "missing fields read as unsupported"
-  assert_equals '' "$(t3_fake_mutations)" "nothing changes when the read cannot prove it"
-  pass "fm-t3-mcp review-publish: waits out a busy thread, yields to the captain's close, and refuses a T3 too old to prove it"
-}
-
-test_fence_retires_a_closed_thread() {
-  local fenced_at msg="$TMP_ROOT/fence-msg"
-  fresh_case fence '{"reviews":true}'
-  review_thread stopped completed true
-  review_thread busy running true
-  review_thread elsewhere completed true "$TMP_ROOT/elsewhere"
-  mcp fence --thread stopped --worktree "$WT" --label 'fm task scout'
-  expect_code 0 "$RC" "a stopped thread is fenced: $ERR"
-  assert_equals true "$(field "$OUT" fenced)" "the fence is proven"
-  assert_equals "$WT" "$(field "$OUT" executionFence.worktreePath)" "the fence names the returned worktree"
-  fenced_at=$(field "$OUT" executionFence.fencedAt)
-  mcp fence --thread stopped --worktree "$WT" --label 'fm task scout'
-  expect_code 0 "$RC" "a repeat is harmless: $ERR"
-  assert_equals "$fenced_at" "$(field "$OUT" executionFence.fencedAt)" "a repeat keeps the original fence"
-  assert_equals 1 "$(t3_fake_calls t3_thread_organize | grep -c '"fence"')" "an existing fence is not sent again"
-  printf 'go\n' > "$msg"
-  FM_T3_ID=stopped t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = false'
-  mcp send --thread stopped --message-file "$msg" --client-request-id after-fence
-  [ "$RC" -ne 0 ] || fail "a fenced thread, even reopened, must not start a run"
-  mcp fence --thread elsewhere --worktree "$WT" --label 'fm task scout'
-  expect_code 4 "$RC" "a thread working elsewhere is not fenced on this worktree"
-  assert_equals fence_mismatch "$(field "$OUT" error.code)" "the refusal names the mismatch"
-  mcp fence --thread busy --worktree "$WT" --label 'fm task scout'
-  expect_code 3 "$RC" "T3 refuses to fence a running thread"
-  mcp fence --thread gone --worktree "$WT" --label 'fm task scout'
-  expect_code 0 "$RC" "a deleted thread needs no fence: $ERR"
-  assert_equals 'false true' "$(field "$OUT" fenced) $(field "$OUT" missing)" "a deleted thread reads missing"
-  fresh_case fence-old
-  review_thread old completed true
-  mcp fence --thread old --worktree "$WT" --label 'fm task scout'
-  expect_code 4 "$RC" "an upstream T3 cannot fence"
-  assert_equals '' "$(t3_fake_mutations)" "an old T3 gets no fence call"
-  pass "fm-t3-mcp fence: retires a stopped thread on exactly its worktree, proven, idempotent, and refused where T3 cannot"
-}
-
 iso_in() {  # <seconds from now, negative for the past> -> ISO timestamp
   FM_IN="$1" node -e 'process.stdout.write(new Date(Date.now() + Number(process.env.FM_IN) * 1000).toISOString())'
 }
@@ -1848,9 +1698,6 @@ test_launch_and_send_carry_the_cause() {
 }
 
 t3_fake_start "$TMP_ROOT/server"
-test_review_publish_keeps_the_thread_without_a_note
-test_review_publish_waits_yields_and_refuses
-test_fence_retires_a_closed_thread
 test_cause_names_the_one_prompt_of_the_callers_turn
 test_cause_answers_null_rather_than_guess
 test_launch_and_send_carry_the_cause
@@ -1873,7 +1720,6 @@ test_typed_failure_and_transport_errors
 test_telemetry_reported
 test_status_reports_server_started_at
 test_restart_registry_verbs
-test_actions_and_reports_unpin_verbs
 test_read_limit_matches_t3_cap
 test_interrupt_confirms_only_the_interrupted_run
 test_send_lost_reply_is_unconfirmed_and_retry_is_one_delivery

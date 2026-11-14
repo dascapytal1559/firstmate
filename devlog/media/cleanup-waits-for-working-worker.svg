@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="400" viewBox="0 0 960 400" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="400" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">Cleanup of a worker that is still working</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">What happens when cleanup runs after the merge while the worker is mid-step, before and after this change.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="98" font-weight="600">Before</text>
+    <rect x="24" y="108" width="280" height="90" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="40" y="132">The pull request merges, and the</text>
+    <text x="40" y="152">worker starts the step its</text>
+    <text x="40" y="172">instructions place after the merge</text>
+    <rect x="330" y="108" width="280" height="90" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="346" y="132">Cleanup checks only that the code</text>
+    <text x="346" y="152">landed, then stops every process</text>
+    <text x="346" y="172">in the worker's copy</text>
+    <rect x="636" y="108" width="300" height="90" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="652" y="132">The step is killed 51 seconds in,</text>
+    <text x="652" y="152">and the outcome reads "finished"</text>
+
+    <text x="24" y="238" font-weight="600">After</text>
+    <rect x="24" y="248" width="280" height="90" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="40" y="272">Cleanup first asks: is the worker's</text>
+    <text x="40" y="292">turn running, or one of its</text>
+    <text x="40" y="312">detached jobs?</text>
+    <rect x="330" y="248" width="280" height="90" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="346" y="272">If so it refuses at once with its own</text>
+    <text x="346" y="292">exit code and stops or removes</text>
+    <text x="346" y="312">nothing; it never waits inside cleanup</text>
+    <rect x="636" y="248" width="300" height="90" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="652" y="272">A later notification retries it, and it</text>
+    <text x="652" y="292">finishes once the worker has stopped;</text>
+    <text x="652" y="312">a worker that is gone is never blocked</text>
+  </g>
+
+  <g stroke="#57606a" stroke-width="2" fill="none">
+    <path d="M304 153 L326 153" marker-end="url(#a)"/>
+    <path d="M610 153 L632 153" marker-end="url(#a)"/>
+    <path d="M304 293 L326 293" marker-end="url(#a)"/>
+    <path d="M610 293 L632 293" marker-end="url(#a)"/>
+  </g>
+  <text x="24" y="366" font-size="12" fill="#57606a">A deliberate discard still stops the worker and its jobs at once. Source: bin/fm-teardown.sh, which every cleanup path runs.</text>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+</svg>

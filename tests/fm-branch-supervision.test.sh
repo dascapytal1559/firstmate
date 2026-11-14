@@ -65,6 +65,13 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"A worker whose pull request has landed is finished, not stuck"*"\`check: merge landed:\` wake names exactly that moment"*"\`bin/fm-teardown.sh <task>\` with no flags"*"never forced, worked around, or repaired by hand"*) ;;
     *) fail "branch prompt lost the landed-work cleanup rule" ;;
   esac
+  # 2026-11-14: a landed worker was cleaned up 51 seconds into a step its
+  # brief placed after the merge. Cleanup now defers for a working worker, and
+  # the prompt must keep that deferral from being reported as a refusal.
+  case "$out_a" in
+    *"Any cleanup that exits 5 found the worker still working, which is a wait and not a refusal"*"let a later wake retry it"*"\`bin/fm-control.sh <task> interrupt\` first, and never force cleanup."*) ;;
+    *) fail "branch prompt lost the still-working cleanup deferral rule" ;;
+  esac
   case "$out_a" in
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;
@@ -123,7 +130,7 @@ test_branch_prompt_routes_completed_scouts_through_guarded_cleanup() {
   # The emitted system prompt is the contract, not the generator's source or
   # proof that a model will obey it. No live agent or endpoint is involved.
   case "$prompt" in
-    *"For a completed scout, follow the scout-completion and captain-hold-lifecycle policies included below in both postures."*"After their completion gate passes, keep the report."*"A T3 scout is then kept for the captain as scout-completion says: run \`bin/fm-t3-review.sh retain\` and leave it under way, and clean it up only when \`retain\` exits 4 or a \`check: t3-review <task>\` wake says he closed its thread."*"Otherwise, and for that later cleanup, claim the task's lease and run \`bin/fm-teardown.sh <task>\` with no flags."*"Report the findings and cleanup result in that event's outcome; a refusal is reported with its exact reason and never forced, worked around, or repaired by hand."*) ;;
+    *"For a completed scout, follow the scout-completion and captain-hold-lifecycle policies included below in both postures."*"After their completion gate passes, retain the report, claim the task's lease, and run \`bin/fm-teardown.sh <task>\` with no flags."*"Report the findings and cleanup result in that event's outcome; a refusal is reported with its exact reason and never forced, worked around, or repaired by hand."*) ;;
     *) fail "branch prompt omits the completed-scout cleanup sequence or refusal reporting" ;;
   esac
   assert_contains "$prompt" \

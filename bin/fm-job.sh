@@ -7,6 +7,7 @@
 #   fm-job.sh start <task-id> [--timeout <secs>] [--cwd <dir>] -- <command> [args...]
 #   fm-job.sh status <task-id> [<job>]
 #   fm-job.sh stop <task-id> <job>
+#   fm-job.sh follow <task-id> <job> [--from-end]
 #   fm-job.sh deliver
 #   fm-job.sh live
 #   fm-job.sh reap <task-id>
@@ -20,8 +21,8 @@
 #          own session: restarting the app that hosts the worker (T3 Code
 #          stops every process it started) or closing the worker's pane does
 #          not stop it. The job is stopped after --timeout seconds (default
-#          FM_JOB_TIMEOUT, 7200). Prints the job number and log path, then the
-#          worker declares a paused wait naming the job and ends its turn.
+#          FM_JOB_TIMEOUT, 7200). Prints the job number and log path; the
+#          worker then runs `follow` in the foreground.
 #          The timeout timer checks every FM_JOB_TIMER_POLL seconds (default
 #          5) that its runner still exists and exits when it does not.
 # status   Print one line per job of <task-id> (or just <job>): its number,
@@ -30,6 +31,17 @@
 # stop     Stop a running job: TERM to its process group, then KILL after
 #          FM_JOB_KILL_GRACE seconds (default 10). Its outcome reads stopped,
 #          and its result is still delivered.
+# follow   Print job <n>'s log from its start, then each new line (checked
+#          every FM_JOB_FOLLOW_POLL seconds, default 1) until the job ends;
+#          then print its outcome, exit code, run time, and log path, mark its
+#          result delivered, and exit with the job's exit code (1 when it has
+#          none). It only reads: killing it leaves the job running, and it can
+#          be started again on the same job at any time, including after the
+#          job ended (it prints the whole log and the result at once). A job
+#          whose follower was cut keeps its result for `deliver`. A re-attach
+#          passes --from-end, which starts at the log's last FM_JOB_TAIL_LINES
+#          lines (default 20) instead of its start, so following the same job
+#          again does not repeat the output already shown.
 # deliver  Firstmate's watcher runs this on every cycle while any job record
 #          exists. Each ended job whose result has not been delivered is sent
 #          to its task with bin/fm-send.sh (a durable steering-inbox record
@@ -39,15 +51,20 @@
 #          an outcome (the machine restarted, or it was killed) is recorded as
 #          lost and delivered the same way, after stopping any command it left
 #          running, so the lost result never leaves a second copy running. A
-#          failed send is retried on the next cycle. Silent; exits 0 unless the
-#          state directory is unusable.
+#          result is sent only once its job has been ended for
+#          FM_JOB_DELIVER_GRACE seconds (default 5, a few follow polls), so a
+#          follower watching the job marks it delivered first and the worker is
+#          not also sent a result it already saw. A failed send is retried on
+#          the next cycle. Silent; exits 0 unless the state directory is
+#          unusable.
 # live     Print "<task-id><TAB><runner-pid>" for every job still running whose
 #          runner is the process that recorded itself (pid plus start
 #          identity). bin/fm-fleet-idle.sh reads it to leave a running job out
-#          of its "is this worker mid-turn" verdict.
-# reap     Teardown's step: stop every running job of <task-id>, then remove
-#          its job records. Exits 1, keeping the records, when a job's process
-#          group survives KILL.
+#          of its "is this worker mid-turn" verdict, and bin/fm-teardown.sh to
+#          defer a plain cleanup while a job of the task runs.
+# reap     Teardown's step (bin/fm-teardown.sh owns when it runs): stop every
+#          running job of <task-id>, then remove its job records. Exits 1,
+#          keeping the records, when a job's process group survives KILL.
 #
 # Records live in this home's state/<task-id>.jobs/<n>/: `record` holds
 # key=value lines read last-value-wins (task, job, command, cwd, log,
@@ -82,6 +99,8 @@ JOB_TIMEOUT=${FM_JOB_TIMEOUT:-7200}
 KILL_GRACE=${FM_JOB_KILL_GRACE:-10}
 TIMER_POLL=${FM_JOB_TIMER_POLL:-5}
 TAIL_LINES=${FM_JOB_TAIL_LINES:-20}
+FOLLOW_POLL=${FM_JOB_FOLLOW_POLL:-1}
+DELIVER_GRACE=${FM_JOB_DELIVER_GRACE:-5}
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -346,6 +365,45 @@ cmd_stop() {
   status_line "$dir"
 }
 
+cmd_follow() {
+  local id=${1-} dir rec log off=0 size code outcome started finished secs
+  valid_task "$id"
+  dir=$(job_dir "$id" "${2-}")
+  case "$#:${3-}" in 2:|3:--from-end) ;; *) usage >&2; exit 2 ;; esac
+  rec="$dir/record"
+  log=$(job_get "$rec" log)
+  if [ "$#" = 3 ]; then
+    size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
+    off=$(( ${size:-0} - $(head -c "${size:-0}" "$log" 2>/dev/null | tail -n "$TAIL_LINES" | wc -c) ))
+    [ "$off" -eq 0 ] || printf 'fm-job: from the last %s lines of the log; earlier output is in %s\n' "$TAIL_LINES" "$log"
+  fi
+  while :; do
+    # Read the outcome before the log, so the last pass prints every line the
+    # command wrote before it ended.
+    outcome=$(job_get "$rec" outcome)
+    size=$(wc -c < "$log" 2>/dev/null | tr -d ' ')
+    if [ "${size:-0}" -gt "$off" ]; then
+      tail -c "+$((off + 1))" "$log" 2>/dev/null | head -c "$((size - off))"
+      off=$size
+    fi
+    [ -z "$outcome" ] || break
+    sleep "$FOLLOW_POLL"
+  done
+  code=$(job_get "$rec" exit)
+  started=$(job_get "$rec" started)
+  finished=$(job_get "$rec" finished)
+  secs=''
+  case "$started$finished" in ''|*[!0-9]*) ;; *) secs=$((finished - started)) ;; esac
+  printf '\nfm-job: job %s ended: %s' "$(job_get "$rec" job)" "$outcome"
+  [ -z "$code" ] || printf ' (exit %s)' "$code"
+  [ -z "$secs" ] || printf ' after %sm%02ds' "$((secs / 60))" "$((secs % 60))"
+  printf '\nlog: %s\n' "$log"
+  # The follower has shown the result, so an inbox message would only repeat it.
+  [ -n "$(job_get "$rec" notified)" ] || job_put "$rec" notified "$(now)"
+  case "$code" in ''|*[!0-9]*) return 1 ;; esac
+  return "$code"
+}
+
 cmd_live() {
   local rec id
   for rec in "$STATE"/*.jobs/*/record; do
@@ -374,11 +432,11 @@ result_message() {  # <record>
   [ "$outcome" != lost ] || printf 'Its runner is gone without recording a result (the machine restarted or it was killed); rerun it if you still need it.\n'
   tail_text=$(tail -n "$TAIL_LINES" "$log" 2>/dev/null | sed $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' | LC_ALL=C tr -d '\000-\010\013-\037\177' | cut -c1-300)
   [ -z "$tail_text" ] || printf 'Last lines of the log:\n%s\n' "$tail_text"
-  printf 'The paused wait you declared for this job has cleared: resolve it and carry on with your task.'
+  printf 'No follow of this job saw it end, so this is its result: carry on with your task (resolve any paused wait you declared for it).'
 }
 
 cmd_deliver() {
-  local rec dir id started rl
+  local rec dir id started rl finished
   [ -d "$STATE" ] || return 2
   for rec in "$STATE"/*.jobs/*/record; do
     [ -f "$rec" ] || continue
@@ -407,6 +465,11 @@ cmd_deliver() {
         job_put "$rec" outcome lost
       fi
     fi
+    finished=$(job_get "$rec" finished)
+    case "$finished" in
+      ''|*[!0-9]*) ;;
+      *) [ "$(($(now) - finished))" -ge "$DELIVER_GRACE" ] || continue ;;
+    esac
     if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-send.sh" "$id" "$(result_message "$rec")" >/dev/null 2>&1; then
       job_put "$rec" notified "$(now)"
     fi
@@ -434,6 +497,7 @@ case "${1-}" in
   start) shift; cmd_start "$@" ;;
   status) shift; cmd_status "$@" ;;
   stop) shift; cmd_stop "$@" ;;
+  follow) shift; cmd_follow "$@" ;;
   deliver) shift; cmd_deliver ;;
   live) shift; cmd_live ;;
   reap) shift; cmd_reap "$@" ;;

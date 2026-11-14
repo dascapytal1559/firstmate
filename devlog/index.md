@@ -1362,4 +1362,90 @@ This is FirstMate's half; the sidebar's labels, Snooze button, and Archive are t
 - **No more "Waiting for captain".**
   The card's Needs you or To read comes from the list, so FirstMate's own label for it is gone.
 
-The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a thread's archive or restore changes nothing) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.
+The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a lost archive caught by the check) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.
+
+## 53. Back to one thread (14 November 2026)
+
+![Before, decisions and reports sat on cards under FirstMate with ages, Replied, and a Snoozed row; after, a worker's card says only Waiting for captain or Testing, and the decision is a line in FirstMate's chat](media/single-thread-again.svg)
+
+Why:
+
+> In the normal first mate experience you never have to click into the workers, and we over the past few days have made a deviation from that where we do click into the workers.
+>
+> I'm pretty sure at this point that I just want to go back to the first mate single thread experience.
+>
+> I want fable to take an overhaul kind of approach to this and tidy things up as it goes. So it's not just like merely subtracting, it's refactoring into what it was before such that it's clean, it's minimum deviating.
+>
+> — 14 November 2026
+
+What entries 23 to 25, 28, 34, 43, 51, and 52 built, and the Rules list of entry 39, came off the main branch.
+This is FirstMate's half; the T3 fork's sidebar and thread tools follow.
+
+- **A finished scout is cleaned up again.**
+  Keeping its thread until he archived it is gone, with the handoff record, the tag, and the fence.
+  One thing stays, as a rule and not as code: a scout whose report raised a question for him is left alone until he answers.
+  "We don't clean it up until we've sort of made a decision. Then that's kind of all the functionality we need."
+- **Decisions live in chat.**
+  The list pushed to T3, its listener, and his Snooze, Bring back, and Archive taps are gone.
+  Putting something off is upstream's again: a date, or the item ages out of the live list on its own.
+  There are no To read items.
+- **The backlog scripts are upstream's.**
+  The hold script's difference from upstream went from about 550 lines to 40: an idea is refused, completion names unread board feedback, and a worker's card follows the hold.
+- **The card says Waiting for captain again.**
+  The list had taken that word over; without the list, FirstMate's own label is back.
+- **A reply box may still forward to FirstMate.**
+  "I don't mind a message box that just like forwards to first mate ... if I'm ever like reviewing a workers probe I could just reply right there."
+  FirstMate's side is one small reader that names the worker's task from the forwarded message.
+- **The Bridge keeps two feeds.**
+  Objectives and model routing are pushed by a short script of their own; Rules left, its review being finished.
+- **The removal is two commits of its own**, so the experiment can be brought back by reverting them.
+
+The fork's difference from upstream fell from 20,391 added lines to about 15,100, and in `bin/` from 8,050 to about 5,200.
+The evidence is the suites for every script the change touches: the hold, snapshot, Bearings, card, helper, cleanup, session-start, watcher, brief, and supervision suites, and the two new ones for the Bridge script and the reply reader.
+
+## 54. Cleanup leaves a working worker alone (14 November 2026)
+
+![Before, cleanup checked only that the code landed and killed the worker's step 51 seconds in; after, it asks whether the worker's turn or a detached job is running, refuses at once with nothing stopped, and is retried once the worker has stopped](media/cleanup-waits-for-working-worker.svg)
+
+What happened: a worker's pull request had merged, and it was 51 seconds into the production step its instructions place after the merge.
+The background supervision session saw a finished delivery, ran cleanup, and cleanup stopped the worker and reported the work as finished.
+Nothing on that path asked whether the worker was still running.
+
+He had the proposed fix checked before it was built:
+
+> Um send a fable agent to check upstream intention and double check this approach. Pretty much get fable to certified this fix.
+>
+> — 14 November 2026
+
+The check found the same bug open upstream, confirmed by its maintainer and scoped the same way: refuse while the worker is provably still working, using the busy signal the fleet already has.
+It certified the fix with changes, and two of them were his to decide:
+
+> Okay, I'm cleared. Yes, on decision one and two.
+
+What was built:
+
+- **Cleanup refuses while the worker's turn is running.**
+  The check is in the one cleanup script, so it covers every way cleanup starts: the main session, the background session, and automatic cleanup on merge.
+  It reads the same busy signal everything else does and judges nothing about whether the step matters.
+- **It refuses at once and never waits.**
+  The first proposal said "wait until it stops"; the turn in this incident ran 68 minutes, and cleanup holds locks.
+  So it changes nothing, exits with a code of its own, and a later notification retries it.
+- **A worker's own detached job holds cleanup too.**
+  This reverses the rule from entry 44, that cleanup stops a task's jobs.
+  A worker may end its turn to wait on a long job, and that job was the same failure by a second door.
+- **A deliberate kill is unchanged.**
+  "if I do want to kill a worker, intentionally ... you wouldn't have to wait for it to finish ... that's kind of the intention with that rule"
+  The explicit discard still stops the worker and its jobs immediately.
+- **A worker that is gone is never blocked.**
+  Whether the agent is still there is read first, so a "busy" record a crashed worker left behind does not hold cleanup.
+  A worker that is alive but wedged is interrupted first, never discarded.
+- **The background session reports the refusal as a wait.**
+  Its instructions and the two playbooks say so, in one line each, and automatic cleanup on merge keeps its request and retries without reporting a failure.
+
+What this does not cover: a worker that is idle but still owes a step after the merge, such as one waiting to be told the merge happened.
+That needs a durable record of work owed after a merge and is separate work.
+
+The evidence is the suites for every script the change touches.
+The cleanup cases cover a running turn, a turn that already failed, a turn state that cannot be read, a detached job, the explicit discard, and a runtime with no liveness check.
+The tmux case cannot run on this Mac, so it was run in a Linux container, where the whole file passed with nothing skipped.
+

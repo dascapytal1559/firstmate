@@ -85,51 +85,8 @@
 //   - a T3 with the Bridge's model routing table (world routingTool, the T3
 //     Code fork) offers t3_routing_set, which does the same with world
 //     modelRouting and answers {modelRouting} (world routingAnswer instead).
-//   - a T3 with the Bridge's rules section (world rulesTool, the T3 Code
-//     fork) offers t3_rules_set {rules}, which replaces world rules with the
-//     list within the contract's bounds (at most 400 rules with distinct ids,
-//     each exactly the contract's fields) and answers with counts {rules,
-//     pending, sent} like the fork (world rulesAnswer answers another value
-//     instead).
-//   - a T3 with the Bridge decision list (world decisionsTool, the T3 Code
-//     fork) offers t3_decisions_set {replyTo, decisions}, which replaces world
-//     decisionList {replyTo, decisions} within the fork's bounds: replyTo an
-//     existing thread, at most 200 decisions with distinct ids, and each
-//     decision exactly the fork's fields (no others) within their bounds. A
-//     decision equal to the stored one keeps its `answered` mark (world tests
-//     set it to stand for the captain's reply), a changed one loses it, and an
-//     identical list writes nothing. It answers {replyTo, decisions [{id,
-//     revision, answered}]} (world decisionsAnswer answers another value).
-//     An item may carry the fork's kind, thread {id, finished}, and snoozed
-//     {at, until|null}.
-//   - a T3 with the captain's action log (world actionsTool) offers
-//     t3_decisions_actions {after?, waitMs?, ack?}: an ack lands at once,
-//     appended to world acks (each with `list`, the decisions as they stood
-//     then) and dropping those seqs from world actions,
-//     then it answers {actions (those after `after`), lastSeq}, waiting up
-//     to waitMs for one while re-reading the world, so a test can append to
-//     world actions meanwhile.
-//   - a T3 with pinned reports (world reportsTool) offers t3_reports_unpin
-//     {id}, which drops that id from world pinnedReports [{id, title,
-//     pinnedAt}] and answers {reports} as left.
-//   - t3_thread_organize serves archive, and refuses any other action unless
-//     the T3 keeps threads for their reader (world reviews, the T3 Code
-//     fork). Such a T3 offers t3_thread_note, enumerates organize's actions
-//     in its schema, and serves tag and untag (exact-case, trimmed, allowed
-//     on archived threads), disable_auto_settle and enable_auto_settle
-//     (refused on an archived thread), and fence and unfence (fence refuses a
-//     worktree other than the thread's own, and a thread with an active run
-//     or a pending request; the same label and path keep fencedAt). Its
-//     t3_thread_read and t3_thread_list return tags and autoSettleDisabled,
-//     and the read returns executionFence while one is set. A note
-//     {threadId, text, clientRequestId} adds one run-less user_message item
-//     with note:true and answers {threadId, messageId, sequence, created}; the
-//     same id answers created:false with no new item, the same id with other
-//     text and a new id on an archived thread are refused as invalid_request.
-//     A fenced thread refuses t3_thread_send. World reviewsUnread reads the
-//     review fields back as an older T3 would, absent; archiveOnTag archives
-//     the thread right after a tag lands, as a captain's close racing
-//     publication; reviewActions replaces the review actions organize lists.
+//   - t3_thread_organize serves archive alone, the one action the helper
+//     sends, and refuses any other.
 //   - every prompt a launch or send makes is a user_message item carrying
 //     its messageId and runId, and t3_thread_read view "messages" keeps only
 //     message items at their timeline positions, as T3 does.
@@ -193,12 +150,8 @@ const ALL_TOOLS = [
   "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.rulesTool ? ["t3_rules_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
-  w.actionsTool ? ["t3_decisions_actions"] : [], w.reportsTool ? ["t3_reports_unpin"] : [],
-  w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : [],
-  w.reviews ? ["t3_thread_note"] : []);
-const ORGANIZE_ACTIONS = ["archive", "unarchive", "settle", "unsettle", "snooze", "unsnooze", "pin", "unpin", "mark_read", "mark_unread"];
-const REVIEW_ACTIONS = ["tag", "untag", "disable_auto_settle", "enable_auto_settle", "fence", "unfence"];
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [],
+  w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : []);
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -233,14 +186,6 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []),
       "clientRequestId"].map((k) => [k, {}])),
-  }),
-  t3_thread_organize: (w) => ({
-    type: "object",
-    properties: {
-      environmentId: {}, threadId: {},
-      action: { type: "string", enum: [...ORGANIZE_ACTIONS, ...(w.reviews ? (w.reviewActions ?? REVIEW_ACTIONS) : [])] },
-      ...(w.reviews ? { tag: {}, fenceLabel: {}, expectedWorktreePath: {} } : {}),
-    },
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -334,15 +279,10 @@ const pendingList = (w, t) => {
 };
 
 function detail(t) {
-  const { items, runs, runtimeRequests, modelSelection, environment, instructions, notes, tags, autoSettleDisabled, executionFence, ...rest } = t;
+  const { items, runs, runtimeRequests, modelSelection, environment, instructions, ...rest } = t;
   if (runtimeRequests) rest.pendingRequestCount = pendingRequests(t).length;
   return rest;
 }
-
-// The review fields a T3 that keeps threads for their reader returns.
-const reviewFields = (w, t, withFence) => (w.reviews && !w.reviewsUnread
-  ? { tags: t.tags ?? [], autoSettleDisabled: t.autoSettleDisabled === true, ...(withFence && t.executionFence ? { executionFence: t.executionFence } : {}) }
-  : {});
 
 // Runs newest first; a run without an ordinal ranks by its array position.
 const byOrdinal = (t) => (t.runs ?? []).map((r, i, all) => ({ r, o: r.ordinal ?? all.length - i })).sort((a, b) => b.o - a.o).map((x) => x.r);
@@ -409,36 +349,6 @@ function settle(w) {
 
 const notFound = (id) => err("thread_not_found", `Thread ${id} is no longer available.`);
 
-// The fork's Decision (packages/contracts/src/decisions.ts): exactly these
-// fields, trimmed text within its bounds, and a positive revision. Returns
-// the first problem, or null.
-const LIST_DECISION_FIELDS = new Set(["id", "title", "projectName", "since", "question", "options", "entries", "revision", "wakeAt", "kind", "thread", "snoozed"]);
-function listDecisionProblem(d) {
-  const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
-  const optionalText = (v, max) => v === undefined || text(v, max);
-  const time = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
-  if (!d || typeof d !== "object") return "decision must be an object";
-  const extra = Object.keys(d).find((k) => !LIST_DECISION_FIELDS.has(k));
-  if (extra) return `unknown field ${extra}`;
-  if (!text(d.id, 200) || !text(d.title, 200) || !text(d.question, 4000)) return "id, title and question must be bounded non-empty text";
-  if (d.projectName !== undefined && !text(d.projectName, 200)) return "projectName must be bounded non-empty text";
-  if ((d.since !== undefined && !time(d.since)) || (d.wakeAt !== undefined && !time(d.wakeAt))) return "since and wakeAt must be dates";
-  if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
-  if (d.kind !== undefined && !["decision", "read"].includes(d.kind)) return "kind must be decision or read";
-  if (d.thread !== undefined && !(typeof d.thread?.id === "string" && typeof d.thread.finished === "boolean" && Object.keys(d.thread).length === 2)) return "thread must be {id, finished}";
-  if (d.snoozed !== undefined && !(time(d.snoozed?.at) && (d.snoozed.until === null || time(d.snoozed.until)) && Object.keys(d.snoozed).length === 2)) return "snoozed must be {at, until}";
-  if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
-  for (const o of d.options) if (!text(o.label, 200)) return "an option needs a bounded label";
-  if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
-  for (const e of d.entries) {
-    if (!time(e.at)) return `entry time ${e.at} is not a date`;
-    if (!["raised", "update"].includes(e.kind) || !text(e.text, 8192) || !optionalText(e.changed, 500)) return "an entry needs a kind and bounded text";
-    if (e.attachments !== undefined && (!Array.isArray(e.attachments) || e.attachments.length > 12)) return "at most 12 attachments per entry";
-    for (const x of e.attachments ?? []) if (!text(x.kind, 32) || !text(x.path, 2048) || !optionalText(x.label, 200)) return "an attachment needs a bounded kind and path";
-  }
-  return null;
-}
-
 function listItem(x) {
   return {
     threadId: x.threadId, title: x.title, status: x.status, latestRunId: x.latestRunId ?? null,
@@ -492,76 +402,6 @@ async function callTool(w, name, a) {
       const [field, answer] = name === "t3_routing_set" ? ["modelRouting", "routingAnswer"] : ["objectives", "objectivesAnswer"];
       w[field] = md === null ? null : { markdown: md };
       return [ok({ [field]: w[answer] ?? w[field] }), true];
-    }
-    case "t3_rules_set": {
-      if (Object.keys(a).some((k) => k !== "rules")) return [err("invalid_params", "unknown argument"), false];
-      if (!Array.isArray(a.rules) || a.rules.length > 400) return [err("invalid_params", "at most 400 rules"), false];
-      if (new Set(a.rules.map((r) => r?.id)).size !== a.rules.length) return [err("invalid_params", "Each rule needs its own id."), false];
-      const allowed = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
-      for (const r of a.rules) {
-        if (Object.keys(r ?? {}).some((k) => !allowed.has(k))) return [err("invalid_params", "unknown rule field"), false];
-        if (r.status !== "approved" && r.status !== "pending") return [err("invalid_params", "status out of bounds"), false];
-        if ((r.status === "pending") !== (r.recommendation !== undefined)) return [err("invalid_params", "a pending rule needs a recommendation"), false];
-        if ([r.text, r.recommendation?.note, r.recommendation?.proposedText].some((s) => typeof s === "string" && s.length > 2000)) {
-          return [err("invalid_params", "text out of bounds"), false];
-        }
-      }
-      w.rules = a.rules;
-      const counts = { rules: w.rules.length, pending: w.rules.filter((r) => r.status === "pending").length, sent: [] };
-      return [ok(w.rulesAnswer ?? counts), true];
-    }
-    case "t3_decisions_set": {
-      if (Object.keys(a).some((k) => k !== "replyTo" && k !== "decisions")) return [err("invalid_params", "unknown argument"), false];
-      if (typeof a.replyTo !== "string" || !threads[a.replyTo]) return [err("invalid_request", `replyTo thread ${a.replyTo} was not found.`), false];
-      if (!Array.isArray(a.decisions) || a.decisions.length > 200) return [err("invalid_params", "at most 200 decisions"), false];
-      if (new Set(a.decisions.map((d) => d?.id)).size !== a.decisions.length) return [err("invalid_params", "Each decision needs its own id."), false];
-      for (const d of a.decisions) {
-        const problem = listDecisionProblem(d);
-        if (problem) return [err("invalid_params", problem), false];
-      }
-      const before = w.decisionList ?? { replyTo: null, decisions: [] };
-      const kept = new Map(before.decisions.map((d) => [d.id, d]));
-      const decisions = a.decisions.map((d) => {
-        const old = kept.get(d.id);
-        const { answered, ...was } = old ?? {};
-        return old && answered && JSON.stringify(was) === JSON.stringify(d) ? { ...d, answered } : d;
-      });
-      const next = { replyTo: a.replyTo, decisions };
-      const changed = JSON.stringify(next) !== JSON.stringify(before);
-      if (changed) w.decisionList = next;
-      const answer = { replyTo: next.replyTo, decisions: decisions.map((d) => ({ id: d.id, revision: d.revision, answered: d.answered !== undefined })) };
-      return [ok(w.decisionsAnswer ?? answer), changed];
-    }
-    case "t3_decisions_actions": {
-      // The fork's action log: world actions [{seq, ...}], acknowledged ones
-      // leave it; with none after `after`, waits up to waitMs (polling the
-      // world, so a test can append one meanwhile).
-      // Acknowledgements land at once (world acks records them in order);
-      // the wait re-reads the world, so this call writes nothing itself.
-      if ((a.ack ?? []).length) {
-        const fresh = loadWorld();
-        // Each ack keeps the list as it stood when the ack landed.
-        fresh.acks = [...(fresh.acks ?? []), ...a.ack.map((k) => ({ ...k, list: fresh.decisionList?.decisions ?? [] }))];
-        fresh.actions = (fresh.actions ?? []).filter((x) => !a.ack.some((k) => k.seq === x.seq));
-        saveWorld(fresh);
-      }
-      const after = a.after ?? 0;
-      const deadline = Date.now() + (a.waitMs ?? 0);
-      for (;;) {
-        const cur = loadWorld();
-        const pending = (cur.actions ?? []).filter((x) => x.seq > after);
-        if (pending.length || Date.now() >= deadline) {
-          const lastSeq = Math.max(0, ...(cur.actions ?? []).map((x) => x.seq), cur.lastActionSeq ?? 0);
-          return [ok({ actions: pending, lastSeq }), false];
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    }
-    case "t3_reports_unpin": {
-      w.pinnedReports ??= [];
-      const changed = w.pinnedReports.some((r) => r.id === a.id);
-      w.pinnedReports = w.pinnedReports.filter((r) => r.id !== a.id);
-      return [ok({ reports: w.pinnedReports }), changed];
     }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
@@ -632,7 +472,6 @@ async function callTool(w, name, a) {
     case "t3_thread_send": {
       if (!t) return [notFound(a.threadId), false];
       if (t.archived) return [err("thread_not_sendable", `Thread ${a.threadId} is archived and cannot receive messages.`), false];
-      if (t.executionFence) return [err("orchestration_error", `Thread ${a.threadId} is retired from running: its workspace went back to its owner.`), false];
       w.requestIds = w.requestIds ?? {};
       const key = `${a.threadId}|${a.clientRequestId}`;
       if (a.clientRequestId && w.requestIds[key]) return [ok(w.requestIds[key]), false];
@@ -661,7 +500,6 @@ async function callTool(w, name, a) {
       const items = matching.slice(0, a.limit ?? 50);
       const thread = {
         ...detail(t), itemCount: (t.items ?? []).length, ...(w.coordinatorRestartNote ? { coordinator: t.coordinator === true } : {}),
-        ...reviewFields(w, t, true),
       };
       return [ok({ thread, recentRuns: byOrdinal(t).slice(0, a.runLimit ?? 5), items, nextPosition: items.at(-1)?.position ?? null, hasMore: matching.length > items.length }), false];
     }
@@ -674,7 +512,7 @@ async function callTool(w, name, a) {
       const cursor = a.cursor ?? 0;
       const page = list.slice(cursor, cursor + (a.limit ?? 50));
       const nextCursor = cursor + page.length < list.length ? cursor + page.length : null;
-      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}), ...reviewFields(w, x, false) })), nextCursor, total: list.length }), false];
+      return [ok({ projectId: a.projectId, currentThreadId: null, threads: page.map((x) => ({ ...listItem(x), ...(w.coordinatorRestartNote ? { coordinator: x.coordinator === true } : {}) })), nextCursor, total: list.length }), false];
     }
     case "t3_thread_configure": {
       if (w.coordinatorRestartNote && typeof a.coordinator === "boolean") {
@@ -724,62 +562,8 @@ async function callTool(w, name, a) {
       if (w.queueAfterInterrupt) run.queueAfterInterrupt = w.queueAfterInterrupt;
       return [ok({ threadId: t.threadId, runId: run.runId, status: "interrupt_requested" }), true];
     }
-    case "t3_thread_note": {
-      if (!t) return [notFound(a.threadId), false];
-      const text = typeof a.text === "string" ? a.text.trim() : "";
-      if (!text || text.length > 120000 || typeof a.clientRequestId !== "string" || !a.clientRequestId) return [err("invalid_params", "text and clientRequestId are required"), false];
-      t.notes = t.notes ?? {};
-      const known = t.notes[a.clientRequestId];
-      if (known) {
-        if (known.text !== text) return [err("invalid_request", `This request id already posted a different note to thread ${a.threadId}. Use a new id for new text.`), false];
-        return [ok({ threadId: t.threadId, messageId: known.messageId, sequence: known.sequence, created: false }), false];
-      }
-      if (t.archived) return [err("invalid_request", `Thread ${a.threadId} is archived and cannot receive messages.`), false];
-      w.sequence = (w.sequence ?? 100) + 1;
-      const messageId = `message:${randomUUID()}`;
-      t.notes[a.clientRequestId] = { text, messageId, sequence: w.sequence };
-      t.items = t.items ?? [];
-      t.items.push({ type: "user_message", status: "completed", text, note: true, runId: null, itemId: `turn-item:message:${messageId}` });
-      return [ok({ threadId: t.threadId, messageId, sequence: w.sequence, created: true }), true];
-    }
     case "t3_thread_organize": {
       if (!t) return [notFound(a.threadId), false];
-      if (w.reviews && REVIEW_ACTIONS.includes(a.action)) {
-        w.sequence = (w.sequence ?? 100) + 1;
-        const done = () => [ok({ sequence: w.sequence }), true];
-        switch (a.action) {
-          case "tag":
-          case "untag": {
-            const tag = typeof a.tag === "string" ? a.tag.trim() : "";
-            if (!tag) return [err("invalid_request", "This action needs `tag`."), false];
-            const tags = t.tags ?? [];
-            t.tags = a.action === "untag" ? tags.filter((x) => x !== tag) : tags.includes(tag) ? tags : [...tags, tag];
-            if (a.action === "tag" && w.archiveOnTag) t.archived = true;
-            return done();
-          }
-          case "disable_auto_settle":
-          case "enable_auto_settle":
-            if (t.archived) return [err("orchestration_error", `Thread ${a.threadId} is archived.`), false];
-            t.autoSettleDisabled = a.action === "disable_auto_settle";
-            return done();
-          case "fence": {
-            if (typeof a.fenceLabel !== "string" || !a.fenceLabel) return [err("invalid_request", "This action needs `fenceLabel`."), false];
-            if (a.expectedWorktreePath === undefined) return [err("invalid_request", "This action needs `expectedWorktreePath`."), false];
-            if ((a.expectedWorktreePath ?? null) !== (t.worktreePath ?? null)) {
-              return [err("orchestration_error", `Thread ${a.threadId} works in ${t.worktreePath ?? "its project folder"}, not ${a.expectedWorktreePath}.`), false];
-            }
-            if (t.activeRunId || latestActiveRun(t) || pendingRequests(t).length) {
-              return [err("orchestration_error", `Thread ${a.threadId} still has a run, queued message or open request. Stop it first.`), false];
-            }
-            const same = t.executionFence && t.executionFence.label === a.fenceLabel && t.executionFence.worktreePath === (t.worktreePath ?? null);
-            if (!same) t.executionFence = { label: a.fenceLabel, worktreePath: t.worktreePath ?? null, fencedAt: now() };
-            return done();
-          }
-          case "unfence":
-            delete t.executionFence;
-            return done();
-        }
-      }
       if (a.action !== "archive") return [err("invalid_action", `unknown action ${a.action}`), false];
       t.archived = true;
       const run = latestActiveRun(t);
