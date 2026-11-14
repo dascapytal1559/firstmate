@@ -230,16 +230,16 @@ Ships, and scouts on every other backend, keep the cleanup above.
 - **Replies.** What the captain types on a kept card goes to FirstMate's thread, not the worker's, as one user message: a first line `**Reply · <card title>**`, a second line `kept-thread: <the card's thread id>`, a blank line, then his words.
   `bin/fm-t3-needs-me.sh reply-task` reads the task behind that thread, and FirstMate treats his words as captain input on it; the card stays open until he archives it.
 - **To read.** `retain` also holds the scout's own task To read (`bin/fm-captain-hold.sh hold --read`), so the backlog, not this record, is what says the report waits to be read, and the card shows it from the [captain's list](#captains-list).
-- **Archive is not pursued.** Archiving or deleting the card is his "done, not pursuing this": every captain call still open that was held from the review (`hold --origin`) or inventoried by its completion gate is closed through `bin/fm-captain-hold.sh archive`, recorded as his decision "Archived in T3 on <date>: not pursued.", once, and the scout is marked read, so both leave his open items.
-  A card that carried no open call just closes, and nothing is deleted: the report, the handoff, and the task's data stay.
+- **Archive closes one item.** His Archive on the report's item marks it read and closes the review, so the scout's cleanup follows; his Archive on a decision raised from the review closes that decision alone. Neither touches the other items on the card, and closing the review, however it happens, closes no captain call.
+  Nothing is deleted: the report, the handoff, and the task's data stay.
 - **Old T3.** A T3 without these tools, or one whose reads lack `tags` or `autoSettleDisabled`, cannot keep threads; `retain` (or `publish`) then exits 4, dropping any handoff it had recorded, and the scout is cleaned up as usual. When the watcher's pass is the one to find this out, it drops the record and wakes firstmate with a `check: t3-review` cleanup notice.
   A missing read-back field always means "too old", never "not set".
 - **Card.** A published review's card reads To read, or Needs you while a call raised from it is open, from the captain's list; answering a call never closes the exploration.
 - **Watcher and recovery.** An idle kept review never enters the stale alarms or the inactive-outcome sweep, and the session-start digest names it as kept, so nothing relaunches or steers it.
-  T3 logs his archive and the list's listener applies it at once (`bin/fm-t3-review.sh closed`); the ten-minute check also reads each kept thread, so a lost record changes nothing.
-  Either way the review is recorded closed, its calls are closed, and Firstmate is woken once with a `check: t3-review <id>` notice naming them, even when the old endpoint is gone.
-  A thread he reopens is tagged and kept again on the next pass; Firstmate never unarchives, steers, or revives one.
-- **Cleanup.** Teardown refuses a kept review, `--force` included, until T3 reads its thread archived or deleted, and an unreadable T3 refuses too.
+  T3 logs his Archive of the report and the list's listener applies it at once (`bin/fm-t3-review.sh closed`); the ten-minute check also reads each kept thread, and one he archived or deleted closes the review too.
+  Either way the review is recorded closed and Firstmate is woken once with a `check: t3-review <id>` notice, even when the old endpoint is gone.
+  A thread he restores afterwards reopens nothing and holds nothing again; Firstmate never unarchives, steers, or revives one.
+- **Cleanup.** Teardown refuses a kept review, `--force` included, until the review is recorded closed or T3 reads its thread archived or deleted, and an unreadable T3 refuses too.
   A close racing publication wins.
   Once closed, the review passes every ordinary gate; after the stop-and-archive proof above, the thread must also read back fenced on its recorded worktree, so a reopened thread can never run in a slot another task takes, and only then is the copy returned.
   A deleted thread needs no fence; a fence T3 cannot prove keeps the lease and the records.
@@ -302,13 +302,15 @@ T3 keeps the items as one list that FirstMate replaces whole, and an identical l
 - a snoozed item is listed with `snoozed {at, until}`: until its return time (`--until` takes a date, which returns at its local midnight, or a time of day), or with no date until he brings it back; FirstMate's own updates never bring it back;
 - a blocked, answered, released, or closed item is left out.
 
-His actions reach the backlog at once: T3 logs Snooze, Bring back, Archive, and every archive or restore of a listed thread, and the listener applies each through `bin/fm-captain-hold.sh` (`snooze`, `unsnooze`, `archive`, or `bin/fm-t3-review.sh closed` for a kept review), pushes the list, and only then acknowledges it.
+His actions reach the backlog at once: T3 logs Snooze, Bring back, and Archive on an item, and the listener applies each through `bin/fm-captain-hold.sh` (`snooze`, `unsnooze`, `archive`), pushes the list, and only then acknowledges it.
+T3 also logs every archive or restore of a listed thread; those change nothing and are acknowledged as applied, since only his Archive on an item closes anything, never a thread's archived state.
 They apply in T3's order: an action that fails holds back every later action on the same item until it is applied or, on its third failure, refused, and the listener and the ten-minute check never apply actions at the same time.
-Archive closes a decision as "Archived in T3 on <date>: not pursued." and marks a To read item read; on a kept review's card it archives that card's thread too, since the card is then gone; on a decision on a worker still running it also wakes FirstMate with a `check: t3-captain <id>` notice to wind the worker down through its normal safe cleanup, and the thread itself stays.
-FirstMate's own archive of a thread (teardown, through `bin/backends/t3code.sh`) is never his: it closes nothing, and the items on that card move to threads of their own on the next pass.
+Archive acts on its own item alone: it closes a decision as "Archived in T3 on <date>: not pursued." and marks a To read item read, and nothing else on the card changes.
+On a kept review's own To read item it also closes the review (`bin/fm-t3-review.sh closed`), so the scout's cleanup follows; on a decision on the card of a worker that has not finished it also wakes FirstMate with a `check: t3-captain <id>` notice to wind the worker down through its normal safe cleanup, and the thread itself stays.
+FirstMate archiving a thread itself, at cleanup, closes nothing either; the items on that card move to threads of their own on the next pass.
 A reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and T3 shows the item as Replied until FirstMate closes or updates it.
 
-A ten-minute check (`bin/fm-t3-captain-sync.sh check`, from the watcher) is the safety net for crashes and restarts: it confirms the listener runs, sends the whole list, applies any action T3 still holds, and closes an item whose thread reads archived though T3's record of it was lost.
+A ten-minute check (`bin/fm-t3-captain-sync.sh check`, from the watcher) is the safety net for crashes and restarts: it confirms the listener runs, sends the whole list, and applies any action T3 still holds.
 A list T3 refuses is reported and sent again on the next pass.
 The third refusal in a row also wakes FirstMate with a `check: t3-decisions` wake carrying T3's exact error, once per run of failures; FirstMate reads the error, checks that T3 is running and current, and fixes the cause rather than waiting on it.
 A single item outside T3's bounds is left off the list and named in the pass's output, so it never holds back the rest.

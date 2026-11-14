@@ -32,8 +32,9 @@
 # Wanted state, per task: a live or aged hold is listed until it is answered
 # or closed, however long it waits; a dated or snoozed hold is listed with
 # snoozed {at, until}, until its return (hold_returns, else the local
-# midnight of its date, when the backlog lifts it) or, with no date, null; a blocked, answered, released, or closed call
-# is left out. The payload is the context record from this hold (same
+# midnight of its date, when the backlog lifts it) or, with no date, null;
+# every other date-only time it sends is that date's local midnight too; a
+# blocked, answered, released, or closed call is left out. The payload is the context record from this hold (same
 # hold-set stamp) or, without one, the hold reason as the question and the
 # only entry. Its revision is the record's plus one (1 with no record),
 # always positive as T3 requires, so every raise and update reaches T3 as a
@@ -230,8 +231,9 @@ plan() {
   slurp_threads > "$WORK/threads.json" || return 1
   jq -c 'select(type == "object")' "$THREADS" > "$WORK/own.json" 2>/dev/null || echo '{}' > "$WORK/own.json"
   [ -s "$WORK/own.json" ] || echo '{}' > "$WORK/own.json"
-  # Each hold date's local midnight, as a UTC instant.
-  jq -r '[.backlog.records[]? | .hold_until // empty | strings] | unique[]' "$WORK/snapshot.json" \
+  # Each date-only value's local midnight, as a UTC instant.
+  jq -r '[.backlog.records[]? | (.hold_until, .hold_set, .since) | strings
+    | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))] | unique[]' "$WORK/snapshot.json" \
     | perl -MTime::Local=timelocal -ne '
         chomp; /^(\d{4})-(\d\d)-(\d\d)$/ or next;
         my $t = eval { timelocal(0, 0, 0, $3, $2 - 1, $1) }; defined $t or next;
@@ -335,14 +337,9 @@ sync_decisions() {
 
   parent=''
   [ ! -f "$SYNCS/.parent" ] || parent=$(cat "$SYNCS/.parent")
-  # Each item thread's FirstMate archive mark, set before a retirement
-  # archives it, so that archive is never read as the captain's.
-  jq -r '.[]? | strings' "$WORK/own.json" | while IFS= read -r id; do
-    jq -n --arg t "$id" --arg m "$(fm_backend_t3code_archive_mark "$id")" '{($t): $m}'
-  done | jq -s 'add // {}' > "$WORK/marks.json" || { echo "t3-needs-me: the pass could not be staged"; return 1; }
   jq -n --slurpfile list "$WORK/list.json" --arg root "$(cd "$FM_HOME" && pwd -P)" --arg parent "$parent" \
-    --arg threads "$THREADS" --slurpfile marks "$WORK/marks.json" \
-    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0], threads: $threads, archiveMarks: $marks[0]}' > "$WORK/input.json" \
+    --arg threads "$THREADS" \
+    '{root: $root, parent: (if $parent == "" then null else $parent end), list: $list[0], threads: $threads}' > "$WORK/input.json" \
     || { echo "t3-needs-me: the pass could not be staged"; return 1; }
 
   # Nothing to show, nothing shown since the last accepted pass, and no item

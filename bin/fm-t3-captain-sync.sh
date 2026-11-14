@@ -6,7 +6,8 @@
 # bin/fm-t3-needs-me.sh sync pushes the whole list to T3 and is idempotent, so
 # a missed or doubled trigger never leaves anything stale. This script owns
 # what triggers it and how the captain's own actions in T3 (Snooze, Bring
-# back, Archive, and archiving or restoring a thread) reach the backlog.
+# back, and Archive) reach the backlog. Only the captain's Archive on an item,
+# as T3 logs it, closes anything; a thread's archived state never does.
 #
 # Usage:
 #   fm-t3-captain-sync.sh listen
@@ -40,35 +41,25 @@
 #     Apply one action from T3's log to the backlog, idempotently, so a
 #     replay changes nothing: snooze and unsnooze through
 #     bin/fm-captain-hold.sh snooze --at (with --until) and unsnooze; archive
-#     and thread-archived through bin/fm-t3-review.sh closed --at for a kept
-#     review's thread, else bin/fm-captain-hold.sh archive --at. Archive on an
-#     item of a kept review's card archives that card's thread in T3 first,
-#     since the card is then gone, so the record and the thread agree.
-#     Archive on a decision on a worker still running (its card not
-#     finished) also leaves one wake, state/t3-captain-sync/<worker>.wake,
-#     asking firstmate to wind the worker down through its normal safe
-#     cleanup; the thread itself stays. thread-archived acts only while the
-#     item's current thread reads archived or gone, since T3's action names
-#     no thread and the item may have moved since. A thread FirstMate archived itself
-#     (fm_backend_t3code_kill in bin/backends/t3code.sh, or the retirement
-#     of an item's own thread in bin/fm-t3-mcp.mjs decisions, marks it
-#     first) is never the captain's: its
-#     thread-archived changes nothing, so its items stay open and move to
-#     their own threads on the next pass. thread-unarchived changes nothing
-#     (a kept review reopened is the next check's). The item's thread is the
-#     one the last accepted pass sent (state/t3-needs-me/list.json). Exit 0
-#     applied; 3 refused, with the reason on stdout for T3 to show; 1
-#     failed, to retry.
+#     through bin/fm-captain-hold.sh archive --at, on that item alone: a
+#     decision is closed as not pursued and a To read item is marked read,
+#     and nothing else on its card changes. Archive on a kept review's own To
+#     read item also records the review closed (bin/fm-t3-review.sh closed),
+#     so the scout's normal cleanup follows. Archive on a decision on
+#     the card of a worker that has not finished also leaves one wake,
+#     state/t3-captain-sync/<worker>.wake, asking firstmate to wind the
+#     worker down through its normal safe cleanup; the thread itself stays.
+#     thread-archived and thread-unarchived change nothing and are
+#     acknowledged as applied. The item's thread is the one the last accepted
+#     pass sent (state/t3-needs-me/list.json). Exit 0 applied; 3 refused,
+#     with the reason on stdout for T3 to show; 1 failed, to retry.
 #   fm-t3-captain-sync.sh check
 #     The ten-minute safety net: the watcher runs it whenever
 #     state/.t3-captain-check is ten minutes old (bin/fm-watch.sh). It
 #     arms the listener if it is not registered and confirms it listens;
 #     publishes or closes kept reviews (bin/fm-t3-review.sh reconcile); one
-#     full push; apply-pending; and every thread the list names
-#     that now reads archived or gone, applied as thread-archived, in case
-#     T3's record of it was lost; then drops every FirstMate archive mark
-#     whose thread no task record, list item, or item thread names any more. FM_T3_CAPTAIN_SYNC_ARM=0 skips the arming,
-#     for tests.
+#     full push; and apply-pending. FM_T3_CAPTAIN_SYNC_ARM=0 skips the
+#     arming, for tests.
 #   fm-t3-captain-sync.sh migrate [--t3-settings <settings.json>]
 #     One-time move to the sidebar list: every kept review
 #     (t3_review pending or waiting) is held To read (a decision already open
@@ -143,12 +134,6 @@ mcp() {
   fm_backend_t3code_mcp "$@" </dev/null
 }
 
-# True when FirstMate archived <thread> itself (bin/backends/t3code.sh).
-archived_by_firstmate() {  # <thread>
-  fm_backend_source t3code >/dev/null 2>&1 || return 1
-  [ -e "$(fm_backend_t3code_archive_mark "$1")" ]
-}
-
 # The task whose record names <thread>, if exactly one does.
 thread_task() {
   local meta id found=''
@@ -165,7 +150,7 @@ thread_task() {
 }
 
 leave_wind_down_wake() {  # <worker> <item>
-  local reason="check: t3-captain $1: the captain archived decision $2 on $1's card while $1 was still working, so $2 was closed as not pursued; wind $1 down through its normal safe cleanup, never discarding unlanded work without asking"
+  local reason="check: t3-captain $1: the captain archived decision $2 on $1's card before $1 had finished, so $2 was closed as not pursued; wind $1 down through its normal safe cleanup, never discarding unlanded work without asking"
   { printf '%s\n' "$reason" > "$OWN/$1.wake.tmp" && mv -f "$OWN/$1.wake.tmp" "$OWN/$1.wake"; } \
     || echo "t3-captain-sync: could not leave the wind-down notice for $1" >&2
 }
@@ -196,31 +181,13 @@ cmd_apply() {
       fi
       ;;
     unsnooze) out=$(hold unsnooze "$id" 2>&1) || rc=$? ;;
-    archive|thread-archived)
-      if [ "$type" = thread-archived ]; then
-        if [ -n "$thread" ]; then
-          out=$(mcp state --thread "$thread" 2>"$WORK/state.err") \
-            || { echo "$id's thread could not be read: $(head -n 1 "$WORK/state.err")" >&2; return 1; }
-        fi
-        if [ -z "$thread" ] || { [ "$(printf '%s' "$out" | jq -r '.exists')" != false ] \
-          && [ "$(printf '%s' "$out" | jq -r '.archived')" != true ]; }; then
-          echo "$id no longer rides an archived thread, so it stays as it is"
-          return 0
-        fi
-        if archived_by_firstmate "$thread"; then
-          echo "FirstMate archived $id's thread itself, so $id stays open"
-          return 0
-        fi
-      fi
+    archive)
       worker=''
       [ -z "$thread" ] || worker=$(thread_task "$thread") || worker=''
       review=''
       [ -z "$worker" ] || review=$(fm_t3_review_state "$STATE/$worker.meta")
-      if [ -n "$review" ] && [ "$type" = archive ]; then
-        out=$(mcp archive --thread "$thread" 2>&1) || rc=$?
-      fi
-      if [ "$rc" = 0 ] && [ -n "$review" ]; then
-        out=$("$SCRIPT_DIR/fm-t3-review.sh" closed "$worker" --at "$at" </dev/null 2>&1) || rc=$?
+      if [ -n "$review" ] && [ "$id" = "$worker" ] && [ "$kind" = read ]; then
+        out=$("$SCRIPT_DIR/fm-t3-review.sh" closed "$worker" </dev/null 2>&1) || rc=$?
       fi
       if [ "$rc" = 0 ]; then
         out=$(hold archive "$id" --at "$at" 2>&1) || rc=$?
@@ -229,7 +196,7 @@ cmd_apply() {
         leave_wind_down_wake "$worker" "$id"
       fi
       ;;
-    thread-unarchived) out="nothing to do for a restored thread" ;;
+    thread-archived|thread-unarchived) out="a thread's own archive or restore changes nothing" ;;
     *) echo "FirstMate does not know the action $type"; return 3 ;;
   esac
   if [ "$rc" = 0 ]; then
@@ -311,45 +278,6 @@ apply_pending() {
   [ "$waiting" = 0 ] || return 75
 }
 
-# Every listed thread that now reads archived or gone, applied as T3 would
-# have logged it.
-lost_archives() {
-  local id thread out rc=0 now
-  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  [ -f "$SENT" ] || return 0
-  while IFS=$'\t' read -r id thread; do
-    [ -n "$id" ] && [ -n "$thread" ] || continue
-    out=$(mcp state --thread "$thread" 2>/dev/null) || continue
-    if [ "$(printf '%s' "$out" | jq -r '.exists')" = false ] || [ "$(printf '%s' "$out" | jq -r '.archived')" = true ]; then
-      jq -n --arg id "$id" --arg at "$now" '{seq: 1, itemId: $id, revision: 1, type: "thread-archived", at: $at}' > "$WORK/lost.json"
-      cmd_apply --file "$WORK/lost.json" >/dev/null 2>"$WORK/lost.err" \
-        || { echo "t3-captain-sync: $id's archived thread could not be applied: $(head -n 1 "$WORK/lost.err")"; rc=1; }
-    fi
-  done <<< "$(jq -r '.items[]? | select(.thread != null) | [.id, .thread.id] | @tsv' "$SENT")"
-  return "$rc"
-}
-
-# FirstMate's archive marks outlive their task record only while the list or
-# an item thread still names their thread.
-prune_archive_marks() {
-  local dir mark named
-  fm_backend_source t3code >/dev/null 2>&1 || return 0
-  dir=$(fm_backend_t3code_archive_mark x)
-  dir=${dir%/*}
-  [ -d "$dir" ] || return 0
-  named=$( {
-    jq -r '.items[]?.thread.id // empty' "$SENT" 2>/dev/null
-    jq -r '.[]? | strings' "$STATE/t3-needs-me/threads.json" 2>/dev/null
-    for mark in "$STATE"/*.meta; do [ -f "$mark" ] && sed -n 's/^t3_thread_id=//p' "$mark"; done
-  } | while IFS= read -r mark; do
-    [ -z "$mark" ] || basename "$(fm_backend_t3code_archive_mark "$mark")"
-  done )
-  for mark in "$dir"/*; do
-    [ -f "$mark" ] || continue
-    printf '%s\n' "$named" | grep -qxF -- "${mark##*/}" || rm -f -- "$mark"
-  done
-}
-
 # Registered once: registering again would start a new generation.
 # FM_T3_CAPTAIN_SYNC_ARM=0 leaves the listener alone (tests).
 arm() {
@@ -368,8 +296,6 @@ cmd_check() {
   "$SCRIPT_DIR/fm-t3-review.sh" reconcile </dev/null || rc=1
   "$SCRIPT_DIR/fm-t3-needs-me.sh" sync </dev/null || rc=1
   apply_pending || rc=1
-  lost_archives || rc=1
-  prune_archive_marks
   return "$rc"
 }
 

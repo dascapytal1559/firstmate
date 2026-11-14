@@ -128,6 +128,13 @@ test_foreign_request_is_left_alone_and_own_is_adopted() {
   expect_code 0 "$RC" "a rerun adopts its own pending request: $OUT"
   assert_contains "$OUT" "adopted" "the adoption is reported"
   assert_equals "" "$(t3_fake_calls t3_restart_request)" "an adopted request is not sent again"
+
+  # T3 trims a reason as JavaScript's String.prototype.trim does: only the
+  # ends, never the indentation of an inner line.
+  fresh_case adopt-lines '{"restartRegistry":true,"activeTurns":0,"restartRequest":{"reason":"install build\n  g","requestedAt":"2026-11-13T00:00:00.000Z"}}'
+  req drain --reason $'  install build\n  g  \n' --interval 1
+  expect_code 0 "$RC" "a reason over two lines still adopts its own request: $OUT"
+  assert_contains "$OUT" "adopted" "the adoption is reported"
   pass "fm-t3-restart-request drain: another reason's restart is left alone; its own pending request is adopted"
 }
 

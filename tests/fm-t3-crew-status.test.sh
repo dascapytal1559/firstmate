@@ -527,6 +527,27 @@ test_declared_states_label_between_turns() {
   pass "fm-t3-crew-status: Waiting, Ready, and Failed follow the worker's state between turns"
 }
 
+# A turn T3 reports in no known way leaves a card whose label depends on the
+# turn as it is: T3's failed status is neither working nor between turns.
+test_unreadable_turn_leaves_the_card() {
+  local out
+  make_home unread-turn
+  turn_is failed
+  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
+  jq -n --arg t "$THREAD" '{cards: [{thread: $t, between: "Waiting", working: ""}]}' > "$HOME_DIR/cards.json"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  out=$(home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_source t3code && fm_backend_t3code_mcp crew-status --file "$2"' \
+    _ "$ROOT" "$HOME_DIR/cards.json") || fail "the pass should succeed: $out"
+  assert_equals '"left"' "$(printf '%s' "$out" | jq '.cards[0].outcome')" "the card is left"
+  assert_equals "Unchanged" "$(card_of)" "a turn that cannot be read changes no card"
+  jq -n --arg t "$THREAD" '{cards: [{thread: $t, between: "Waiting", working: "Waiting"}]}' > "$HOME_DIR/cards.json"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_source t3code && fm_backend_t3code_mcp crew-status --file "$2"' \
+    _ "$ROOT" "$HOME_DIR/cards.json" >/dev/null || fail "the second pass should succeed"
+  assert_equals "$WAITING" "$(card_of)" "a label that does not depend on the turn is still set"
+  pass "fm-t3-crew-status: a turn T3 cannot report leaves a card whose label depends on it"
+}
+
 test_older_t3_breaks_nothing() {
   local out rc
   teardown_home older
@@ -654,6 +675,7 @@ test_a_pass_that_finds_another_running_is_owed
 test_testing_outranks_a_declared_wait
 test_a_scout_never_shows_testing
 test_declared_states_label_between_turns
+test_unreadable_turn_leaves_the_card
 test_older_t3_breaks_nothing
 test_watcher_repairs_within_its_loop
 test_watcher_shows_an_active_run

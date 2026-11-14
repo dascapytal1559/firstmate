@@ -434,6 +434,11 @@ MD
   assert_equals '["old-call"]' "$(bridge '[.decisionList.decisions[].id]')" "the legacy dated hold stays on the list"
   assert_equals '{"at":"2026-07-10T00:00:00Z","until":"2099-01-04T00:00:00Z"}' "$(entry old-call .snoozed)" \
     "put off since its row was filed, until its date"
+  # Every date alone is its local midnight: in Sydney 10 Jul 2026 begins at
+  # 14:00Z on the 9th (AEST, +10) and 4 Jan 2099 at 13:00Z on the 3rd (AEDT, +11).
+  TZ=Australia/Sydney at 2099-01-01T10:05:00Z needs_me sync >/dev/null || fail "a pass in Sydney should succeed"
+  assert_equals '{"at":"2026-07-09T14:00:00Z","until":"2099-01-03T13:00:00Z"}' "$(entry old-call .snoozed)" \
+    "the filing date and the return date are both local midnights"
   pass "fm-t3-needs-me.sh: a legacy dated hold without a hold-set stamp stays on the list, snoozed since it was filed"
 }
 

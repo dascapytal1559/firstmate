@@ -208,7 +208,7 @@ test_archive_on_a_running_worker_leaves_a_wind_down_notice() {
   pass "fm-t3-captain-sync.sh apply: Archive on a running worker closes the item and asks for a safe wind-down"
 }
 
-test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive() {
+test_item_without_worker_gets_its_own_thread_and_only_an_archive_closes_it() {
   make_home light
   captain hold w1 --reason "Grid or list for the print view?" >/dev/null 2>&1 || fail "hold should succeed"
   local thread
@@ -220,10 +220,21 @@ test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive() 
   assert_equals '[]' "$(world ".threads[\"$thread\"].runs")" "with nothing posted into it"
   captain hold w1 --reason "Grid or list for the print view?" >/dev/null 2>&1 || fail "a repeat hold should succeed"
   assert_equals "1" "$(t3_fake_calls t3_thread_launch | wc -l | tr -d ' ')" "a repeat never launches a second thread"
-  # The captain archives the thread, and T3's record of it is lost.
+  # The thread reading archived is no archive of the item: the check never
+  # infers one, and T3's thread-archived record changes nothing.
   FM_T3_T=$thread t3_fake_set 'w.threads[process.env.FM_T3_T].archived = true'
   sync_cmd check >/dev/null 2>&1 || true
-  assert_contains "$(body_of w1)" "not pursued" "the ten-minute check closes it as not pursued"
+  assert_not_contains "$(body_of w1)" "not pursued" "an archived thread never closes its item"
+  printf '%s\n' '{"seq":1,"itemId":"w1","revision":1,"type":"thread-archived","at":"2026-11-13T01:00:00.000Z"}' > "$HOME_DIR/t.json"
+  sync_cmd apply --file "$HOME_DIR/t.json" >/dev/null 2>&1 || fail "thread-archived should be acknowledged"
+  printf '%s\n' '{"seq":2,"itemId":"w1","revision":1,"type":"thread-unarchived","at":"2026-11-13T02:00:00.000Z"}' > "$HOME_DIR/u.json"
+  sync_cmd apply --file "$HOME_DIR/u.json" >/dev/null 2>&1 || fail "thread-unarchived should be acknowledged"
+  assert_not_contains "$(body_of w1)" "not pursued" "neither thread action changes the backlog"
+  assert_equals "live" "$(bucket_of w1)" "the item still waits on the captain"
+  # His Archive on the item does close it.
+  printf '%s\n' '{"seq":3,"itemId":"w1","revision":1,"type":"archive","at":"2026-11-13T03:00:00.000Z"}' > "$HOME_DIR/a.json"
+  sync_cmd apply --file "$HOME_DIR/a.json" >/dev/null 2>&1 || fail "archive should apply"
+  assert_contains "$(body_of w1)" "not pursued" "the captain's Archive closes it as not pursued"
   lacks_item w1 || fail "and it leaves T3's list"
   assert_equals '{}' "$(jq -c . "$HOME_DIR/state/t3-needs-me/threads.json")" "its thread is let go"
   # FirstMate closes an item itself: its thread is archived.
@@ -232,7 +243,7 @@ test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive() 
   printf 'Buy it.\n' > "$HOME_DIR/decision"
   captain answer w2 --decision-file "$HOME_DIR/decision" >/dev/null 2>&1 || fail "answer should succeed"
   assert_equals "true" "$(world ".threads[\"$thread\"].archived")" "an answered item's own thread is archived"
-  pass "fm-t3-captain-sync.sh: an item with no worker gets a thread of its own, and check catches a lost archive"
+  pass "fm-t3-captain-sync.sh: an item with no worker gets a thread of its own, and only the captain's Archive closes it"
 }
 
 test_promoted_scout_is_no_kept_review() {
@@ -282,30 +293,6 @@ test_firstmate_archive_never_closes_a_decision() {
   pass "fm-t3-captain-sync.sh: FirstMate's own archive of a worker's thread never closes a decision on its card"
 }
 
-test_stale_thread_archive_after_a_move_never_closes_a_decision() {
-  local out own
-  make_home teardown-moved
-  FM_T3_W=$WORKER_THREAD t3_fake_set 'w.threads[process.env.FM_T3_W] = { threadId: process.env.FM_T3_W, projectId: "proj-fm", title: "Worker",
-    status: "completed", activeRunId: null, archived: false, worktreePath: "/tmp/wt", items: [], runs: [] }'
-  printf 'kind=ship\nbackend=t3code\nt3_thread_id=%s\n' "$WORKER_THREAD" > "$HOME_DIR/state/w2.meta"
-  captain hold w1 --origin w2 --reason "Grid or list?" >/dev/null 2>&1 || fail "hold should succeed"
-  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
-  home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_kill t3code "$2"' _ "$ROOT" "$WORKER_THREAD" >/dev/null 2>&1 \
-    || fail "the worker's thread should close"
-  add_action '{"seq":1,"commandId":"c1","itemId":"w1","revision":1,"type":"thread-archived","at":"2026-11-13T01:00:00.000Z"}'
-  # The record goes and a push moves the decision to its own thread before
-  # T3's action for the worker's card is applied.
-  rm -f "$HOME_DIR/state/w2.meta"
-  home_env "$ROOT/bin/fm-t3-needs-me.sh" sync >/dev/null 2>&1 || fail "the push should succeed"
-  own=$(jq -r '.w1 // ""' "$HOME_DIR/state/t3-needs-me/threads.json" 2>/dev/null)
-  [ -n "$own" ] && [ "$own" != "$WORKER_THREAD" ] || fail "the decision should move to a thread of its own"
-  out=$(sync_cmd apply-pending 2>&1) || fail "the stale archive should settle: $out"
-  assert_equals '"applied"' "$(world '[.acks[] | select(.seq == 1)][0].outcome')" "it is acknowledged"
-  assert_not_contains "$(body_of w1)" "not pursued" "an archive of a thread the item left never closes it"
-  assert_equals "{\"id\":\"$own\",\"finished\":true}" "$(item w1 .thread)" "and it stays on its own thread"
-  pass "fm-t3-captain-sync.sh apply: a thread-archived for a card the item has left changes nothing"
-}
-
 test_actions_on_one_item_apply_in_order() {
   local real out
   make_home order
@@ -333,22 +320,66 @@ SH
   pass "fm-t3-captain-sync.sh apply-pending: a failed action holds back the item's later ones, so they apply in T3's order"
 }
 
-test_archive_on_a_kept_card_archives_its_thread() {
-  make_home kept
+kept_card_home() {  # <name>: kept scout w1 To read on its card, with decision w2 raised --origin w1
+  make_home "$1" 'w.reviews = true;'
   FM_T3_W=$WORKER_THREAD t3_fake_set 'w.threads[process.env.FM_T3_W] = { threadId: process.env.FM_T3_W, projectId: "proj-fm", title: "Scout",
     status: "completed", activeRunId: null, archived: false, worktreePath: "/tmp/wt", items: [], runs: [] }'
   printf 'kind=scout\nbackend=t3code\nt3_thread_id=%s\nt3_review=waiting\nt3_review_target=%s\n' "$WORKER_THREAD" "$WORKER_THREAD" > "$HOME_DIR/state/w1.meta"
   captain hold w1 --read --reason "The grid wins." >/dev/null 2>&1 || fail "the To read hold should succeed"
-  assert_equals "{\"id\":\"$WORKER_THREAD\",\"finished\":true}" "$(item w1 .thread)" "the item rides on the kept card"
+  captain hold w2 --origin w1 --reason "Buy the camera too?" >/dev/null 2>&1 || fail "the decision hold should succeed"
+  assert_equals "{\"id\":\"$WORKER_THREAD\",\"finished\":true}" "$(item w1 .thread)" "the report rides on the kept card"
+  assert_equals "{\"id\":\"$WORKER_THREAD\",\"finished\":true}" "$(item w2 .thread)" "and so does the decision raised from it"
+}
+
+test_archive_on_a_kept_card_closes_only_its_own_item() {
+  kept_card_home kept-read
   printf '%s\n' '{"seq":1,"itemId":"w1","revision":1,"type":"archive","at":"2026-11-13T01:00:00.000Z"}' > "$HOME_DIR/a.json"
-  sync_cmd apply --file "$HOME_DIR/a.json" >/dev/null 2>&1 || fail "archive on a kept card should apply"
-  assert_equals "true" "$(world ".threads[\"$WORKER_THREAD\"].archived")" "the card's thread is archived in T3"
-  assert_contains "$(cat "$HOME_DIR/state/w1.meta")" "t3_review=closed" "the review is recorded closed"
-  assert_contains "$(cat "$HOME_DIR/state/t3-review/w1.closed" 2>/dev/null)" "bin/fm-teardown.sh w1" "firstmate is asked to clean it up"
-  lacks_item w1 || fail "the item leaves the list"
+  sync_cmd apply --file "$HOME_DIR/a.json" >/dev/null 2>&1 || fail "archive of the report should apply"
+  assert_contains "$(cat "$HOME_DIR/state/w1.meta")" "t3_review=closed" "archiving the report closes the review"
+  assert_contains "$(cat "$HOME_DIR/state/t3-review/w1.closed" 2>/dev/null)" "bin/fm-teardown.sh w1" "and asks for the scout's cleanup"
+  lacks_item w1 || fail "the report leaves the list"
+  has_item w2 || fail "the decision raised from it stays on the list"
+  assert_not_contains "$(body_of w2)" "not pursued" "and stays open"
+  # Cleanup is not blocked: the review is recorded closed though the thread
+  # reads open, and a check never reopens or republishes it.
   sync_cmd check >/dev/null 2>&1 || true
-  assert_contains "$(cat "$HOME_DIR/state/w1.meta")" "t3_review=closed" "the next check never reopens or republishes it"
-  pass "fm-t3-captain-sync.sh apply: Archive on a kept card archives its thread, so the record and the thread agree"
+  assert_contains "$(cat "$HOME_DIR/state/w1.meta")" "t3_review=closed" "the next check leaves the review closed"
+  FM_T3_REVIEW_META_LOCK_HELD=1 home_env "$ROOT/bin/fm-t3-review.sh" check-close w1 >/dev/null 2>&1 \
+    || fail "a review recorded closed lets the scout be cleaned up while its thread reads open"
+
+  kept_card_home kept-decision
+  printf '%s\n' '{"seq":1,"itemId":"w2","revision":1,"type":"archive","at":"2026-11-13T01:00:00.000Z"}' > "$HOME_DIR/a.json"
+  sync_cmd apply --file "$HOME_DIR/a.json" >/dev/null 2>&1 || fail "archive of the decision should apply"
+  assert_contains "$(body_of w2)" "not pursued" "archiving the decision closes it"
+  has_item w1 || fail "the report stays on the list"
+  assert_contains "$(cat "$HOME_DIR/state/w1.meta")" "t3_review=waiting" "and the review stays kept"
+  [ ! -e "$HOME_DIR/state/t3-review/w1.closed" ] || fail "no cleanup is asked for"
+  [ ! -e "$HOME_DIR/state/t3-captain-sync/w1.wake" ] || fail "nor any wind-down"
+  pass "fm-t3-captain-sync.sh apply: Archive on a shared kept card closes only its own item"
+}
+
+promote_scout() {  # <id>
+  mkdir -p "$HOME_DIR/data/$1"
+  printf 'You are a crewmate.\n\n# Task\n## Captain'\''s intent\nLook into it.\n\n## Firstmate spec\nReport back.\n\n# Definition of done\n' \
+    > "$HOME_DIR/data/$1/brief.md"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$1" > "$HOME_DIR/state/$1.meta"
+  home_env "$ROOT/bin/fm-promote.sh" "$1" --mode direct-PR --yolo on >/dev/null 2>"$HOME_DIR/promote.err" \
+    || fail "promotion of $1 should succeed: $(cat "$HOME_DIR/promote.err")"
+}
+
+test_promotion_marks_the_kept_report_read() {
+  make_home promote
+  (cd "$HOME_DIR" && tasks-axi start w1 && tasks-axi start w2) >/dev/null 2>&1 || fail "the scouts should be in flight"
+  captain hold w1 --read --reason "The grid wins." >/dev/null 2>&1 || fail "the To read hold should succeed"
+  captain hold w2 --reason "Buy the camera?" >/dev/null 2>&1 || fail "the decision hold should succeed"
+  promote_scout w1
+  promote_scout w2
+  # Promoting acts on the report, so it is read and the ship goes on.
+  if captain open w1 >/dev/null 2>&1; then fail "a promoted scout's report should no longer wait To read"; fi
+  assert_contains "$(body_of w1)" "state: in_flight" "and the promoted ship stays in flight"
+  captain open w2 >/dev/null 2>&1 || fail "a decision held on a promoted scout stays the captain's"
+  assert_not_contains "$(cat "$HOME_DIR/promote.err")" "still held To read" "and promotion warns about no report"
+  pass "fm-promote.sh: promoting a scout marks its To read report read and leaves a decision open"
 }
 
 test_migration_keeps_an_open_decision_a_decision() {
@@ -410,13 +441,13 @@ test_migration_moves_kept_cards_and_pinned_reports
 test_action_applies_then_pushes_then_acks
 test_apply_snooze_to_a_time_and_archive_replay
 test_archive_on_a_running_worker_leaves_a_wind_down_notice
-test_item_without_worker_gets_its_own_thread_and_check_catches_a_lost_archive
+test_item_without_worker_gets_its_own_thread_and_only_an_archive_closes_it
 test_migration_keeps_an_open_decision_a_decision
+test_promotion_marks_the_kept_report_read
 test_promoted_scout_is_no_kept_review
 test_firstmate_archive_never_closes_a_decision
-test_stale_thread_archive_after_a_move_never_closes_a_decision
 test_actions_on_one_item_apply_in_order
-test_archive_on_a_kept_card_archives_its_thread
+test_archive_on_a_kept_card_closes_only_its_own_item
 test_listener_rides_out_t3_down
 
 echo "ok: fm-t3-captain-sync"

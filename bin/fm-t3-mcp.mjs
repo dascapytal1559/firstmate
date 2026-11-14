@@ -314,11 +314,7 @@
 //     null; list[] every item the list shows, each {id, title, projectName?,
 //     since?, question, options[], entries[], revision, kind?, thread?
 //     {id, finished}, snoozed? {at, until|null}, launch? {title}}; and threads
-//     the item threads file, {<item id>: <thread id>}; archiveMarks, optional,
-//     maps an item thread to its FirstMate archive mark (bin/backends/t3code.sh
-//     fm_backend_t3code_archive_mark), written before a retirement archives
-//     it and removed again when that archive fails and T3 reads the thread
-//     unarchived. The
+//     the item threads file, {<item id>: <thread id>}. The
 //     FirstMate thread is the cached parent while it is still a live,
 //     worktree-less thread of the project rooted at root, else that
 //     project's one pinned coordinator while it is such a thread, else
@@ -443,7 +439,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2223,16 +2219,6 @@ async function archive(flags) {
   return archiveThread(session, threadId, timeoutMs);
 }
 
-// True only when T3 reads <threadId> as present and not archived.
-async function readsUnarchived(session, threadId) {
-  try {
-    const t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
-    return t.archived !== true && !t.archivedAt;
-  } catch {
-    return false;
-  }
-}
-
 // t3_thread_organize archive, then the read-back that proves the close:
 // archived:true and activeRunId:null with no active delegated thread below
 // it (archive does not stop delegated tasks), or a thread the server no
@@ -2572,18 +2558,12 @@ async function decisions(flags) {
   const riding = new Map(input.list.map((d) => [d?.id, d?.thread?.id]));
   for (const [id, threadId] of Object.entries(itemThreads)) {
     if (riding.get(id) === threadId) continue;
-    const mark = typeof input.archiveMarks?.[threadId] === "string" ? input.archiveMarks[threadId] : null;
     try {
-      if (mark) {
-        mkdirSync(path.dirname(mark), { recursive: true });
-        writeFileSync(mark, "");
-      }
       await archiveThread(session, threadId, ARCHIVE_TIMEOUT_MS);
       delete itemThreads[id];
       writeItemThreads(input.threads, itemThreads);
       retired.push({ id, threadId });
     } catch (err) {
-      if (mark && (await readsUnarchived(session, threadId))) rmSync(mark, { force: true });
       rejected.push({ id, problem: `its thread ${threadId} could not be archived (${err.message}); the next pass retries`, thread: true });
     }
   }

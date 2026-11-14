@@ -1182,6 +1182,7 @@ secondmate_home_summary_json() {  # <backlog-json-file> <tasks-json-file>
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),
           hold_until:((.hold_until // null) | if . == null then null else trunc(40) end),
           hold_bucket:(.hold_bucket // null),
+          hold_flavor:(.hold_flavor // null),
           hold_age_days:(.hold_age_days // null),
           captain_actionable:(.captain_actionable // false),
           repo:((.repo // null) | if . == null then null else trunc(120) end),

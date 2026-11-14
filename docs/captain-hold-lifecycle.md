@@ -389,7 +389,7 @@ For a main-home call, the reconcile option is the recovery path for whatever sti
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)`, `(hold-kind: ...)`, and `(hold-until: ...)` metadata alongside existing backlog fields.
 It resolves every repeated `blocked-by:` edge against structured Done records and keeps missing blockers unresolved.
 It then assigns every captain hold exactly one `hold_bucket`.
-The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
+The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold header (the hold-set stamp, and the `snoozed` and `returns` lines).
 Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
 
 The buckets are total and mutually exclusive.
@@ -398,16 +398,18 @@ The first matching row in this order decides the bucket:
 | Order | `hold_bucket` | Condition |
 | --- | --- | --- |
 | 1 | `blocked` | Any blocker is unresolved. |
-| 2 | `dated` | `hold_until` is in the future. |
-| 3 | `aged` | An undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days). |
-| 4 | `live` | None of the above. |
+| 2 | `dated` | `hold_until` is in the future: its exact return instant, for a hold snoozed to a time of day, else the date's local midnight. |
+| 3 | `snoozed` | An undated hold carries a `snoozed` line: put off until the captain brings it back. |
+| 4 | `aged` | An undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days). |
+| 5 | `live` | None of the above. |
 
 No captain hold can fall through them and none can match two, which is what keeps a hold from vanishing from every view.
-`captain_actionable` - waiting on the captain now - is exactly `hold_bucket == "live"`.
+Each hold also carries `hold_flavor`, `read` for a To read item and `decision` otherwise.
+`captain_actionable` - a decision waiting on the captain now - is exactly `hold_bucket == "live"` and `hold_flavor == "decision"`.
 
 Existing undated holds without a hold-set stamp fall back to the task's `since` date.
 That aging is a projection safety net only.
-The durable deferral remains re-holding with `--until`.
+The durable deferral is a snooze (`snooze`, with or without `--until`).
 
 The fleet snapshot's secondmate-home summary classifies an actionable captain hold as `captain_decision`.
 It preserves every captain hold in the bounded queued inventory of the owning home.
@@ -419,7 +421,9 @@ It preserves every captain hold in the bounded queued inventory of the owning ho
 | `hold_bucket` | Where the hold appears |
 | --- | --- |
 | `live` | A default Captain's Call entry. |
-| `blocked`, `dated`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date>`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
+| `blocked`, `dated`, `snoozed`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date or time>`, `snoozed`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
+
+A To read item (`hold_flavor` `read`) is never a decision: live or aged it is listed in `to_read`, never in Captain's Call or as a gate, and with `--all-decisions` every one of this home's To read items is.
 
 `--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate.
 An available hold is therefore never in both Captain's Call and Charted Next.

@@ -78,10 +78,13 @@
 # bin/fm-fleet-snapshot.sh: `origin` (above), `flavor: read`, `snoozed:
 # <UTC instant>` (when the item was put off), and `returns: <UTC instant>`
 # (the exact return of a dated snooze). A re-hold keeps a snooze that is still
-# running, so FirstMate's own update never brings an item back.
+# running, a dated hold from before the snoozed line included, so FirstMate's
+# own update never brings an item back.
 # `snooze` puts an open item off at --at (default now), until <when> or, with
 # no --until, until `unsnooze` brings it back; `unsnooze` brings it back now.
-# Both keep the hold's reason and stamp, and a repeat changes nothing.
+# Both keep the hold's reason and stamp. A repeat of unsnooze, or of a snooze
+# with the same --at and --until, changes nothing; a snooze without --at
+# records it as put off now.
 # `read-done` records that the captain read a To read item: work still in
 # flight (a kept scout waiting for its cleanup) loses the hold and goes on, and
 # anything else is closed; a task already closed or no longer held is the same
@@ -1345,7 +1348,7 @@ command_hold() {
       # A re-hold keeps a snooze still running: an update never brings the
       # item back, only `unsnooze` or its return time does.
       snoozed=$(body_hold_header "$decoded" snoozed)
-      if [ -n "$snoozed" ] && [ -z "$until" ] \
+      if [ -z "$until" ] && { [ -n "$snoozed" ] || [ -n "$(show_field_value "$show" hold_until)" ]; } \
         && snooze_running "$(show_field_value "$show" hold_until)" "$(body_hold_header "$decoded" returns)" "$hold_set"; then
         keep_snooze=1
         until_date=$(show_field_value "$show" hold_until)

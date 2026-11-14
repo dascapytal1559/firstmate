@@ -89,10 +89,11 @@
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
 # A T3 scout kept for the captain (bin/fm-t3-review.sh) refuses every cleanup,
-# --force included, until T3 reads its thread archived or deleted; an
-# unreadable T3 refuses too. Once closed it passes the same gates as any
-# scout, its close is read again just before its thread is stopped (a reopen
-# meanwhile refuses), and after the thread is stopped and archived it must
+# --force included, until its review is recorded closed or T3 reads its thread
+# archived or deleted; an unreadable T3 refuses too. Once closed it passes the
+# same gates as any scout, its close is read again just before its thread is
+# stopped (a restored thread reopens nothing), and after the thread is
+# stopped and archived it must
 # also read back fenced on its recorded worktree (bin/fm-t3-mcp.mjs fence)
 # before the copy is returned; a fence that cannot be proven keeps the lease
 # and the records.
@@ -1345,7 +1346,7 @@ if [ "$BACKEND" = t3code ]; then
   [ "$TEARDOWN_META_KIND" != secondmate ] || t3code_secondmate_lsof_check "$ID" "$(fm_meta_get "$META" home)" || exit 1
 fi
 # A finished T3 scout kept for the captain (bin/fm-t3-review.sh) is his until
-# he archives or deletes its thread in T3; nothing here may close it first.
+# he archives its report or its thread in T3; nothing here may close it first.
 # The live read decides, so a close racing publication wins, and an
 # unreadable T3 is never taken for a close. --force does not lift this: it
 # discards unlanded work, never the captain's open conversation. A closed

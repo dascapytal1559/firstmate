@@ -4111,8 +4111,8 @@ t3_present_sync_detached() {
   T3_PRESENT_PID=$!
 }
 
-# The captain archived an item on the card of a worker still running
-# (bin/fm-t3-captain-sync.sh apply leaves state/t3-captain-sync/<id>.wake):
+# The captain archived a decision on the card of a worker that has not
+# finished (bin/fm-t3-captain-sync.sh apply leaves state/t3-captain-sync/<id>.wake):
 # one durable check wake per notice asks firstmate to wind the worker down
 # safely. A notice whose worker is already cleaned up is dropped.
 t3_captain_alert_tick() {

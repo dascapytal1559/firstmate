@@ -73,9 +73,9 @@ while [ "$#" -gt 0 ]; do
     *) usage ;;
   esac
 done
-# T3 trims the reason; compare and send the trimmed form so an adopted or
-# cancelled request matches the one T3 holds.
-REASON=$(printf '%s' "$REASON" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+# T3 trims the reason as JavaScript does; compare and send that same form so
+# an adopted or cancelled request matches the one T3 holds.
+REASON=$(node -e 'process.stdout.write(process.argv[1].trim())' "$REASON") || usage
 [ -n "$REASON" ] && [ "${#REASON}" -le 500 ] || usage
 
 # shellcheck source=bin/fm-backend.sh

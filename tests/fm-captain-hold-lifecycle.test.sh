@@ -708,9 +708,15 @@ test_snooze_read_items_and_archive() {
 ## Queued
 - [ ] layout-call - Pick the layout (repo: sample) (kind: captain) (since 2026-07-14)
 - [ ] origin-scout - The scout the call came from (repo: sample) (kind: scout) (since 2026-07-14)
+- [ ] legacy-dated - An old dated call (repo: sample) (kind: captain) (since 2026-07-10) (hold: pick it later) (hold-kind: captain) (hold-until: 2099-01-04)
+  Captain hold set: 2026-07-10T00:00:00Z
 
 ## Done
 EOF
+  # A hold dated before the snoozed line existed is still put off: a re-hold
+  # with new words keeps its date.
+  run_captain "$home" hold legacy-dated --reason "Pick it later, with the new numbers" >/dev/null || fail "the legacy re-hold failed"
+  assert_contains "$(tasks_in "$home" show legacy-dated --full)" "hold_until: 2099-01-04" "a re-hold keeps a legacy hold's date"
   FM_CAPTAIN_HOLD_NOW=2026-07-14T10:00:00Z run_captain "$home" hold layout-call --reason "Grid or list?" --origin origin-scout >/dev/null \
     || fail "the hold failed"
   run_captain "$home" snooze layout-call --at 2026-07-14T11:00:00.000Z >/dev/null || fail "an undated snooze failed"
@@ -720,7 +726,9 @@ EOF
   assert_contains "$show" "Captain hold origin: origin-scout" "a snooze keeps the origin"
   assert_contains "$show" "Captain hold set: 2026-07-14T10:00:00Z" "and the hold's own stamp"
   assert_contains "$show" "hold_until: \"-\"" "a snooze with no date sets no backlog date"
-  run_captain "$home" snooze layout-call --until 2026-07-20T23:30:00+10:00 >/dev/null || fail "a snooze to a time failed"
+  # The backlog's date is the first local date on or after the instant; UTC
+  # here, so 13:30Z on the 20th gives the 21st.
+  TZ=UTC run_captain "$home" snooze layout-call --until 2026-07-20T23:30:00+10:00 >/dev/null || fail "a snooze to a time failed"
   show=$(tasks_in "$home" show layout-call --full)
   assert_contains "$show" "Captain hold returns: 2026-07-20T13:30:00Z" "the return time is kept in UTC"
   assert_contains "$show" "hold_until: 2026-07-21" "the backlog's own date never lifts before it"

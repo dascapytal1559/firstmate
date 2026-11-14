@@ -174,7 +174,7 @@ test_failures_retry_and_close_wins() {
   pass "fm-t3-review: a busy or failed publication stays kept and is retried once, his close wins a race, and an unreachable T3 preserves everything"
 }
 
-test_reconcile_notices_his_close_and_reopen() {
+test_reconcile_notices_his_close_and_a_restore_reopens_nothing() {
   make_home close
   retain
   assert_equals waiting "$(meta t3_review)" "published first: $OUT"
@@ -189,18 +189,16 @@ test_reconcile_notices_his_close_and_reopen() {
   assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "bin/fm-teardown.sh s1" "the notice asks for the guarded cleanup"
   thread_set 't.archived = false;'
   review reconcile
-  assert_equals pending "$(meta t3_review)" "a thread he reopens is kept again, not revived by firstmate"
-  assert_absent "$HOME_DIR/state/t3-review/s1.closed" "a reopen withdraws the close notice"
-  review reconcile
-  assert_equals waiting "$(meta t3_review)" "the next pass marks the reopened thread kept again"
-  FM_T3_ID=$THREAD t3_fake_set 'delete w.threads[process.env.FM_T3_ID]'
-  review reconcile
-  assert_equals closed "$(meta t3_review)" "a deleted thread is his close even with the endpoint gone"
+  assert_equals closed "$(meta t3_review)" "a thread he restores reopens nothing"
+  assert_present "$HOME_DIR/state/t3-review/s1.closed" "and the close notice stays"
   review check-close s1
-  expect_code 0 "$RC" "cleanup may run once he closed it"
+  expect_code 0 "$RC" "a restored thread never blocks the closed review's cleanup"
+  FM_T3_ID=$THREAD t3_fake_set 'delete w.threads[process.env.FM_T3_ID]'
+  review check-close s1
+  expect_code 0 "$RC" "cleanup may run once he closed it, the endpoint gone too"
   [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "the review never starts a worker turn"
   ! t3_fake_calls t3_thread_organize | grep -qF -e '"archive"' -e unarchive || fail "firstmate never archives or reopens the captain's thread"
-  pass "fm-t3-review reconcile: his archive or delete is recorded once with a notice, a reopen is kept again, and nothing is revived or steered"
+  pass "fm-t3-review reconcile: his archive or delete is recorded once with a notice, a restore reopens nothing, and nothing is revived or steered"
 }
 
 # A pending record that cannot be published (T3 refuses to mark its thread)
@@ -255,54 +253,37 @@ row_state() {  # <task-id> -> open (held for the captain and not done) or closed
   if captain open "$1" >/dev/null 2>&1; then echo open; else echo closed; fi
 }
 
-assert_not_pursued() {  # <task-id> <label>
-  local body today
-  today=$(date -u +%Y-%m-%d)
-  assert_equals closed "$(row_state "$1")" "$2: the call leaves his open decisions"
-  body=$(cd "$HOME_DIR" && tasks-axi show "$1" --full 2>/dev/null)
-  assert_contains "$body" "Archived in T3 on $today: not pursued." "$2: the archive is recorded as his decision"
-  assert_not_contains "$body" "parked" "$2: archive is never called parking"
-}
-
-test_archiving_the_card_closes_its_open_calls() {
+test_closing_the_review_closes_no_other_call() {
   park_home park-watch
   thread_set 't.archived = true;'
   review reconcile
-  assert_equals closed "$(meta t3_review)" "his archive is his close"
-  assert_not_pursued c1 "a call held from the review"
-  assert_not_pursued c2 "a call the review's gate inventoried"
-  assert_equals closed "$(row_state s1)" "the scout's own report is marked read"
-  assert_equals open "$(row_state c3)" "another task's call stays open"
-  assert_not_contains "$(cd "$HOME_DIR" && tasks-axi show c4 --full 2>/dev/null)" "not pursued" "an answered call keeps his answer"
-  assert_contains "$(cat "$HOME_DIR/state/t3-review/s1.closed")" "s1 c1 c2 recorded as not pursued or read" "the close notice names what was closed"
+  assert_equals closed "$(meta t3_review)" "his archive of the thread closes the review"
+  for c in c1 c2 c3; do
+    assert_equals open "$(row_state "$c")" "$c, which he never archived, stays open"
+  done
+  assert_equals open "$(row_state s1)" "the scout's report stays To read until he archives it"
+  assert_present "$HOME_DIR/state/t3-review/s1.closed" "firstmate is told to clean it up"
   assert_present "$HOME_DIR/data/s1/report.md" "the report is never deleted"
   assert_present "$HOME_DIR/data/s1/handoff-r1.md" "the handoff is never deleted"
-
-  captain hold c5 --title "A later call" --reason "Raised after the archive" --origin s1 >/dev/null 2>&1 || fail "hold c5"
-  review reconcile
-  assert_equals open "$(row_state c5)" "a call raised after the close is not closed by a later pass"
 
   park_home park-cleanup
   thread_set 't.archived = true;'
   review check-close s1
   expect_code 0 "$RC" "cleanup may run once he archived it: $OUT"
-  assert_not_pursued c1 "cleanup noticing the archive first"
-  assert_not_pursued c2 "cleanup noticing the archive first, inventoried call"
-  assert_equals open "$(row_state c3)" "cleanup leaves another task's call open"
-  assert_equals open "$(row_state s1)" "cleanup, holding the scout's lock, settles its own hold itself"
+  for c in c1 c2 c3; do
+    assert_equals open "$(row_state "$c")" "cleanup leaves $c open"
+  done
 
-  # T3 logs his archive, and the listener applies it at once.
+  # T3 logs his Archive of the report, and the listener records the close.
   park_home park-closed
-  review closed s1 --at 2026-11-13T23:00:00.000Z
+  review closed s1
   expect_code 0 "$RC" "the logged archive applies: $OUT"
   assert_equals closed "$(meta t3_review)" "recorded closed"
-  assert_contains "$(cd "$HOME_DIR" && tasks-axi show c1 --full 2>/dev/null)" "Archived in T3 on 2026-11-13: not pursued." \
-    "dated by the archive itself, not by when it was applied"
-  assert_equals closed "$(row_state s1)" "and the scout marked read"
+  assert_equals open "$(row_state c1)" "a call raised from the review stays open"
   assert_present "$HOME_DIR/state/t3-review/s1.closed" "firstmate is told to clean it up"
-  review closed s1 --at 2026-11-13T23:00:00.000Z
+  review closed s1
   expect_code 0 "$RC" "a replay changes nothing: $OUT"
-  pass "fm-t3-review: archiving a kept card closes the calls it carried as not pursued, marks it read, and deletes nothing"
+  pass "fm-t3-review: closing a kept review closes no captain call, and deletes nothing"
 }
 
 # A pending handoff a T3 too old to keep threads refuses is dropped. Found by
@@ -431,8 +412,8 @@ test_watcher_wakes_once_when_he_closes_it
 test_watcher_never_calls_an_idle_kept_review_stale
 test_retain_refuses_what_it_must_not_keep
 test_failures_retry_and_close_wins
-test_reconcile_notices_his_close_and_reopen
+test_reconcile_notices_his_close_and_a_restore_reopens_nothing
 test_reconcile_survives_a_record_it_cannot_publish
-test_archiving_the_card_closes_its_open_calls
+test_closing_the_review_closes_no_other_call
 test_reconcile_wakes_cleanup_when_t3_cannot_keep_it
 test_retain_refuses_an_option_without_its_value

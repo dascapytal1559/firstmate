@@ -663,7 +663,7 @@ poll() {
   # a home's settled history costs no process per row.
   if [ -f "$CONFIG/hold-pr-settle" ]; then
     unreported+=$(jq -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
-      [$input[0].backlog.records[]? | select(.structured == true and .hold_bucket != null) | .id] as $held
+      [$input[0].backlog.records[]? | select(.structured == true and .hold_bucket != null and .hold_flavor != "read") | .id] as $held
       | $saved[0][] | .task as $task | select($held | index($task) != null) | .records[]
       | select(.kind == "pr" and .error == null and .retired == null
           and .observation.state == "closed" and (.seen | index("closed")) == null)
