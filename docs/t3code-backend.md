@@ -108,9 +108,10 @@ T3 assigns the thread id at launch (`mcp:<uuid>`), and the task records it as `t
 The normal isolation and unlanded-work refusal rules still apply.
 
 Each launched thread also names the T3 thread running the firstmate that spawned it as its parent, so T3 lists it as that thread's crew: a worker under the main or under the secondmate that spawned it, and a secondmate under the main.
-The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else the one live worktree-less thread in the spawning home, the same cwd match away mode uses.
+The parent is an explicit `FM_SUPERVISOR_TARGET` that pairs with t3code, else the spawning home's FirstMate thread whether or not it is running a turn: the project's one pinned coordinator, else the one live worktree-less thread, the same cwd match away mode uses.
+A spawn made between the FirstMate thread's turns, such as from a Stop-hook continuation, therefore still finds a pinned coordinator.
 It is sent as `parentThreadId` only where the `t3_thread_launch` schema declares it, and the launch read-back must then show `relationshipToParent` `crew` under exactly that parent, or the thread is archived and refused like any other mis-binding.
-A T3 without crew lineage, a firstmate not running in T3, or a home with several live threads launches the thread with no parent, which changes only how T3 groups it; lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
+A T3 without crew lineage, a firstmate not running in T3, or a home with no pinned coordinator and either no live thread or several launches the thread with no parent, which changes only how T3 groups it; the spawn prints a note saying why, lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
 
 ### Work causes
 
@@ -144,7 +145,7 @@ The launch reads both back through the configuration read and archives and refus
 A secondmate carries no `FM_SUPERVISOR_TARGET`, because its own thread id is not known before launch; its away daemon finds its thread by home, which `FM_SUPERVISOR_BACKEND=t3code` enables.
 
 The statement's pull-request-tool workaround for Claude follows the [verified version boundary](verification/runtime-backends.md#claude-pull-request-tools); an older or unreadable server keeps the clause, while a server at or past the verified build gets none.
-Firstmate records the PR from the worker's `done: PR <url>` status line either way.
+Firstmate records the PR from a worker's ready `done:` report either way; [`config/pr-register-scan`](configuration.md#pr-registration-scan-configpr-register-scan) describes the scan's accepted forms.
 The thread's `GIT_CONFIG_*` entries are Firstmate's own `core.hooksPath` hook entry only: inherited `GIT_CONFIG_*` values, or any other inherited environment value, are never forwarded, because they can carry credentials.
 That entry sets `GIT_CONFIG_COUNT=1` and index 0, so numbered `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` entries in the T3 server's environment do not apply in the thread; with `config/keep-ai-trailers` no hook entry is written and they apply unchanged, except on a `forge=external` ship, whose push guard always installs the hook entry.
 A T3 server whose agents need extra Git config, such as a `credential.helper`, supplies it through Git config files, which the hook entry leaves alone: for example the service user's global config, or `GIT_CONFIG_GLOBAL` in its service environment.
@@ -196,7 +197,7 @@ T3 starts every agent with the T3 server's own environment, not a login shell's.
 Codex runs each command through `/bin/zsh -lc` in that environment, so the Firstmate toolchain must survive the login shell's startup files, and a startup file that rebuilds `PATH` when a marker variable is missing hides it from every Codex worker; Claude's shell tool restores its own login-shell snapshot and is unaffected.
 Remote secondmate backend support is defined in [`remote-secondmates.md`](remote-secondmates.md#refused-and-unsupported-launches); T3 Code remains unsupported there.
 
-Cleanup keeps all shared Firstmate safety checks, and a finished scout kept for the captain is not cleaned up until he closes its thread ([Retained reviews](#retained-reviews)).
+Cleanup keeps all shared Firstmate safety checks, and a finished scout kept for the captain is not cleaned up until he closes the review, by archiving its report on the card, or archiving or deleting its thread ([Retained reviews](#retained-reviews)).
 Before the slot returns to the pool, or before a secondmate home is removed, teardown stops any active run, archives the thread with `t3_thread_organize`, and requires T3 to read back `archived:true` with no active run and no active delegated thread below it, so no live thread can act in a slot another task may lease.
 A worker can start delegated T3 tasks of its own, which neither a plain interrupt nor an archive stops, so teardown sends `t3_thread_interrupt` with `stop: true` (T3's Stop: the running turn, the queued messages, and every delegated task) whenever the server's tool schema declares `stop`; on an older server it interrupts the thread's own run, and a delegated thread that still runs leaves the close unproven, naming it, until it is stopped in T3 Code.
 T3 detaches the provider session as a separate effect after that read-back, so its agent process can briefly outlive it: a worker's slot is cleared by teardown's worktree-process reaper, and a secondmate home, pooled or standalone, goes through the same reaper before it is returned or removed, keeping the home and its records when the process scan cannot complete.
@@ -217,27 +218,33 @@ The T3 project of a torn-down secondmate home stays in T3 Code pointing at the r
 
 ### Retained reviews
 
-A finished T3 scout keeps its thread and its worker copy until the captain closes the thread, so he can read Firstmate's handoff where the exploration happened and keep asking there.
+A finished T3 scout keeps its thread and its worker copy until the captain closes the thread, so its card waits for him where the exploration happened.
 Ships, and scouts on every other backend, keep the cleanup above.
 [`bin/fm-t3-review.sh`](../bin/fm-t3-review.sh) owns the record and its transitions, [`bin/fm-t3-review-lib.sh`](../bin/fm-t3-review-lib.sh) is its one reader, and `bin/fm-t3-mcp.mjs` (`review-support`, `review-publish`, `fence`) owns the T3 calls; exact commands are in their headers.
 
-- **Handoff.** After reading the report and passing the captain-call completion gate, Firstmate runs `retain` with its summary and its fuller explanation.
-  The script composes one note in a fixed order, the summary, then the full explanation, then a link to `data/<id>/report.md` by absolute path, and saves it as `data/<id>/handoff-r<n>.md` before anything is sent.
-- **Publication.** The note is posted with `t3_thread_note`, which starts no worker turn, then the thread gets the exact tag `waiting for captain` and automatic settling switched off, and a read-back proves each.
-  The note's request id is derived from the home, task, spawn generation, report, and note, so a retry or a restart posts nothing twice, and a revised report or handoff appends a new note instead of rewriting the old one.
+- **Handoff.** After reading the report and passing the captain-call completion gate, Firstmate runs `retain` with its summary and its fuller explanation, and relays them in chat.
+  The script composes them in a fixed order, the summary, then the full explanation, then a link to `data/<id>/report.md` by absolute path, and saves that as `data/<id>/handoff-r<n>.md`, Firstmate's own record; nothing is posted into the thread.
+- **Publication.** The thread gets the exact tag `waiting for captain` and automatic settling switched off, and a read-back proves each; no worker turn starts.
+  The handoff's key is derived from the home, task, spawn generation, report, and handoff, so a retry or a restart changes nothing, and a revised report or handoff is recorded as a new revision.
   A busy thread waits for its turn to end, a failure stays kept for the watcher to retry, and nothing is archived as a fallback.
+- **Replies.** What the captain types on a kept card goes to FirstMate's thread, not the worker's, as one user message: a first line `**Reply · <card title>**`, a second line `kept-thread: <the card's thread id>`, a blank line, then his words.
+  `bin/fm-t3-needs-me.sh reply-task` reads the task behind that thread, and FirstMate treats his words as captain input on it; the card stays open until he archives it.
+- **To read.** `retain` also holds the scout's own task To read (`bin/fm-captain-hold.sh hold --read`), so the backlog, not this record, is what says the report waits to be read, and the card shows it from the [captain's list](#captains-list).
+- **Archive closes one item.** His Archive on the report's item marks it read and closes the review, so the scout's cleanup follows; his Archive on a decision raised from the review closes that decision alone. Neither touches the other items on the card, and closing the review, however it happens, closes no captain call.
+  Nothing is deleted: the report, the handoff, and the task's data stay.
 - **Old T3.** A T3 without these tools, or one whose reads lack `tags` or `autoSettleDisabled`, cannot keep threads; `retain` (or `publish`) then exits 4, dropping any handoff it had recorded, and the scout is cleaned up as usual. When the watcher's pass is the one to find this out, it drops the record and wakes firstmate with a `check: t3-review` cleanup notice.
   A missing read-back field always means "too old", never "not set".
-- **Card.** A published review reads `Waiting for captain` (see [Crew card status](#crew-card-status)); a real decision still appears on the Bridge exactly as before, and answering it never closes the exploration.
+- **Card.** A published review's card reads To read, or Needs you while a call raised from it is open, from the captain's list; answering a call never closes the exploration.
 - **Watcher and recovery.** An idle kept review never enters the stale alarms or the inactive-outcome sweep, and the session-start digest names it as kept, so nothing relaunches or steers it.
-  The watcher's minute pass reads each kept thread; an archived or deleted one is recorded as closed and wakes Firstmate once with a `check: t3-review <id>` notice, even when the old endpoint is gone.
-  A thread he reopens is kept again; Firstmate never unarchives, steers, or revives one.
-- **Cleanup.** Teardown refuses a kept review, `--force` included, until T3 reads its thread archived or deleted, and an unreadable T3 refuses too.
+  T3 logs his Archive of the report and the list's listener applies it at once (`bin/fm-t3-review.sh closed`); the ten-minute check also reads each kept thread, and one he archived or deleted closes the review too.
+  Either way the review is recorded closed and Firstmate is woken once with a `check: t3-review <id>` notice, even when the old endpoint is gone.
+  A thread he restores afterwards reopens nothing and holds nothing again; Firstmate never unarchives, steers, or revives one.
+- **Cleanup.** Teardown refuses a kept review, `--force` included, until the review is recorded closed or T3 reads its thread archived or deleted, and an unreadable T3 refuses too.
   A close racing publication wins.
   Once closed, the review passes every ordinary gate; after the stop-and-archive proof above, the thread must also read back fenced on its recorded worktree, so a reopened thread can never run in a slot another task takes, and only then is the copy returned.
   A deleted thread needs no fence; a fence T3 cannot prove keeps the lease and the records.
 
-The T3 Code fork's `fork/README.md` "Threads kept for a reader" owns the note, tag, auto-settle, and fence contract.
+The T3 Code fork's `fork/README.md` "Threads kept for a reader" owns the tag, auto-settle, fence, and kept-card reply contract.
 A kept review holds one Treehouse lease for as long as the captain keeps the thread open, so it counts against the pool's capacity.
 
 ### Crew card status
@@ -249,23 +256,21 @@ The label says what only Firstmate knows about a live T3 ship or scout, first ma
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | A captain hold is open on the worker's own task or was raised for it with `--origin`, or the worker is a finished scout whose handoff was published into its kept thread ([Retained reviews](#retained-reviews)), and the worker is between turns. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
-| `Waiting` | Between turns, the worker waits on something other than the captain: an open decision firstmate settles, a blocker, or a declared pause. |
+| `Waiting` | Between turns, the worker waits: an open decision firstmate settles, a blocker, or a declared pause. |
 | `Ready` | Between turns, the worker's work is done. |
 | `Failed` | Between turns, the worker or its run failed. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.
-A worker's `needs-decision` line alone reads `Waiting`, not `Waiting for captain`, because firstmate settles most of those itself.
-A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
+What waits on the captain is no label of Firstmate's: T3 shows Needs you, To read, or Replied on the card from the [captain's list](#captains-list).
 A run left only watching a PR with green checks reads as done, so the card reads `Ready` then.
 
-The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's captain holds, each worker's current state, its steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
-It runs after every hold, answer, and reconcile close, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
+The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from each worker's current state, its steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
+It runs after every hold, answer, reconcile close, and PR settlement, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
 The watcher sees a run end from its own wait on T3, at once where that wait holds the watcher's cycle and within one poll interval in a home that also has a Herdr or Rex worker; a no-mistakes run starting or ending is seen by the minute pass.
-A hold, run, or turn that cannot be read leaves the card as it is.
-Cleanup clears the label before archiving the thread, even while a hold stays open.
+A run or turn that cannot be read leaves the card as it is.
+Cleanup clears the label before archiving the thread.
 The label is display only, and T3's `crewOf` stays what makes a thread crew.
 
 A T3 without the status label shows none of these, and holds and cleanup carry on as usual; the cards catch up on the first pass after T3 is updated.
@@ -273,50 +278,59 @@ A T3 without the status label shows none of these, and holds and cleanup carry o
 What T3 can rely on, for any live ship or scout card in a home with the T3 credential:
 
 - Working is T3's own fact: Firstmate clears its label while the worker works, except `Testing`, which stays.
-- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Waiting for captain`, `Testing`, or `Waiting`, and finished work carries `Ready`.
+- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Testing` or `Waiting`, and finished work carries `Ready`.
 - A label changes only when its meaning does, so T3's `statusLabelSince` is the time that state began; a pass re-sends nothing.
-- A label is current within seconds of a hold, answer, steer, or turn end, and within about a minute of a no-mistakes run starting or ending.
+- A label is current within seconds of a steer or turn end, and within about a minute of a status change or a no-mistakes run starting or ending.
 - A label T3 lost, as a restart could, is set again within about a minute, and cleanup clears the label before the thread is archived.
 
-### Bridge decisions
+### Captain's list
 
-Each open captain call is one decision on T3's Bridge tab, listed under Needs you, or under Scheduled while it waits for a deferred date.
-It carries the call's question, its options, its project (the task's repo), when it started waiting (the hold's start, which the row's age counts from), and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when).
-A call with no recorded context still appears, with its hold reason as the question.
+The backlog is the one record of what waits on the captain, and T3's sidebar only shows it.
+Every open captain hold is one item on a card under FirstMate's: Needs you for a decision, To read for a finished report (`hold --read`), and Snoozed for one he put off.
+An item carries the call's question, its options, its project (the task's repo), when it started waiting, and the words FirstMate raised and updated it with, which FirstMate records through `bin/fm-captain-hold.sh context` (the `captain-hold-lifecycle` skill says when); a call with no recorded context still appears, with its hold reason as the question.
 
-T3 keeps the decisions as one list that FirstMate replaces whole.
-[`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) sends it after every hold, answer, reconcile, and context, before that command returns, so the Bridge changes in the same step as FirstMate's own records; the watcher sends it again about once a minute as the backstop:
+Which card an item rides on:
 
-- a live call, or one that has waited longer than the aging threshold, is listed until it is answered or closed, however long it waits;
-- a call deferred with `--until` is listed with a return date of 00:00 UTC on that date, so it waits under Scheduled until then;
-- a blocked, answered, released, or closed call is left out, so it leaves the Bridge with the next list.
+- the T3 thread of its own task, else of its origin (`hold --origin`), while that thread is not closed; a kept review's card is `finished`, a running worker's is not;
+- one decision per card: the oldest keeps it, and To read items share it;
+- every other item gets a thread of its own: a crew thread of FirstMate's, titled with the question, on FirstMate's model, with nothing posted into it, recorded in `state/t3-needs-me/threads.json`; it is archived once its item leaves the list or moves to a worker's card.
 
-When the captain replies, T3 hides that decision at once.
-It shows again only when FirstMate's version of it changes, as when his reply left the call open and FirstMate records an update.
+T3 keeps the items as one list that FirstMate replaces whole, and an identical list changes nothing, so a missed or doubled trigger never leaves anything stale.
+[`bin/fm-t3-needs-me.sh`](../bin/fm-t3-needs-me.sh) sends it after every hold, answer, snooze, reconcile, and context, before that command returns; and [`bin/fm-t3-captain-sync.sh`](../bin/fm-t3-captain-sync.sh)'s listener, which the watcher keeps running through the process-event runner, sends it within about a second of any other change to the backlog file, the context records, a task record's thread, or the Bridge's other sources:
 
+- a live or aged item is listed until it is answered or closed, however long it waits;
+- a snoozed item is listed with `snoozed {at, until}`: until its return time (`--until` takes a date, which returns at its local midnight, or a time of day), or with no date until he brings it back; FirstMate's own updates never bring it back;
+- a blocked, answered, released, or closed item is left out.
+
+His actions reach the backlog at once: T3 logs Snooze, Bring back, and Archive on an item, and the listener applies each through `bin/fm-captain-hold.sh` (`snooze`, `unsnooze`, `archive`), pushes the list, and only then acknowledges it.
+T3 also logs every archive or restore of a listed thread; those change no item and are acknowledged as applied, since only his Archive on an item closes an item, never a thread's archived state; archiving or deleting a kept review's thread still closes the review itself ([retained reviews](#retained-reviews)), but no item.
+They apply in T3's order: an action that fails holds back every later action on the same item until it is applied or, on its third failure, refused, and the listener and the ten-minute check never apply actions at the same time.
+Archive acts on its own item alone: it closes a decision as "Archived in T3 on <date>: not pursued." and marks a To read item read, and nothing else on the card changes.
+On a kept review's own To read item it also closes the review (`bin/fm-t3-review.sh closed`), so the scout's cleanup follows; on a decision on the card of a worker that has not finished it also wakes FirstMate with a `check: t3-captain <id>` notice to wind the worker down through its normal safe cleanup, and the thread itself stays.
+FirstMate archiving a thread itself, at cleanup, closes nothing either; the items on that card move to threads of their own on the next pass.
+A reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and T3 shows the item as Replied until FirstMate closes or updates it.
+
+A ten-minute check (`bin/fm-t3-captain-sync.sh check`, from the watcher) is the safety net for crashes and restarts: it confirms the listener runs, sends the whole list, and applies any action T3 still holds.
 A list T3 refuses is reported and sent again on the next pass.
 The third refusal in a row also wakes FirstMate with a `check: t3-decisions` wake carrying T3's exact error, once per run of failures; FirstMate reads the error, checks that T3 is running and current, and fixes the cause rather than waiting on it.
-A single decision outside T3's bounds is left off the list and named in the pass's output, so it never holds back the rest.
+A single item outside T3's bounds is left off the list and named in the pass's output, so it never holds back the rest.
 FirstMate's thread, where replies go, is the project's pinned coordinator, else the live thread at the home's root; with neither, no list is sent.
 Only a main home takes part, because a secondmate's calls reach the captain through its parent.
 
-The T3 Code fork's `fork/README.md` "Bridge" owns the T3 side: the list's schema and its bounds, the reply message, and the stale-reply guard.
+The T3 Code fork's `packages/contracts/src/decisions.ts` owns the T3 side: the list's schema and bounds, the action log, and the reply message.
 What FirstMate sends and relies on:
 
-- Set: `t3_decisions_set` with `replyTo`, FirstMate's thread id, and `decisions`, the whole list; a decision left out is gone, and an identical list changes nothing.
-  T3 must answer with the same `replyTo` and exactly the ids and revisions sent.
-- Decision: `id` (the task id), `title`, `projectName`, `since`, `question`, `options`, `entries`, `revision`, and `wakeAt` for a deferred call.
-  FirstMate always sends its own `revision`: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision.
+- Set: `t3_decisions_set` with `replyTo`, FirstMate's thread id, and `decisions`, the whole list; T3 must answer with the same `replyTo` and exactly the ids and revisions sent.
+- Item: `id` (the task id), `title`, `projectName`, `since`, `question`, `options`, `entries`, `revision`, `kind` (`decision` or `read`), `thread {id, finished}`, and `snoozed {at, until}` while it is put off.
+  FirstMate always sends its own `revision`: the context record's revision plus one, or 1 with no record, so every raise and update is a new revision while a snooze alone is not.
   An option is its `label` alone; `changed` and an attachment's `label` are left out when absent, and an attachment's path is absolute, or a URL for a link.
-  Entries are oldest first, at most 12, each text at most 8192 bytes; `bin/fm-captain-hold.sh context` checks every other field against the fork's bounds when it records it.
-- Reply: the captain's reply arrives in FirstMate's chat as one user message whose second line reads `needs-me-task: <task-id>`; `bin/fm-t3-needs-me.sh reply-task` reads that id, and FirstMate records his words as the answer to that task.
+- Actions: `t3_decisions_actions {after?, waitMs?, ack?}` answers the actions not yet acknowledged; an acknowledged one leaves the log, and a refused one shows its message on the card.
 
-`bin/fm-t3-mcp.mjs` `decisions` owns the exact call and its proof.
+`bin/fm-t3-mcp.mjs` `decisions` and `actions` own the exact calls and their proof.
+A T3 without `t3_decisions_set` shows no list, and one without `t3_decisions_actions` still gets the list while the listener asks again every five minutes.
 
-A T3 without `t3_decisions_set` is not supported for decisions: it is skipped quietly, as a T3 without `t3_objectives_set` is, and its Bridge shows none.
-
-The Bridge is an additional track beside chat, never a replacement for it.
-Captain's Call in chat still lists every open decision as a short line, exactly as without T3 (the `bearings` skill owns that format), while each decision on the Bridge keeps its full context and every update since it was raised.
+The sidebar is an additional track beside chat, never a replacement for it.
+Captain's Call in chat still lists every open decision as a short line, and To read items as one short line (the `bearings` skill owns that format).
 
 ### Objectives
 
@@ -405,6 +419,32 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
 - **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
 - **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers every working or waiting worker, since T3 resumed none of them.
 
+<a id="clean-restart"></a>
+
+### Clean restart
+
+A restart Firstmate causes itself, such as installing a new T3 build, waits until no turn anywhere would be cut, FirstMate's own included.
+[`bin/fm-fleet-idle.sh`](../bin/fm-fleet-idle.sh) counts only this home's workers, so on its own it can restart T3 in the middle of the main's reply.
+[`bin/fm-t3-restart-request.sh`](../bin/fm-t3-restart-request.sh) closes that gap through the T3 Code fork's restart registry:
+
+1. Once no worker is busy, `drain` requests the restart with a reason naming the build, so T3 shows the captain a notice that it will restart, holds every new message, and lets running turns finish.
+2. It returns 0 only when T3 reports drained, every turn finished, and the caller then restarts T3; the server start releases the held messages in order.
+3. When T3 has not drained within `--within` seconds, `drain` cancels the request, which releases the held messages, and reports it.
+   A signal cancels it the same way, as when its watch is retired or replaced by a newer build, or its action times out.
+4. A request the captain cancels from T3's notice, one replaced by another reason, or a T3 that restarted on its own means no restart.
+   Another reason's pending request is never requested over or cancelled.
+
+The usual shape is a [fleet-idle watch](configuration.md#process-to-event-sources-stateprocevent) whose action runs `drain` and then the restart, with the watch's `--action-timeout` above `--within`:
+
+```sh
+bin/fm-procevent-when.sh arm <name> --on-worker-event --interval 60 --stable 1 --action-timeout 2400 \
+  --condition "$PWD/bin/fm-fleet-idle.sh" -q --action <script that runs drain, then restarts T3>...
+```
+
+Inside that script, run `bin/fm-t3-restart-request.sh drain --reason "<reason>" --within 1800` and restart T3 only on exit 0.
+If the restart then cannot happen, the script runs `bin/fm-t3-restart-request.sh cancel --reason "<reason>"`, because a drained request keeps holding messages until a server start.
+The script's header owns its exit codes and the reason and adoption rules; `bin/fm-t3-mcp.mjs` `restart-status`, `restart-request`, and `restart-cancel` own the registry calls.
+
 ### Fresh session with /clear
 
 T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context.
@@ -416,10 +456,11 @@ Run `/stow` first when the session holds anything worth keeping; `/clear` itself
    A hook that fires once the process is gone arms nothing and moves no lock, whether that is before or after the new session starts.
 2. The [T3 Code fork](https://github.com/dascapytal1559/t3code)'s Claude adapter waits for that exit before the new session opens.
    Upstream T3 Code does not wait, so there a new session can start beside the old process and come up read-only.
+   Its read-only digest then says the previous session on this thread is still running and names the remedy: end that process, whose unacknowledged wakes stay queued, and run session start again.
 3. The new process takes the helm through the ordinary session start.
    `bin/fm-lock.sh` reclaims the dead holder's lock, so the session does not come up read-only, and it writes the same thread id to `state/t3-main-thread`.
    The T3 server has not restarted, so `bin/fm-t3-restart.sh recover` steers no worker.
-4. Wakes queued during the swap stay durable and reach the new session in its digest.
+4. Wakes queued during the swap, and any the old session drained but had not acknowledged when it was stopped, stay durable and reach the new session in its digest.
    Claude ends a running Stop hook, its arm, and its watcher with the session ([dated evidence](verification/runtime-backends.md#fresh-session-swap-on-real-claude)), so the new session's first Stop starts the one cycle, and it attaches instead if a watcher did outlive the old session.
    A watcher that died leaves one recovery notice, in the digest or as a wake after that first Stop, which the new session acknowledges like any other.
 
@@ -467,9 +508,9 @@ Resolve ambiguity by explicitly setting both `FM_SUPERVISOR_BACKEND=t3code` and 
 Injection is a `t3_thread_send` only into a settled supervisor thread, one the [thread status table](#restart-and-liveness-behavior) reads idle/alive with no pending request; any other row, including `blocked` and an unreadable thread, defers the digest exactly as a busy pane does on every other backend.
 An unknown native busy verdict defers new-turn delivery but does not prove that work resumed.
 Away housekeeping keeps an overdue stale alert pending and buffers one possible-wedge report while the verdict remains unknown, including a failed run or a transient thread-read failure.
-Delivered warnings stay suppressed while the same unknown condition persists.
-If a fresh daemon entry discards a queued, undelivered warning, it clears that warning's reported marker and preserves its stale timer, so the next housekeeping pass queues exactly one replacement.
-Refreshing a live daemon preserves the queue; a failed start restores the previous queue and reported markers.
+Within the same away session, delivered warnings stay suppressed while the same unknown condition persists.
+The [stale-artifact lifecycle](../.agents/skills/afk/SKILL.md#stale-artifact-lifecycle) owns session-boundary cleanup and recheck-window resets.
+Refreshing a live daemon preserves the queue and episode markers; a failed start restores the previous queue and episode markers.
 Confirmed busy activity, a missing thread, or an idle verdict after the unknown condition was reported clears the stale and reported markers without another report, so a later unknown condition can report again.
 Declared external-wait rechecks also survive native uncertainty; the worker's declaration still controls their cadence.
 `stale_window_is_busy` and `housekeeping` in `bin/fm-supervise-daemon.sh` own stale tracking; `fm_afk_clear_stale_artifacts` in `bin/fm-afk-start.sh` and the launcher in `bin/fm-afk-launch.sh` own queue discard and startup rollback.
@@ -517,7 +558,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-needs-me.test.sh tests/fm-rules.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-needs-me.test.sh tests/fm-t3-restart-request.test.sh tests/fm-rules.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 bin/fm-test-run.sh tests/fm-t3-clear-session.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh

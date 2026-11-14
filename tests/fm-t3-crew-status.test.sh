@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-t3-crew-status.test.sh - a live T3 worker's crew card status is a
-# projection of its captain holds, its current state, its steering inbox, and
-# its turn: bin/fm-t3-crew-status.sh driven through the real
+# projection of its current state, its steering inbox, and its turn (a captain
+# hold is no label of its own): bin/fm-t3-crew-status.sh driven through the real
 # bin/fm-captain-hold.sh, bin/fm-crew-state.sh, bin/fm-teardown.sh, and
 # bin/fm-watch.sh against the fake T3 server, with real tasks-axi backlogs.
 set -u
@@ -28,7 +28,7 @@ trap cleanup EXIT
 
 THREAD='mcp:2c8f0d4e-7b1a-4f3c-9e2d-abcdef012345'
 TITLE='Print view for one recipe'
-WAITING='Waiting for captain'
+WAITING='Waiting'
 TESTING='Testing'
 
 # make_home <name> -> sets HOME_DIR and a fresh fake T3 world with one thread
@@ -149,6 +149,19 @@ declares() {  # <status-line> -> w1's status log holds exactly that line
   printf '%s\n' "$1" > "$HOME_DIR/state/w1.status"
 }
 
+# waits / unwaits: w1 declares a wait, which reads Waiting between turns, or
+# goes back to work; each then runs one pass. A captain hold is no label of
+# its own: T3 shows it on the card from the captain's list.
+waits() {
+  declares 'paused [at=1700000000]: waiting on an answer'
+  cards sync >/dev/null || fail "the pass after the wait should pass"
+}
+
+unwaits() {
+  declares 'working [at=1700000000]: back at it'
+  cards sync >/dev/null || fail "the pass after the wait ended should pass"
+}
+
 inbox_message() {  # -> the path of a fresh unhandled steering-inbox message for w1
   # shellcheck disable=SC2016  # expanded by the inner shell
   home_env bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" w1 "the captain replied"' _ "$ROOT" "$HOME_DIR/state"
@@ -165,16 +178,15 @@ await_card() {  # <label>: up to 10s
 test_wait_shows_only_between_turns() {
   local msg
   make_home turns
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a hold with the worker between turns shows the wait"
+  waits
+  assert_equals "$WAITING" "$(card_of)" "a wait with the worker between turns shows"
 
   turn_is running
   cards sync || fail "sync should pass"
   assert_equals "" "$(card_of)" "a worker mid-turn drops the wait so T3 shows Working"
-  captain open w1 || fail "the label never touches the hold"
   turn_is settled
   cards sync || fail "sync should pass"
-  assert_equals "$WAITING" "$(card_of)" "the turn ending with the hold open brings the wait back"
+  assert_equals "$WAITING" "$(card_of)" "the turn ending with the wait declared brings it back"
 
   msg=$(inbox_message) || fail "could not write an inbox message"
   cards sync || fail "sync should pass"
@@ -183,22 +195,15 @@ test_wait_shows_only_between_turns() {
   cards sync || fail "sync should pass"
   assert_equals "$WAITING" "$(card_of)" "once the message is handled and the turn is over, the wait is back"
 
-  turn_is failed
-  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
-  cards sync || fail "sync should pass"
-  assert_equals "Unchanged" "$(card_of)" "a turn that cannot be read changes no card"
-
-  turn_is settled
-  answer w1 --release || fail "the release should succeed"
-  assert_equals "" "$(card_of)" "the release still clears the card"
-  assert_absent "$HOME_DIR/state/t3-captain-wait" "no hold index is written"
-  pass "fm-t3-crew-status: the wait shows only between turns and returns when a turn ends with the hold open"
+  unwaits
+  assert_equals "" "$(card_of)" "the end of the wait clears the card"
+  pass "fm-t3-crew-status: the wait shows only between turns and returns when a turn ends with it declared"
 }
 
 test_inbox_delivery_drops_the_wait_at_once() {
   local msg
   make_home delivery
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   assert_equals "$WAITING" "$(card_of)" "the wait shows first"
   msg=$(inbox_message) || fail "could not write an inbox message"
   # shellcheck disable=SC2016  # expanded by the inner shell
@@ -206,18 +211,17 @@ test_inbox_delivery_drops_the_wait_at_once() {
     || fail "the doorbell should ring"
   await_card ""
   assert_equals "" "$(card_of)" "a delivered doorbell drops the wait within seconds, with no watcher running"
-  captain open w1 || fail "the delivery leaves the hold open"
   mkdir -p "${msg%/*}/handled" && mv "$msg" "${msg%/*}/handled/"
   turn_is settled
   cards sync || fail "sync should pass"
-  assert_equals "$WAITING" "$(card_of)" "the wait returns from the hold alone once the message is handled and the turn ends"
+  assert_equals "$WAITING" "$(card_of)" "the wait returns once the message is handled and the turn ends"
   pass "fm-task-inbox-lib: a doorbell delivered to a T3 worker drops its card's wait at once"
 }
 
 test_concurrent_syncs_end_on_the_latest_read() {
   local pids='' i
   make_home concurrent
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   turn_is running
   for i in 1 2 3 4; do
     cards sync >/dev/null 2>&1 &
@@ -235,83 +239,55 @@ test_concurrent_syncs_end_on_the_latest_read() {
   pass "fm-t3-crew-status: passes run one at a time, and a killed pass's lock is taken over"
 }
 
-test_hold_labels_and_release_clears() {
+test_captain_holds_make_no_label() {
+  local origin
   make_home own-row
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a hold on the worker's own task labels its card"
-  assert_equals "$TITLE" "$(thread_field title)" "the title stays plain"
-  answer w1 --release || fail "the release should succeed"
-  assert_equals "" "$(card_of)" "releasing the hold clears the card"
-  assert_equals "$TITLE" "$(thread_field title)" "the title is never touched"
-  assert_equals 0 "$(t3_fake_calls t3_thread_update | grep -c '"action":"rename"')" "nothing renames the thread"
-  pass "fm-t3-crew-status: a hold on the worker's task labels the card, and the release clears it"
-}
-
-test_answer_and_repeat_hold_are_clean() {
-  make_home closing-answer
+  worker_meta w1 scout
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
   captain hold w1 --reason "pick the layout, still" >/dev/null || fail "a repeated hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a repeated hold keeps the label"
-  assert_equals 1 "$(updates)" "a repeated hold updates nothing"
-  answer w1 || fail "the closing answer should succeed"
-  assert_equals "" "$(card_of)" "a closing answer clears the card"
-  pass "fm-t3-crew-status: a repeated hold changes nothing, and a closing answer clears"
-}
-
-test_status_decision_alone_is_no_captain_wait() {
-  make_home status-only
-  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
-  cards sync || fail "sync should pass"
-  assert_equals "Waiting" "$(card_of)" "a worker's own needs-decision line is a wait on firstmate"
-  captain hold w1 --reason "which layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "only firstmate holding the question makes it the captain's"
-  pass "fm-t3-crew-status: a needs-decision line alone is not a captain wait"
-}
-
-test_origin_holds_label_until_the_last_ends() {
-  local origin
-  make_home origin
-  worker_meta w1 scout
   captain hold w1-layout --title "Which layout" --reason "pick one" --origin w1 --repo sample >/dev/null \
     || fail "an origin hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a hold whose origin is the worker labels that worker"
+  assert_equals "" "$(card_of)" "a hold, on the worker's task or raised for it, is no label of its own"
+  assert_equals 0 "$(updates)" "and changes nothing on the card"
   origin=$(home_env "$ROOT/bin/fm-fleet-snapshot.sh" --contribution-input \
     | jq -r '.backlog.records[] | select(.id == "w1-layout") | .hold_origin')
   assert_equals w1 "$origin" "the snapshot carries the hold's origin as a field"
-  captain hold w1-colour --title "Which colour" --reason "pick one" --origin w1 --repo sample >/dev/null \
-    || fail "a second origin hold should succeed"
-  answer w1-layout || fail "the first answer should succeed"
-  assert_equals "$WAITING" "$(card_of)" "the label stays while another hold on the worker is open"
-  answer w1-colour || fail "the second answer should succeed"
-  assert_equals "" "$(card_of)" "the last hold ending clears the card"
-  pass "fm-t3-crew-status: a question held with --origin labels the worker until its last hold ends"
+  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
+  cards sync || fail "sync should pass"
+  assert_equals "Waiting" "$(card_of)" "a worker's own needs-decision line is a wait on firstmate"
+  answer w1 --release || fail "the release should succeed"
+  assert_equals "Waiting" "$(card_of)" "and an answer leaves it to the worker's own state"
+  assert_equals "$TITLE" "$(thread_field title)" "the title is never touched"
+  assert_equals 0 "$(t3_fake_calls t3_thread_update | grep -c '"action":"rename"')" "nothing renames the thread"
+  pass "fm-t3-crew-status: a captain hold is no label; the card follows the worker's own state"
 }
 
 test_failed_label_converges_on_the_next_sync() {
   make_home failed-label
   t3_fake_set 'w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
-  captain hold w1 --reason "pick the layout" >/dev/null 2>"$HOME_DIR/err" || fail "a failed label must not fail the hold"
+  declares 'paused [at=1700000000]: waiting on an answer'
+  cards sync >"$HOME_DIR/err" && fail "sync reports a label it could not set"
   assert_grep "could not set the status" "$HOME_DIR/err" "a failed label is reported"
   t3_fake_set 'delete w.failTools'
   cards sync || fail "the retry should pass"
   assert_equals "$WAITING" "$(card_of)" "the next pass applies the label"
 
   t3_fake_set 'w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
-  answer w1 --release || fail "a failed clear must not fail the release"
+  declares 'working [at=1700000000]: back at it'
+  cards sync >/dev/null && fail "sync reports a label it could not clear"
   assert_equals "$WAITING" "$(card_of)" "the failed clear left the label"
-  cards sync >/dev/null && fail "sync reports a label it could not set"
   t3_fake_set 'delete w.failTools'
   cards sync || fail "the retry should pass"
   assert_equals "" "$(card_of)" "the next pass clears the card"
-  pass "fm-t3-crew-status: a failed label never fails the hold or answer, and the next pass converges"
+  pass "fm-t3-crew-status: a failed label is reported, and the next pass converges"
 }
 
 test_server_down_converges_after_restart() {
   local out
   make_home restart
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   t3_fake_stop
-  answer w1 --release || fail "a release must not need T3"
+  declares 'working [at=1700000000]: back at it'
   out=$(cards sync) && fail "a pass that cannot reach T3 reports it"
   assert_contains "$out" "T3 could not take the crew cards" "the unreachable T3 is named"
   t3_fake_restart "$TMP_ROOT/server"
@@ -325,11 +301,11 @@ test_restart_that_loses_labels_is_republished() {
   local other='mcp:9d1e2f3a-4b5c-4d6e-8f70-123456789abc'
   make_home republish
   second_worker w2 "$other" scout
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   printf 'done [at=1700000000]: report ready\n' > "$HOME_DIR/state/w2.status"
   mkdir -p "$HOME_DIR/data/w2" && printf 'report\n' > "$HOME_DIR/data/w2/report.md"
   cards sync || fail "sync should pass"
-  assert_equals "$WAITING" "$(card_of)" "the first worker waits on the captain"
+  assert_equals "$WAITING" "$(card_of)" "the first worker waits"
   assert_equals "Ready" "$(card_of "$other")" "the second worker is ready"
   t3_fake_stop
   t3_fake_set 'for (const t of Object.values(w.threads)) { delete t.statusLabel; delete t.statusLabelSince; }'
@@ -342,31 +318,16 @@ test_restart_that_loses_labels_is_republished() {
 
 test_live_label_is_the_base() {
   make_home relabelled
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   FM_T3_ID=$THREAD t3_fake_set 'delete w.threads[process.env.FM_T3_ID].statusLabel'
   cards sync || fail "sync should pass"
   assert_equals "$WAITING" "$(card_of)" "the label returns on a card that lost it"
   pass "fm-t3-crew-status: a sync compares against the live card"
 }
 
-test_unreadable_backlog_leaves_the_card() {
-  local out
-  make_home unreadable
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
-  : > "$T3_FAKE_LOG"
-  chmod 000 "$HOME_DIR/data/backlog.md"
-  out=$(cards sync) && fail "a pass that cannot read the holds reports it"
-  chmod 644 "$HOME_DIR/data/backlog.md"
-  assert_contains "$out" "the backlog could not be read" "the unreadable backlog is named"
-  assert_equals "Unchanged" "$(card_of)" "holds that cannot be read change no card"
-  assert_equals "" "$(t3_fake_mutations)" "and change nothing in T3"
-  pass "fm-t3-crew-status: holds that cannot be read leave every card alone"
-}
-
 test_gone_thread_or_worker_is_no_failure() {
   make_home gone
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].archived = true'
   cards sync || fail "an archived thread is no failure"
   assert_equals "" "$(card_of)" "an archived thread loses the label"
@@ -375,43 +336,39 @@ test_gone_thread_or_worker_is_no_failure() {
   : > "$T3_FAKE_LOG"
   rm -f "$HOME_DIR/state/w1.meta"
   cards sync || fail "a worker with no record is no failure"
-  assert_equals "" "$(t3_fake_calls t3_thread_read)" "a hold with no running worker has no card to read"
-  captain open w1 || fail "the hold stays open"
-  pass "fm-t3-crew-status: a gone thread or worker is no failure and leaves the hold alone"
+  assert_equals "" "$(t3_fake_calls t3_thread_read)" "a task with no running worker has no card to read"
+  pass "fm-t3-crew-status: a gone thread or worker is no failure"
 }
 
 test_only_t3_workers_are_labelled() {
   make_home other-backend
   worker_meta w1 ship tmux
   : > "$T3_FAKE_LOG"
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  # The hold's decision sync (bin/fm-t3-needs-me.sh) may still open a
-  # session; no thread of a worker on another backend is read or changed.
+  waits
   assert_equals "" "$(t3_fake_calls t3_thread_read)$(t3_fake_mutations)" "another backend makes no T3 thread call"
   make_home secondmate
   worker_meta w1 secondmate
   : > "$T3_FAKE_LOG"
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   assert_equals "" "$(t3_fake_calls t3_thread_read)" "a secondmate's thread is no task card"
   make_home no-token
   rm -f "$HOME_DIR/config/t3code-token"
   cards sync || fail "a home without T3 has nothing to do"
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   assert_equals "" "$(card_of)" "a home without T3 labels nothing"
   pass "fm-t3-crew-status: only a recorded T3 ship or scout is labelled"
 }
 
-test_clear_takes_the_label_off_while_the_hold_stays() {
+test_clear_takes_the_label_off_while_the_wait_stays() {
   make_home clear
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   t3_fake_set 'w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
   cards clear w1 >/dev/null && fail "clear reports a label it could not take off"
   t3_fake_set 'delete w.failTools'
   cards clear w1 || fail "clear should pass"
-  assert_equals "" "$(card_of)" "clear takes the label off with the hold still open"
-  captain open w1 || fail "clear must leave the captain's hold open"
+  assert_equals "" "$(card_of)" "clear takes the label off with the wait still declared"
   cards clear w9 || fail "clearing a task with no T3 card is no failure"
-  pass "fm-t3-crew-status: clear takes the label off and leaves the hold open"
+  pass "fm-t3-crew-status: clear takes the label off whatever the records say"
 }
 
 # teardown_home <name> -> a finished scout with an open hold, ready for cleanup.
@@ -438,8 +395,9 @@ SH
 test_teardown_clears_before_it_archives() {
   local out rc
   teardown_home teardown
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "the scout waits on the captain before cleanup"
+  declares 'done [at=1700000000]: report ready'
+  cards sync || fail "sync should pass"
+  assert_equals "Ready" "$(card_of)" "the scout carries a label before cleanup"
   : > "$T3_FAKE_LOG"
   out=$(home_env FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-teardown.sh" w1 2>&1)
   rc=$?
@@ -450,7 +408,7 @@ test_teardown_clears_before_it_archives() {
   : > "$T3_FAKE_LOG"
   cards sync || fail "a pass after cleanup should pass"
   assert_equals "" "$(t3_fake_calls t3_thread_read)" "a torn-down worker's card is never visited again"
-  pass "fm-teardown.sh: clears the label before it archives a worker with an open captain wait"
+  pass "fm-teardown.sh: clears the label before it archives a worker's thread"
 }
 
 test_testing_follows_the_run() {
@@ -512,32 +470,22 @@ test_a_pass_that_finds_another_running_is_owed() {
   pass "fm-t3-crew-status: a pass that finds another running is owed, and the next pass reads every run"
 }
 
-test_waiting_outranks_testing() {
+test_testing_outranks_a_declared_wait() {
   local since
   make_home outranks
   in_a_run
   run_is running
   cards sync || fail "the pass should pass"
   assert_equals "$TESTING" "$(card_of)" "the run shows first"
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a hold outranks the run at once"
-  cards sync || fail "the pass should pass"
-  assert_equals "$WAITING" "$(card_of)" "a later pass keeps the wait on top"
-  turn_is running
-  cards sync || fail "the pass should pass"
-  assert_equals "$TESTING" "$(card_of)" "a worker mid-turn through the wait shows its active run"
-  turn_is settled
-  cards sync || fail "the pass should pass"
-  assert_equals "$WAITING" "$(card_of)" "the turn's end puts the wait back on top"
   since=$(thread_field statusLabelSince)
-  sleep 1
-  answer w1 --release || fail "the release should succeed"
-  assert_equals "$TESTING" "$(card_of)" "the end of the wait falls back to the run"
-  [ "$(thread_field statusLabelSince)" != "$since" ] || fail "Testing after a wait starts its own clock"
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
+  assert_equals "$TESTING" "$(card_of)" "an active run outranks a hold and a declared wait"
+  assert_equals "$since" "$(thread_field statusLabelSince)" "and Testing keeps its clock"
   run_is ended
   cards sync || fail "the pass should pass"
-  assert_equals "" "$(card_of)" "then the end of the run clears the card"
-  pass "fm-t3-crew-status: Waiting for captain outranks Testing, and Testing returns when the wait ends"
+  assert_equals "$WAITING" "$(card_of)" "the end of the run shows the declared wait"
+  pass "fm-t3-crew-status: Testing outranks a declared wait, and a hold adds nothing"
 }
 
 test_a_scout_never_shows_testing() {
@@ -579,14 +527,35 @@ test_declared_states_label_between_turns() {
   pass "fm-t3-crew-status: Waiting, Ready, and Failed follow the worker's state between turns"
 }
 
+# A turn T3 reports in no known way leaves a card whose label depends on the
+# turn as it is: T3's failed status is neither working nor between turns.
+test_unreadable_turn_leaves_the_card() {
+  local out
+  make_home unread-turn
+  turn_is failed
+  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
+  jq -n --arg t "$THREAD" '{cards: [{thread: $t, between: "Waiting", working: ""}]}' > "$HOME_DIR/cards.json"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  out=$(home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_source t3code && fm_backend_t3code_mcp crew-status --file "$2"' \
+    _ "$ROOT" "$HOME_DIR/cards.json") || fail "the pass should succeed: $out"
+  assert_equals '"left"' "$(printf '%s' "$out" | jq '.cards[0].outcome')" "the card is left"
+  assert_equals "Unchanged" "$(card_of)" "a turn that cannot be read changes no card"
+  jq -n --arg t "$THREAD" '{cards: [{thread: $t, between: "Waiting", working: "Waiting"}]}' > "$HOME_DIR/cards.json"
+  # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
+  home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_source t3code && fm_backend_t3code_mcp crew-status --file "$2"' \
+    _ "$ROOT" "$HOME_DIR/cards.json" >/dev/null || fail "the second pass should succeed"
+  assert_equals "$WAITING" "$(card_of)" "a label that does not depend on the turn is still set"
+  pass "fm-t3-crew-status: a turn T3 cannot report leaves a card whose label depends on it"
+}
+
 test_older_t3_breaks_nothing() {
   local out rc
   teardown_home older
   t3_fake_set 'delete w.statusLabels'
-  captain hold w1 --reason "pick the layout" >"$HOME_DIR/out" 2>&1 || fail "an older T3 must not fail the hold"
+  declares 'paused [at=1700000000]: waiting on an answer'
+  cards sync >"$HOME_DIR/out" 2>&1 || fail "an older T3 is no failed pass"
   assert_equals 0 "$(grep -c "could not" "$HOME_DIR/out")" "an older T3 is no failure to report"
   assert_equals 0 "$(updates)" "an older T3 is sent nothing it would refuse"
-  cards sync || fail "an older T3 is no failed pass"
 
   t3_fake_set 'w.statusLabels = true'
   cards sync || fail "the pass should pass"
@@ -594,7 +563,7 @@ test_older_t3_breaks_nothing() {
   cards clear w1 || fail "clear should pass"
 
   t3_fake_set 'delete w.statusLabels'
-  captain hold w1 --reason "pick the layout, still" >/dev/null || fail "a repeat hold should succeed"
+  declares 'done [at=1700000000]: report ready'
   out=$(home_env FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-teardown.sh" w1 2>&1)
   rc=$?
   expect_code 0 "$rc" "an older T3 must not fail cleanup: $out"
@@ -620,7 +589,8 @@ await_card_then_stop_watcher() {  # <label>
 test_watcher_repairs_within_its_loop() {
   make_home watcher
   t3_fake_set 'w.failTools = { t3_thread_update: { code: "orchestration_error", message: "no" } }'
-  captain hold w1 --reason "pick the layout" >/dev/null 2>&1 || fail "hold should succeed"
+  declares 'paused [at=1700000000]: waiting on an answer'
+  cards sync >/dev/null && fail "the failed update is reported"
   t3_fake_set 'delete w.failTools'
   start_watcher
   await_card_then_stop_watcher "$WAITING"
@@ -642,7 +612,7 @@ test_watcher_shows_an_active_run() {
 test_watcher_brings_the_wait_back_when_the_run_ends() {
   local i=0
   make_home watcher-turn
-  captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
+  waits
   turn_is running
   start_watcher
   await_card ""
@@ -655,7 +625,7 @@ test_watcher_brings_the_wait_back_when_the_run_ends() {
   turn_is settled
   await_card_then_stop_watcher "$WAITING"
   assert_equals "$WAITING" "$(card_of)" "the run's end brings the wait back long before the minute pass"
-  pass "fm-watch.sh: a T3 run ending with the hold open brings the wait back at once"
+  pass "fm-watch.sh: a T3 run ending with a wait declared brings the wait back at once"
 }
 
 kept_review() {  # <state> [kind] [target] -> w1 is a finished scout kept in that review state
@@ -663,12 +633,12 @@ kept_review() {  # <state> [kind] [target] -> w1 is a finished scout kept in tha
   declares "done [at=$(date +%s)]: report written"
 }
 
-test_kept_review_waits_for_the_captain() {
+test_kept_review_is_plain_finished_work() {
   local msg
   make_home kept-review
   kept_review waiting
   cards sync || fail "sync should pass"
-  assert_equals "$WAITING" "$(card_of)" "a published kept review waits for the captain with no hold at all"
+  assert_equals Ready "$(card_of)" "a published kept review is finished work: its To read label is T3's, from the list"
   turn_is running
   cards sync || fail "sync should pass"
   assert_equals "" "$(card_of)" "the captain writing in the thread shows T3's Working"
@@ -678,50 +648,34 @@ test_kept_review_waits_for_the_captain() {
   assert_equals "" "$(card_of)" "an unhandled steering-inbox message reads as work"
   mkdir -p "${msg%/*}/handled" && mv "$msg" "${msg%/*}/handled/"
   cards sync || fail "sync should pass"
-  assert_equals "$WAITING" "$(card_of)" "the review waits again once the turn ends"
-
+  assert_equals Ready "$(card_of)" "and Ready again once the turn ends"
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  assert_equals "$WAITING" "$(card_of)" "a real call on the review reads the same"
   answer w1 --release || fail "the release should succeed"
-  assert_equals "$WAITING" "$(card_of)" "answering the call never closes the exploration"
-  assert_grep 't3_review=waiting' "$HOME_DIR/state/w1.meta" "the answer leaves the review kept"
+  assert_grep 't3_review=waiting' "$HOME_DIR/state/w1.meta" "an answer leaves the review kept"
   [ -z "$(t3_fake_calls t3_thread_organize)" ] || fail "an answer must never archive or reorganize the kept thread"
-
-  kept_review pending
-  cards sync || fail "sync should pass"
-  assert_equals Ready "$(card_of)" "a handoff not yet published is plain finished work"
-  kept_review waiting ship
-  cards sync || fail "sync should pass"
-  assert_equals Ready "$(card_of)" "a ship never keeps its thread, even with a leftover review record"
-  kept_review waiting scout mcp:another-thread
-  cards sync || fail "sync should pass"
-  assert_equals Ready "$(card_of)" "a review kept on another thread counts for nothing here"
-  pass "fm-t3-crew-status: a published kept review reads Waiting for captain between turns, through answers, and only for its own scout thread"
+  pass "fm-t3-crew-status: a kept review carries no captain label of its own, and an answer never closes it"
 }
 
-test_kept_review_waits_for_the_captain
+test_kept_review_is_plain_finished_work
 test_wait_shows_only_between_turns
 test_inbox_delivery_drops_the_wait_at_once
 test_concurrent_syncs_end_on_the_latest_read
 test_watcher_brings_the_wait_back_when_the_run_ends
-test_hold_labels_and_release_clears
-test_answer_and_repeat_hold_are_clean
-test_status_decision_alone_is_no_captain_wait
-test_origin_holds_label_until_the_last_ends
+test_captain_holds_make_no_label
 test_failed_label_converges_on_the_next_sync
 test_server_down_converges_after_restart
 test_restart_that_loses_labels_is_republished
 test_live_label_is_the_base
-test_unreadable_backlog_leaves_the_card
 test_gone_thread_or_worker_is_no_failure
 test_only_t3_workers_are_labelled
-test_clear_takes_the_label_off_while_the_hold_stays
+test_clear_takes_the_label_off_while_the_wait_stays
 test_teardown_clears_before_it_archives
 test_testing_follows_the_run
 test_a_pass_that_finds_another_running_is_owed
-test_waiting_outranks_testing
+test_testing_outranks_a_declared_wait
 test_a_scout_never_shows_testing
 test_declared_states_label_between_turns
+test_unreadable_turn_leaves_the_card
 test_older_t3_breaks_nothing
 test_watcher_repairs_within_its_loop
 test_watcher_shows_an_active_run

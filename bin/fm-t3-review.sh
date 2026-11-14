@@ -12,46 +12,63 @@
 #   fm-t3-review.sh retain <task-id> --summary-file <file> --body-file <file>
 #     Firstmate runs this for a finished T3 scout once it has read the whole
 #     report and the captain-call completion gate (bin/fm-captain-hold.sh
-#     verify) passes. It composes the one handoff note in a fixed order -
+#     verify) passes. It composes firstmate's handoff in a fixed order -
 #     "Firstmate summary", "Full explanation", then a link to the report at
 #     data/<id>/report.md by absolute path - writes it to
-#     data/<id>/handoff-r<n>.md, records t3_review=pending with its revision
-#     and stable request id, and only then publishes (as publish below).
-#     The request id is derived from this home, the task, its spawn
-#     generation, the report, and the note, so running retain again with the
-#     same words is the same publication, and a revised report or handoff is
-#     a new revision with a new note. Exit 4, keeping no record, when the
-#     task is not a T3 scout, the gate fails, the captain already closed
-#     the review, or T3 cannot keep threads (then clean up as usual). An
-#     unreachable T3 still records the handoff, which the watcher retries.
+#     data/<id>/handoff-r<n>.md as firstmate's own record of what it relayed
+#     (nothing is posted into the thread), records t3_review=pending with
+#     its revision and stable key, holds the scout's task for the captain as
+#     To read (bin/fm-captain-hold.sh hold --read, the summary's first line as
+#     the reason; a decision already open on it stays one), so the backlog is
+#     what says it waits to be read, and only
+#     then publishes (as publish below). The key is derived from this home, the task, its spawn
+#     generation, the report, and the handoff, so running retain again with
+#     the same words changes nothing, and a revised report or handoff is a
+#     new revision. Exit 4, keeping no record, when the task is not a T3
+#     scout, the gate fails, the captain already closed the review, or T3
+#     cannot keep threads (then clean up as usual). An unreachable T3 still
+#     records the handoff, which the watcher retries.
 #   fm-t3-review.sh publish <task-id>
-#     Publish a pending handoff: one passive note (no worker turn), the tag
-#     "waiting for captain", automatic settling off, each proven by
-#     read-back; then t3_review=waiting. A thread he archived or deleted
-#     first records t3_review=closed instead (his close wins). A busy thread
-#     exits 75 and stays pending; any other failure exits 1 and stays pending
-#     for retry, never archived. A T3 too old to keep threads drops the
-#     record and exits 4, so the scout is cleaned up as usual.
+#     Publish a pending review: the tag "waiting for captain" and automatic
+#     settling off, each proven by read-back, with no note and no worker
+#     turn; then t3_review=waiting. A thread he archived or deleted first
+#     records t3_review=closed instead, with the close wake. A busy thread exits 75 and stays pending; any
+#     other failure exits 1 and stays pending for retry, never archived. A T3
+#     too old to keep threads drops the record and exits 4, so the scout is
+#     cleaned up as usual.
 #   fm-t3-review.sh reconcile
-#     The watcher's minute pass over every retained review: a pending one is
+#     The pass over every retained review that bin/fm-t3-captain-sync.sh
+#     check runs every ten minutes: a pending one is
 #     published, and one a T3 too old to keep threads drops leaves the same
 #     cleanup wake as a close; a waiting one whose thread now reads archived
-#     or deleted is recorded closed, and leaves one wake for firstmate in
-#     state/t3-review/<id>.closed; a closed one he has reopened goes back to
-#     waiting (or pending, if it was never published). A thread T3 cannot
-#     read changes nothing. A record whose lock is held (cleanup is running)
-#     is skipped until the next pass. Never revives, steers, or archives.
+#     or deleted is recorded closed with the close wake, so the scout is
+#     cleaned up. A closed one stays closed: a thread he restores afterwards
+#     reopens nothing and holds nothing again. A thread T3 cannot read
+#     changes nothing. A record whose lock is held (cleanup is
+#     running) is skipped until the next pass. Never revives, steers, or
+#     archives.
+#   fm-t3-review.sh closed <task-id>
+#     The captain archived the scout's own To read item on its kept card (T3
+#     logged it, and bin/fm-t3-captain-sync.sh apply runs this at once, then
+#     marks that item read): t3_review=closed and one wake for firstmate in
+#     state/t3-review/<id>.closed. A record already closed changes nothing.
 #   fm-t3-review.sh check-close <task-id>
 #     bin/fm-teardown.sh runs this, holding the task's meta lock
 #     (FM_T3_REVIEW_META_LOCK_HELD=1), before any destructive step: exit 0
-#     when the thread reads deleted, or archived on a T3 that can fence it
-#     (recorded closed either way); exit 1 while it is still open, or when
-#     this T3 can never fence it; exit 3 when T3 cannot be read, which never
-#     counts as closed.
+#     when the review is recorded closed, or its thread reads deleted, or
+#     archived, on a T3 that can fence it (recorded closed either way); exit
+#     1 while the review is open and its thread too, or when this T3 can
+#     never fence it; exit 3 when T3 cannot be read, which never counts as
+#     closed.
+#
+# A closed review closes no captain item: the captain's Archive on an item
+# closes that item alone (bin/fm-t3-captain-sync.sh apply), so a decision
+# raised with --origin the scout, or any other item, stays as it is. Nothing
+# is deleted: the report, the handoff, and the task's data stay.
 #
 # Record fields (state/<id>.meta): t3_review (pending|waiting|closed),
 # t3_review_target (the thread), t3_review_revision, t3_review_request (the
-# note's stable request id), t3_review_message (the published note's id).
+# handoff's stable key).
 #
 # Exit: 0 success; 1 failure (a line on stdout or stderr says which); 2 usage;
 # 3 T3 unreadable (check-close); 4 not retained (retain, publish); 75 busy
@@ -67,7 +84,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 ALERTS="$STATE/t3-review"
 
 usage() {
-  sed -n '11,49p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '/^# Usage:/,/^# Archive is/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -135,7 +152,7 @@ set_fields() {
   mv -f -- "$tmp" "$meta" || { rm -f -- "$tmp"; return 1; }
 }
 
-CLEARED_FIELDS=(t3_review= t3_review_target= t3_review_revision= t3_review_request= t3_review_message=)
+CLEARED_FIELDS=(t3_review= t3_review_target= t3_review_revision= t3_review_request=)
 
 mcp() {
   fm_backend_source t3code >/dev/null 2>&1 || { echo '{"ok":false,"error":{"code":"adapter","message":"the T3 adapter could not load"}}'; return 1; }
@@ -164,11 +181,10 @@ leave_close_wake() {  # <id> [what happened]
 # Returns 5 instead of 4 when it dropped the record because T3 cannot keep
 # threads; the publish and retain verbs exit 4 for it.
 publish_task() {
-  local id=$1 meta="$STATE/$1.meta" state thread rev request handoff out rc=0 outcome message
+  local id=$1 meta="$STATE/$1.meta" state thread request out rc=0 outcome
   lock "$id" || die "cannot lock $id's record"
   state=$(fm_t3_review_state "$meta")
   thread=$(fm_meta_get "$meta" t3_thread_id)
-  rev=$(fm_meta_get "$meta" t3_review_revision)
   request=$(fm_meta_get "$meta" t3_review_request)
   release
   case "$state" in
@@ -177,9 +193,7 @@ publish_task() {
     closed) echo "t3-review: $id was closed by the captain; nothing to publish"; return 0 ;;
     *) echo "t3-review: $id keeps no review" >&2; return 4 ;;
   esac
-  handoff="$DATA/$id/handoff-r$rev.md"
-  [ -f "$handoff" ] || die "$id's handoff $handoff is missing; run retain again"
-  out=$(mcp review-publish --thread "$thread" --note-file "$handoff" --request-id "$request" --tag "$FM_T3_REVIEW_TAG") || rc=$?
+  out=$(mcp review-publish --thread "$thread" --tag "$FM_T3_REVIEW_TAG") || rc=$?
   outcome=$(printf '%s' "$out" | json outcome || true)
   if [ "$rc" = 4 ] && [ "$(printf '%s' "$out" | json error.code || true)" = review_unsupported ]; then
     lock "$id" || die "cannot lock $id's record"
@@ -192,7 +206,7 @@ publish_task() {
     echo "t3-review: this T3 cannot keep $id's thread ($(head -n 1 "$WORK/mcp.err")); it is cleaned up as usual" >&2
     return "$rc"
   fi
-  [ "$rc" = 0 ] || { echo "t3-review: $id's handoff is not published yet ($(head -n 1 "$WORK/mcp.err" | grep . || echo "exit $rc")); it stays kept and is retried" >&2; return 1; }
+  [ "$rc" = 0 ] || { echo "t3-review: $id's thread is not marked kept yet ($(head -n 1 "$WORK/mcp.err" | grep . || echo "exit $rc")); it stays kept and is retried" >&2; return 1; }
   lock "$id" || die "cannot lock $id's record"
   if [ "$(fm_meta_get "$meta" t3_review_request)" != "$request" ] || [ "$(fm_t3_review_state "$meta")" != pending ]; then
     release
@@ -201,20 +215,19 @@ publish_task() {
   fi
   case "$outcome" in
     published)
-      message=$(printf '%s' "$out" | json messageId)
-      set_fields "$meta" t3_review=waiting "t3_review_message=$message" || die "cannot record $id's publication"
+      set_fields "$meta" t3_review=waiting || die "cannot record $id's publication"
       release
-      echo "t3-review: $id's handoff is published; the thread waits for the captain"
+      echo "t3-review: $id's thread is kept and waits for the captain"
       ;;
     closed)
       set_fields "$meta" t3_review=closed || die "cannot record $id's close"
       release
       leave_close_wake "$id"
-      echo "t3-review: the captain closed $id's thread before the handoff landed; clean it up with bin/fm-teardown.sh $id"
+      echo "t3-review: the captain closed $id's thread before it was marked kept; clean it up with bin/fm-teardown.sh $id"
       ;;
     busy)
       release
-      echo "t3-review: $id's thread is busy; its handoff waits for the turn to end"
+      echo "t3-review: $id's thread is busy; it is marked kept once the turn ends"
       return 75
       ;;
     *)
@@ -244,7 +257,7 @@ cmd_retain() {
   thread=$(fm_meta_get "$meta" t3_thread_id)
   [ -n "$thread" ] || die "$id records no T3 thread"
   [ "$(fm_t3_review_state "$meta")" != closed ] || {
-    echo "t3-review: the captain already closed $id's thread; it is not reopened for a new note" >&2
+    echo "t3-review: the captain already closed $id's thread; it is not kept again" >&2
     return 4
   }
   report="$DATA/$id/report.md"
@@ -275,11 +288,9 @@ cmd_retain() {
     sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$body"
     printf '\n[Full report (Markdown)](%s)\n' "$link"
   } > "$note" || die "cannot compose the handoff"
-  [ "$(wc -c < "$note" | tr -d ' ')" -le 120000 ] || die "the handoff is longer than the 120000 characters a T3 note holds"
   gen=$(fm_meta_get "$meta" spawn_gen | sha | cut -c1-8)
   key=$( { cat "$note"; sha < "$report"; } | sha | cut -c1-12)
   request="fm-review-$(printf '%s' "$FM_HOME" | sha | cut -c1-8)-$id-$gen-$key"
-  [ "${#request}" -le 256 ] || die "the task id is too long for a T3 note request id"
   lock "$id" || die "cannot lock $id's record"
   state=$(fm_t3_review_state "$meta")
   [ "$state" != closed ] || { release; echo "t3-review: the captain closed $id's thread meanwhile" >&2; return 4; }
@@ -290,10 +301,15 @@ cmd_retain() {
     rev=$(( ${prev:-0} + 1 ))
     { mkdir -p "$DATA/$id" && cp -f -- "$note" "$DATA/$id/handoff-r$rev.md"; } || { release; die "cannot write $id's handoff"; }
     set_fields "$meta" t3_review=pending "t3_review_target=$thread" "t3_review_revision=$rev" \
-      "t3_review_request=$request" t3_review_message= || { release; die "cannot record $id's handoff"; }
+      "t3_review_request=$request" || { release; die "cannot record $id's handoff"; }
     release
     echo "t3-review: $id's handoff revision $rev is recorded; its thread and copy are kept until the captain closes the thread"
   fi
+  # The backlog, not this record, is what says the report waits to be read.
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" --read \
+      --reason "$(grep -m 1 . "$summary" | cut -c1-4000)" >/dev/null 2>"$WORK/hold.err" </dev/null \
+    || die "$id's report could not be held To read for the captain: $(grep . "$WORK/hold.err" | tail -n 1)"
   rc=0
   publish_task "$id" || rc=$?
   [ "$rc" != 5 ] || rc=4
@@ -303,9 +319,9 @@ cmd_retain() {
 
 # reconcile_task <id>: one record of the minute pass.
 reconcile_task() {
-  local id=$1 meta="$STATE/$1.meta" state thread out exists archived next rc=0
+  local id=$1 meta="$STATE/$1.meta" state thread out exists archived rc=0
   state=$(fm_t3_review_state "$meta")
-  [ -n "$state" ] || return 0
+  case "$state" in ''|closed) return 0 ;; esac
   if [ "$state" = pending ]; then
     # Never wait on a record cleanup is holding; the next pass gets it.
     lock "$id" try || return 0
@@ -321,16 +337,10 @@ reconcile_task() {
   lock "$id" try || return 0
   [ "$(fm_t3_review_state "$meta")" = "$state" ] || { release; return 0; }
   if [ "$exists" = false ] || [ "$archived" = true ]; then
-    if [ "$state" = waiting ]; then
-      set_fields "$meta" t3_review=closed || { release; return 1; }
-      release
-      leave_close_wake "$id"
-    fi
-  elif [ "$state" = closed ]; then
-    next=pending
-    [ -z "$(fm_meta_get "$meta" t3_review_message)" ] || next=waiting
-    set_fields "$meta" "t3_review=$next" || { release; return 1; }
-    rm -f -- "$ALERTS/$id.closed"
+    set_fields "$meta" t3_review=closed || { release; return 1; }
+    release
+    leave_close_wake "$id"
+    return 0
   fi
   release
 }
@@ -349,6 +359,24 @@ cmd_reconcile() {
   return "$rc"
 }
 
+cmd_closed() {
+  local id=${1:-} meta
+  { [ "$#" = 1 ] && valid_id "$id"; } || usage
+  meta="$STATE/$id.meta"
+  [ -n "$(fm_t3_review_state "$meta")" ] || { echo "t3-review: $id keeps no review" >&2; return 1; }
+  lock "$id" || die "cannot lock $id's record"
+  if [ "$(fm_t3_review_state "$meta")" = closed ]; then
+    release
+    echo "t3-review: $id's thread is already recorded closed"
+    return 0
+  fi
+  set_fields "$meta" t3_review=closed || { release; die "cannot record $id's close"; }
+  release
+  leave_close_wake "$id" "the captain archived the review's report on its card"
+  refresh_cards
+  echo "t3-review: $id's review is recorded closed"
+}
+
 cmd_check_close() {
   local id=${1:-} meta out exists archived
   { [ "$#" = 1 ] && valid_id "$id"; } || usage
@@ -360,9 +388,11 @@ cmd_check_close() {
   }
   exists=$(printf '%s' "$out" | json exists) || { echo "t3-review: T3 answered $id's thread read with no state" >&2; return 3; }
   archived=$(printf '%s' "$out" | json archived || echo false)
-  if [ "$exists" = false ] || [ "$archived" = true ]; then
+  if [ "$(fm_t3_review_state "$meta")" = closed ] || [ "$exists" = false ] || [ "$archived" = true ]; then
     lock "$id" || die "cannot lock $id's record"
-    [ "$(fm_meta_get "$meta" t3_review)" = closed ] || set_fields "$meta" t3_review=closed || { release; die "cannot record $id's close"; }
+    if [ "$(fm_meta_get "$meta" t3_review)" != closed ]; then
+      set_fields "$meta" t3_review=closed || { release; die "cannot record $id's close"; }
+    fi
     release
     rm -f -- "$ALERTS/$id.closed"
     # An archived thread is fenced before its copy goes back; a T3 that can
@@ -376,7 +406,7 @@ cmd_check_close() {
     fi
     return 0
   fi
-  echo "t3-review: $id's thread is kept open for the captain; it is cleaned up once he archives or deletes it in T3" >&2
+  echo "t3-review: $id's thread is kept open for the captain; it is cleaned up once he archives its report on the card, or archives or deletes the thread, in T3" >&2
   return 1
 }
 
@@ -391,6 +421,7 @@ case "$VERB" in
     exit "$rc"
     ;;
   reconcile) cmd_reconcile "$@" ;;
+  closed) cmd_closed "$@" ;;
   check-close) cmd_check_close "$@" ;;
   *) usage ;;
 esac

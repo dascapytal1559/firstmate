@@ -13,6 +13,13 @@
 # POSIX. Line 1 keeps its whole-line pid format because every other reader
 # takes the first line as the pid.
 #
+# Acquisition serializes through state/.lock.acquire. Both claim paths use
+# fm-wake-lib.sh's stale real-directory recovery for that lock and its .steal
+# mutex, and opt into fm_lock_acquire_wait's --refuse-unreapable mode. When
+# recovery reports an unremovable stale directory, acquisition exits 1 naming
+# the path to inspect for contents or permission problems. Live contention has no new
+# deadline. tests/fm-watcher-lock.test.sh covers recovery and refusal.
+#
 # The trusted id itself is recorded beside the lock in state/.lock-session, a
 # sidecar written only here and only under the claim lock: refreshed on every
 # confirmed-own acquisition, including the early already-mine exit that waits
@@ -35,6 +42,11 @@
 # lock stays busy past LEASE_LOCK_WAIT seconds, the confirmation only refreshes
 # the sidecar, as for a line 1 in the ancestry, and a later acquisition
 # re-anchors.
+#
+# A refusal names the live holder. When that holder is the earlier session on
+# this session's own T3 thread (holder_on_this_t3_thread below), which happens
+# when T3 starts a fresh session without ending the previous one, it says so
+# and names the safe remedy.
 #
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
 #        fm-lock.sh status    print holder and liveness; always exits 0.
@@ -213,7 +225,7 @@ publish_lock_session_or_die() {
 confirm_own_lock() {  # <recorded-pid>
   local recorded pids waited=0
   if [ "$CLAIM_LOCK_HELD" -ne 1 ]; then
-    fm_lock_acquire_wait "$CLAIM_LOCK"
+    fm_lock_acquire_wait "$CLAIM_LOCK" --refuse-unreapable || exit 1
     CLAIM_LOCK_HELD=1
     waited=1
   fi
@@ -238,12 +250,26 @@ confirm_own_lock() {  # <recorded-pid>
   return 1
 }
 
+# Whether the live holder runs on the same T3 thread as this session: T3 names
+# each agent's thread in T3CODE_THREAD_ID, and only the session holding the
+# lock writes state/t3-main-thread (bin/fm-session-start.sh), right after it
+# acquires. A record older than line 1 predates the holder and proves nothing,
+# and with no thread id on either side nothing is claimed.
+holder_on_this_t3_thread() {
+  local id=${T3CODE_THREAD_ID:-} record="$STATE/t3-main-thread" holder
+  case "$id" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -f "$record" ] && [ ! -L "$record" ] && [ ! "$record" -ot "$LOCK" ] || return 1
+  holder=$(cat "$record" 2>/dev/null) || return 1
+  [ "$holder" = "$id" ]
+}
+
 refuse_live_owner() {  # <recorded-pid>
-  local recorded
-  if recorded=$(fm_session_lock_recorded_session_id "$STATE"); then
-    echo "error: another live firstmate session holds the lock (pid $1, session $recorded); operate read-only until resolved" >&2
+  local who="pid $1" recorded
+  recorded=$(fm_session_lock_recorded_session_id "$STATE") && who="$who, session $recorded"
+  if holder_on_this_t3_thread; then
+    echo "error: the previous firstmate session on this T3 thread ($T3CODE_THREAD_ID) is still running and holds the lock ($who); its replies no longer reach the thread. Safe remedy: end that earlier session with kill $1 (the SIGTERM T3 sends a replaced session; its unacknowledged wakes stay queued for this one), then run bin/fm-session-start.sh again here; operate read-only until resolved" >&2
   else
-    echo "error: another live firstmate session holds the lock (pid $1); operate read-only until resolved" >&2
+    echo "error: another live firstmate session holds the lock ($who); operate read-only until resolved" >&2
   fi
   exit 1
 }
@@ -266,7 +292,7 @@ if [ "$CLAIM_LOCK_HELD" -ne 1 ]; then
       echo "error: the prior session's bounded startup sweep is finishing; operate read-only until it releases the fleet lock" >&2
       exit 1
     fi
-    fm_lock_acquire_wait "$CLAIM_LOCK"
+    fm_lock_acquire_wait "$CLAIM_LOCK" --refuse-unreapable || exit 1
   fi
   CLAIM_LOCK_HELD=1
 fi

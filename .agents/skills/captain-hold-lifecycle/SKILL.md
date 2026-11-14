@@ -1,7 +1,7 @@
 ---
 name: captain-hold-lifecycle
 description: >-
-  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, before raising or updating a captain call in chat, when recording or routing the captain's answer, and on any RECORD DIVERGENCE line the wake drain prints.
+  Load before treating an investigation, scout report, structured review, or Lavish review as complete, before ending a visual review that exposed a captain decision, before raising or updating a captain call in chat, when recording or routing the captain's answer, on a `check: t3-captain` wake, and on any RECORD DIVERGENCE line the wake drain prints.
 user-invocable: false
 metadata:
   internal: true
@@ -18,15 +18,17 @@ The agent performs the semantic inventory because scripts must not infer captain
 Every unresolved question that belongs to the captain and is discovered while producing, reading, presenting, or ending an investigation or visual review must be carried by a captain-held task in the authoritative backlog of the home that owns the originating work before that work or review may be treated as complete.
 For a Lavish board-backed handoff, pass the reply through `bin/fm-procevent-lavish.sh arm --agent-reply-file` before appending the status; the adapter owns version-specific acceptance ordering.
 Prefer holding the work item the question gates over minting a new row; create a new task only when no work item exists to hold.
-When only the captain can unblock a live worker, hold its task, or a task with `--origin <worker>`, as you escalate: that hold is what a T3 worker's card shows as waiting for the captain, and a worker's `needs-decision` line is not.
+When only the captain can unblock a live worker, hold its task, or a task with `--origin <worker>`, as you escalate: that hold is what a T3 worker's card shows as Needs you, and a worker's `needs-decision` line is not.
+A finished report with nothing to decide is held `--read` instead: it shows as To read and is never a captain call, so `complete` refuses it.
 The originating investigation or review is never its own inventory entry, so hold a separate task for the call and pass `--origin <origin-id>` so `complete` can check it.
 Put the question and its options in the hold reason, and keep one held task per genuine gate: a multi-question review is one held task pointing at its report, not a row per question. Represent that task with exactly one board card that consolidates its questions and options; never fan one task id into duplicate same-key cards.
 Register or re-hold through `bin/fm-captain-hold.sh hold`, which is idempotent per task id.
 Write the ask once and say it twice: before raising a held call in chat, record the message section you are about to send, its question, options, and any report or picture with `bin/fm-captain-hold.sh context <id>`, then send that same text.
 When you tell the captain something new about a held call, record it with `context <id> --changed "<one line>"` in the same turn.
-That record is the original context the captain's T3 Bridge shows for the call; without it the Bridge falls back to the hold reason.
-A captain message carrying a `needs-me-task: <task-id>` line is his reply from the Bridge (`bin/fm-t3-needs-me.sh reply-task` reads the id): it is his answer to that task, recorded with `answer <id> --decision-file` in his words, or `hold <id> --until <date>` for Later, exactly as any chat answer, through no other channel.
-When such a reply leaves the call open, record what changed with `context --changed` so the call shows on his Bridge again instead of staying hidden as answered.
+That record is the original context the captain's T3 list carries for the call; without it the hold reason stands in.
+A captain message carrying a `needs-me-task: <task-id>` line is his reply from the item's card (`bin/fm-t3-needs-me.sh reply-task` reads the id): it is his answer to that task, recorded with `answer <id> --decision-file` in his words, or `snooze <id> --until <when>` for Later, exactly as any chat answer, through no other channel.
+When such a reply leaves the call open, record what changed with `context --changed` so its card leaves Replied and reads Needs you again.
+His Snooze, Bring back, and Archive in T3 reach the backlog on their own (`bin/fm-t3-captain-sync.sh`); an Archive closes a decision as not pursued, so never re-raise it unasked, and a `check: t3-captain <id>` wake asks you to wind that worker down through its normal safe cleanup.
 A captain message carrying a `rule-answer: <id> <choice>` line is his tap on a rule's recommendation on the Bridge: record it with `bin/fm-rules.sh answer <id> <choice>` and make the rule-file edit it prints (docs/t3code-backend.md "Rules").
 After inventorying the whole report and review surface, firstmate runs `bin/fm-captain-hold.sh complete` with every captain-held task id, or with `--none` when nothing waits on the captain.
 A scout may attest its own empty inventory only through the narrow command exception in its generated brief's Definition of done.
@@ -36,13 +38,21 @@ Run the command in the originating work's authoritative `FM_HOME`; secondmate-ow
 Do not close a captain-held task merely because the originating investigation completed, its report was archived, its visual review ended, or its task was torn down.
 A finished T3 scout kept for the captain (`scout-completion`) is independent of this inventory: keeping it never mints a call, answering or releasing a call raised for it leaves its thread open until he closes it, and his closing the thread answers nothing.
 Holding the work item the question gates is safe for exactly that reason: cleanup keeps such a row open with the finished work's deliverable recorded and returns it to the queue, so it still reads as the captain's own call.
-Only `answer` with the captain's words or an evidence-backed `reconcile close` may resolve it.
+Only `answer` with the captain's words, an evidence-backed `reconcile close`, or the declared PR settlement policy below may resolve it.
 
-Never close anything the captain owns without recording what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
+When [PR hold settlement](../../../docs/configuration.md#pr-hold-settlement-confighold-pr-settle) is enabled, declare a `pr-policy` only when its specified forge event answers the whole held question.
+Use `close` only for a decision-only task, and `release` when the task still contains unfinished work.
+A structured PR link alone never authorizes settlement.
+The contribution observer records the event as evidence, not as a captain answer, and settles matching holds without a model turn.
+An unmatched unmerged closure remains an open question and arrives as a contribution notification.
+Read that fact before presenting the remaining choice, rather than asking whether to merge the closed PR.
+The script's help owns policy registration, supported events, and retry mechanics.
+
+When recording a captain answer, preserve what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
 When the answer changes what a task must build, follow `AGENTS.md` section 7's mid-task ask rule to preserve the captain's words in the brief and steer the worker.
-When the captain says "later", that is an answer too: re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` so the item leaves the live Captain's Call and resurfaces on its date, instead of leaving a live-looking card or fabricating a closure.
+When the captain says "later", that is an answer too: snooze it with `bin/fm-captain-hold.sh snooze <id> --until <date or time>` (or with no `--until` when he names no time) so the item leaves the live Captain's Call and resurfaces then, instead of leaving a live-looking card or fabricating a closure; your own later updates never bring it back, `unsnooze` does.
 "A keyed answer resolves its matching captain-held task" is one capability with one owner, `bin/fm-captain-hold.sh answers`, and every channel that carries a captain answer feeds it the same task id and answer; a channel never maps keys to tasks, records a decision, or resolves anything itself.
 Chat already feeds it through `bin/fm-send.sh --resolve-key`, and a captured-answer source feeds it once bound with `bin/fm-captain-hold.sh bind <source-id>`; bind before arming the source, and key each structured question by the held task's id.
 An unbound source and a key that names no captain-held task both simply feed nothing: the answer is still captured and firstmate is still woken, and closing falls back to the direct command above.
@@ -72,7 +82,7 @@ The absence of a routed work item is not a divergence and the guard never requir
 3. Firstmate holds that task - or creates one captain-held task for the review's open questions - with a concise reason carrying the question and options.
 4. Attest the full inventory for that review pass under the caller authority in Policy above.
 5. Record each call's context with `context`, then relay the choices to the captain as decisions from Bearings' Captain's Call section under `AGENTS.md` section 9; do not use the word hold in captain chat.
-6. Close each call only through `answer` (or a channel that feeds `answers`), close a board-requested moot call through evidence-backed `reconcile close`, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
+6. Close each call only through `answer` (or a channel that feeds `answers`), close a board-requested moot call through evidence-backed `reconcile close`, settle it through the declared PR settlement policy above, record a still-active reconciliation through `reconcile note`, use `--until` when the captain defers it, or confirm a channel already closed it.
 7. Confirm Bearings reflects the outcome: answered or reconciled-moot calls leave Captain's Call, released work resumes, active reconciliations remain held, and deferred calls sit in Charted Next with their date.
 
 `bin/fm-captain-hold.sh --help` owns command syntax, close modes, legacy-identity compatibility, completion attestation, retry behavior, and close ordering.

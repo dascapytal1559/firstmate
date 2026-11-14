@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="330" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">Installing a T3 build without cutting a reply</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">13 November: a quiet-time install restarted T3 while FirstMate's own turn was running.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="98" font-weight="600">Before</text>
+    <rect x="24" y="108" width="220" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="132">no worker is busy</text>
+    <text x="40" y="152">(FirstMate is not counted)</text>
+    <rect x="290" y="108" width="260" height="70" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="306" y="132">install at once: T3 quits while</text>
+    <text x="306" y="152">FirstMate is mid-reply</text>
+    <rect x="596" y="108" width="340" height="70" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="612" y="132">orange "Cancelled because the server</text>
+    <text x="612" y="152">shut down" row; T3 resumes the turn</text>
+
+    <text x="24" y="218" font-weight="600">After</text>
+    <rect x="24" y="228" width="220" height="70" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+    <text x="40" y="252">no worker is busy:</text>
+    <text x="40" y="272">ask T3 for the restart</text>
+    <rect x="290" y="228" width="260" height="70" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="306" y="252">T3 shows "will restart", holds new</text>
+    <text x="306" y="272">messages, lets every turn finish</text>
+    <rect x="596" y="228" width="340" height="70" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="612" y="252">drained: install and restart; held</text>
+    <text x="612" y="272">messages then run in order</text>
+  </g>
+  <g stroke="#57606a" stroke-width="1.5" fill="none">
+    <path d="M248 143 L284 143"/><path d="M278 138 L284 143 L278 148"/>
+    <path d="M554 143 L590 143"/><path d="M584 138 L590 143 L584 148"/>
+    <path d="M248 263 L284 263"/><path d="M278 258 L284 263 L278 268"/>
+    <path d="M554 263 L590 263"/><path d="M584 258 L590 263 L584 268"/>
+  </g>
+</svg>

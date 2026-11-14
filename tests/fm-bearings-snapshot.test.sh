@@ -1299,7 +1299,7 @@ EOF
       and (.gates | any(.[]; .id == "external-gate"))
       and (.landed | any(.[]; .id == "shipped-work"))
       and (.landed | any(.[]; .id == "answered-call") | not)
-      and (.omitted | any(.[]; .surface | startswith("captain holds bucketed blocked, dated, or aged")))
+      and (.omitted | any(.[]; .surface | startswith("captain decisions bucketed blocked, dated, snoozed, or aged")))
   ' >/dev/null || fail "the collapsed captain-call projection is wrong: $json"
   json=$(run "$home" "$fakebin" --json --all-decisions --all-queued)
   printf '%s' "$json" | jq -e '
@@ -1415,7 +1415,7 @@ EOF
            | contains(["due-parked", "due-superseded", "future-parked", "parked-hold", "blocked-parked", "aged-call",
                        "aging-mate/mate-due-parked", "aging-mate/mate-due-not-required", "mate-future-parked",
                        "aging-mate/mate-parked", "mate-blocked-parked", "mate-aged"]))
-      and (.omitted | any(.[]; .surface == "captain holds bucketed blocked, dated, or aged: 7"))
+      and (.omitted | any(.[]; .surface == "captain decisions bucketed blocked, dated, snoozed, or aged: 7"))
   ' >/dev/null || fail "structured buckets must decide Captain's Call placement: $json"
   json=$(run "$home" "$fakebin" --json --all-decisions)
   printf '%s' "$json" | jq -e '
@@ -1470,7 +1470,7 @@ EOF
   printf '%s' "$json" | jq -e '
     (.gates | any(.id == "only-blocked-parked" and .blocked_by == "missing-blocker"
                   and (.reason | startswith("blocked-by missing-blocker"))))
-      and (.omitted | any(.surface == "captain holds bucketed blocked, dated, or aged: 1"))
+      and (.omitted | any(.surface == "captain decisions bucketed blocked, dated, snoozed, or aged: 1"))
   ' >/dev/null || fail "a lone blocked deferred hold lacked its concrete disclosure: $json"
   json=$(run "$home" "$fakebin" --json --all-decisions)
   printf '%s' "$json" | jq -e '
@@ -2410,6 +2410,88 @@ seed_working_child() {  # <mate-home> <id> <doing> [repo]
     "harness=claude" "kind=ship" "mode=no-mistakes"
   record_claude_state "$mate/state" "$id" busy
   printf 'working: %s\n' "$doing" > "$mate/state/$id.status"
+}
+
+test_to_read_and_snoozed_items() {
+  local home fakebin json
+  home=$(make_home to-read-snoozed)
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] live-call - A live call (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose a route) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+- [ ] report-ready - A finished report (repo: sample) (kind: captain) (since 2026-07-10) (hold: the summary) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+- [ ] put-off - A call put off with no date (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose later) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+- [ ] back-tonight - A call back this evening (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose tonight) (hold-kind: captain) (hold-until: 2026-07-12)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+  Captain hold returns: 2026-07-11T20:00:00Z
+- [ ] read-later - A report put off (repo: sample) (kind: captain) (since 2026-07-10) (hold: read it later) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[].id] == ["live-call"])
+      and (.to_read == [{id:"report-ready", title:"A finished report", repo:"sample"}])
+      and (.gates | any(.[]; .id == "put-off" and (.reason | startswith("snoozed: "))))
+      and (.gates | any(.[]; .id == "back-tonight" and (.reason | startswith("until 2026-07-11T20:00:00Z: "))))
+      and (.gates | any(.[]; .id == "read-later" and (.reason | startswith("snoozed: "))))
+      and (.gates | any(.[]; .id == "report-ready") | not)
+  ' >/dev/null || fail "To read and snoozed items are placed wrong: $json"
+  # --all-decisions drops every hold's gate, so a snoozed To read item must
+  # still show, in to_read, rather than nowhere.
+  json=$(run "$home" "$fakebin" --json --all-decisions)
+  printf '%s' "$json" | jq -e '
+    ([.to_read[].id] | sort) == ["read-later", "report-ready"]
+      and ([.decisions_open[].id] | index("read-later") | not)
+      and (.gates | any(.[]; .id == "read-later") | not)
+  ' >/dev/null || fail "--all-decisions hides a snoozed To read item: $json"
+  pass "bearings: a To read item is its own short list, never a decision, and snoozed items sit with the dated gates"
+}
+
+test_secondmate_to_read_items_are_never_decisions() {
+  local home mate fakebin json
+  home=$(make_home mate-to-read)
+  mate="$TMP_ROOT/mate-to-read-mate"
+  : > "$home/data/secondmates.md"
+  make_valid_secondmate_home reading-mate "$mate"
+  append_secondmate_registry "$home" reading-mate "$mate"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] mate-call - A live call (repo: sample) (kind: captain) (since 2026-07-10) (hold: choose a route) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+- [ ] mate-read - A finished report (repo: sample) (kind: captain) (since 2026-07-10) (hold: the summary) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+- [ ] mate-read-later - A report put off (repo: sample) (kind: captain) (since 2026-07-10) (hold: read it later) (hold-kind: captain)
+  Captain hold set: 2026-07-10T00:00:00Z
+  Captain hold flavor: read
+  Captain hold snoozed: 2026-07-11T00:00:00Z
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  for flag in "" --all-decisions; do
+    json=$(FM_SNAPSHOT_SECONDMATE_DECISIONS=1 run "$home" "$fakebin" --json $flag)
+    printf '%s' "$json" | jq -e '
+      (.decisions_open | any(.id == "reading-mate/mate-call"))
+        and ([.decisions_open[] | select(.id | startswith("reading-mate/mate-read"))] | length) == 0
+        and ([.gates[] | select(.id | startswith("mate-read"))] | length) == 0
+    ' >/dev/null || fail "a secondmate's To read item was shown as a captain decision or gate (${flag:-default}): $json"
+  done
+  pass "bearings: a secondmate's To read items are never captain decisions or gates"
 }
 
 test_working_captain_holds_keep_their_bucket_surfaces() {
@@ -3607,6 +3689,8 @@ fm_test_run \
   test_main_unstructured_current_is_disclosed_with_structured_sibling \
   test_main_orphan_counterfactual_meta_clears_inventory_warning \
   test_working_captain_holds_keep_their_bucket_surfaces \
+  test_to_read_and_snoozed_items \
+  test_secondmate_to_read_items_are_never_decisions \
   test_active_children_project_independent_of_home_captain_hold \
   test_nameless_legacy_summary_uses_its_durable_identifier \
   test_newest_filed_gates_are_selected_before_snapshot_bounds \

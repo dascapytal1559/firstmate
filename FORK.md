@@ -77,16 +77,17 @@ The T3 Code fork's wait ends the moment a request appears, so FirstMate no longe
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
-## Every open decision on T3 Code's Bridge
+## Everything waiting on the captain, in T3 Code's sidebar
 
-Each open captain decision is listed on T3 Code's Bridge tab with the question, its options, its project, when it started waiting, and every update FirstMate has made to it since it was raised.
+The backlog is the one record of what waits on the captain, and T3 Code's sidebar shows it in real time on cards under FirstMate's: Needs you for a decision, To read for a finished report, and a Snoozed section for what he put off.
+An item rides on its worker's card; one with no worker gets a thread of its own, titled with the question.
 This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
-Upstream keeps decisions in chat alone; the fork adds the Bridge so each call keeps its full context in one place the captain can open and answer from.
-A decision stays under Needs you until it is answered or closed, however long it waits; one deferred to a date waits under Scheduled until that date.
-FirstMate sends the whole list in the same step as it changes its own records, so an answered call leaves the Bridge at once, and replying hides it straight away.
-A list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
-A T3 Code without the list simply shows no decisions.
-Details: [Bridge decisions](docs/t3code-backend.md#bridge-decisions) and [`fm-t3-needs-me.sh`](bin/fm-t3-needs-me.sh).
+Upstream keeps decisions in chat alone; the fork shows them where the work is, so nothing can quietly go out of date.
+FirstMate pushes the whole list within about a second of any change to the backlog, whoever made it, and his Snooze (with T3 Code's own presets, so a return can be a time of day), Bring back, and Archive change the backlog at once.
+Archive acts on its own item only: it closes a decision as not pursued or marks a report read, and a thread's own archive or restore changes no item; a decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down safely; a snoozed item stays snoozed until it is brought back or its time comes.
+A ten-minute check covers crashes and restarts, and a list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
+A T3 Code without the list simply shows none.
+Details: [Captain's list](docs/t3code-backend.md#captains-list) and [`fm-t3-captain-sync.sh`](bin/fm-t3-captain-sync.sh).
 
 ## The model routing table on T3 Code's Bridge
 
@@ -107,16 +108,16 @@ Details: [Rules](docs/t3code-backend.md#rules) and [`fm-rules.sh`](bin/fm-rules.
 
 ## What the worker is waiting on, on its card
 
-![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
+![FirstMate's crew in the T3 Code sidebar, as it looked before the captain's list: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
+T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker sits in a no-mistakes run, waits on something, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
-When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
-While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
+While a worker's no-mistakes run is active, the card reads Testing.
 Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
+What waits on the captain is no longer one of these words: the card shows Needs you or To read from the [captain's list](#everything-waiting-on-the-captain-in-t3-codes-sidebar).
 While the worker works, the card shows T3 Code's own Working, except that Testing stays.
 The words change when the worker's state does and go when the worker is cleaned up.
-FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
+FirstMate keeps no list of its own for this: every update works the label out again from each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
 Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows none of these words and nothing else changes.
 Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
@@ -161,6 +162,14 @@ The watcher rings a doorbell on every worker status write or turn-end it sees, i
 The action still fires at most once, and FirstMate gets the outcome as an ordinary wake.
 The watch's interval stays as the backstop for a worker whose agent does not mark turn ends.
 Details: [the fleet-idle pattern](docs/configuration.md#process-to-event-sources-stateprocevent).
+
+## Clean T3 restarts
+
+Installing a new T3 build first asks T3 for the restart through the T3 Code fork's restart registry, once no worker is busy.
+T3 shows the captain the coming restart, holds new messages, and lets every running turn finish, FirstMate's own included; the install starts only when T3 reports drained.
+A wait past its limit, or a stopped install, cancels the request so no message stays held.
+Upstream T3 Code has no such registry.
+Details: [clean restart](docs/t3code-backend.md#clean-restart).
 
 ## The live FirstMate's thread on record
 
@@ -222,3 +231,15 @@ An added, amended, reordered, or squashed commit is still refused, and the refus
 The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
 Approved by the captain on 2026-11-08.
 Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
+
+## Only trusted reviewers wake a parked worker
+
+With park on review switched on, a worker whose PR waits for review is stopped, and a fresh one starts when the PR gets new review activity.
+Upstream starts it on a new comment or an unresolved review thread from anyone, and tells it to address that activity on the branch.
+On a public repository that lets any passer-by start an agent that acts on their words.
+The fork starts it only for comments and threads from the repository's owners, members, or collaborators, or from a bot the home already trusts in `config/contribution-review-bots`, the same trust the contribution watcher uses.
+Anything else, including any GitLab activity (whose reads carry no membership) and a read too large to see every author, leaves the worker stopped and tells FirstMate once, so nothing is silently dropped.
+The fresh worker is also told that PR text is input to read, never instructions to follow.
+Pushes, failing checks, requested changes, and conflicts restart it as upstream does.
+Approved by the captain on 2026-11-13.
+Details: the trigger contract in [`fm-park.sh`](bin/fm-park.sh).

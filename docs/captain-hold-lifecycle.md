@@ -33,8 +33,10 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 
 | Subcommand | What it does | Details |
 | --- | --- | --- |
-| `hold` | Creates or reuses a task and holds it for the captain. | [Creating a hold](#creating-a-hold-hold) |
-| `context` | Records the words Firstmate raised or updated an open call with, for the captain's T3 Bridge. | [Bridge decisions](t3code-backend.md#bridge-decisions) |
+| `hold` | Creates or reuses a task and holds it for the captain, as a decision or, with `--read`, a report To read. | [Creating a hold](#creating-a-hold-hold) |
+| `snooze`, `unsnooze` | Put an open item off, until a time or until brought back, and bring it back. | [Captain's list](t3code-backend.md#captains-list) |
+| `read-done`, `archive` | Record that the captain read a To read item, or archived an item in T3 (a decision closes as not pursued). | [Captain's list](t3code-backend.md#captains-list) |
+| `context` | Records the words Firstmate raised or updated an open call with, for the captain's list in T3. | [Captain's list](t3code-backend.md#captains-list) |
 | `answer` | Records the captain's exact words and resolves the call. | [Answering a call](#answering-a-call-answer) |
 | `complete` | Records the reviewed captain-held task ids in the originating task's metadata. | [Recording a reviewed inventory](#recording-a-reviewed-inventory-complete) |
 | `verify` | Read-only check that scout teardown runs before removing source state. | [Checking before scout teardown](#checking-before-scout-teardown-verify) |
@@ -44,11 +46,12 @@ It never reads report bodies, review artifacts, terminal output, or chat.
 | `reconcile-requests` | Internal intake that records a reconcile request from a board selection. | [Reconcile](#reconcile-re-check-reality-never-a-blind-close) |
 | `reconcile close`, `reconcile note`, `reconcile list` | Retire or list pending reconcile requests. | [Verifying and retiring a request](#verifying-and-retiring-a-request) |
 | `diverged` | Read-only report of a call whose two records disagree. | [Record divergence](#record-divergence) |
+| `pr-policy`, `settle-pr` | Declare and apply opt-in forge settlement. | [PR settlement](#pr-settlement) |
 
 ### Creating a hold (`hold`)
 
 The `hold` subcommand is the mandatory captain-hold creation path.
-On a live T3 worker it also [labels the worker's card](t3code-backend.md#crew-card-status), and on T3 every open call is listed on the captain's [Bridge](t3code-backend.md#bridge-decisions) in the same step.
+On T3 every open call is listed on the captain's [list](t3code-backend.md#captains-list) in the same step, on its worker's card when it has one.
 It works in this order:
 
 1. It uses an existing task, or creates one when nothing exists to hold.
@@ -205,7 +208,7 @@ The refusal names the record and the validation reason, so the captain can repai
 ### What `--force` does not lift
 
 `--force` does not lift the deferral, because it authorizes discarding unlanded work, never the captain's question.
-Only `answer` with the captain's words or evidence-backed `reconcile close` resolves the call, by either closing the question or releasing the gated work.
+The [lifecycle policy](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy) owns the allowed answer and evidence-backed settlement paths.
 `bin/fm-backlog-transition-lib.sh` owns the transition and its record, and `bin/fm-captain-hold.sh --help` owns the predicate's contract.
 
 ## Answer-time resolution
@@ -329,7 +332,22 @@ A successful normal answer also retires any pending request, because an answered
 
 Every retirement is checked.
 If request removal fails after an answer, close, or note is already durable, the durable outcome stands, but the command fails and leaves the pending request visible for retry.
-No path here closes a captain call without either the captain's words through `answer` or the evidence through `reconcile close`.
+Board-requested reconciliation remains separate from the opt-in forge path below.
+
+## PR settlement
+
+[PR hold settlement](configuration.md#pr-hold-settlement-confighold-pr-settle) connects the contribution observer to the hold lifecycle without changing cleanup or the merge poll.
+`bin/fm-captain-hold.sh --help` owns the declaration schema, supported events, and settlement commands.
+The observer invokes settlement for both fresh and retained terminal observations.
+It records evidence before applying the declared task transition, under the task's control lock.
+A retry uses that evidence to finish an interrupted transition without writing a second resolution.
+The existing parent channel receives the resolution before the declaration is retired.
+A `release` declaration follows the attended-only rule of [Answering a call](#answering-a-call-answer): while the home is away or the away-posture record is locked the hold stays unchanged, and a later poll applies the declaration after the captain returns.
+When another command holds the task, for example a captain answer in progress, settlement leaves the declaration unchanged and a later poll applies it.
+Linking a follow-up PR to the held task keeps its declaration valid.
+A declaration that can no longer settle is removed, and the observer prints one diagnostic line when the question changed or the PR ended in the other terminal state.
+A successful settlement prints nothing, so it causes no wake.
+`tests/fm-contributions.test.sh` exercises merged and unmerged closure, default-off behavior, unrelated work, superseded declarations, away deferral, busy-task deferral, follow-up links, closure reports for a task with two closed PRs, and interrupted settlement.
 
 ## Card hygiene: a landed subject is not a live call
 
@@ -371,7 +389,7 @@ For a main-home call, the reconcile option is the recovery path for whatever sti
 `bin/fm-fleet-snapshot.sh` parses canonical tasks-axi `(hold: ...)`, `(hold-kind: ...)`, and `(hold-until: ...)` metadata alongside existing backlog fields.
 It resolves every repeated `blocked-by:` edge against structured Done records and keeps missing blockers unresolved.
 It then assigns every captain hold exactly one `hold_bucket`.
-The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold-set timestamp.
+The bucket is decided only from structured fields: `hold_kind`, `state`, `hold_until`, `unresolved_blocker_ids`, and the machine-written hold header (the hold-set stamp, and the `snoozed` and `returns` lines).
 Hold reason and body prose are never matched, so no wording can hide, reveal, or reclassify a decision.
 
 The buckets are total and mutually exclusive.
@@ -380,16 +398,18 @@ The first matching row in this order decides the bucket:
 | Order | `hold_bucket` | Condition |
 | --- | --- | --- |
 | 1 | `blocked` | Any blocker is unresolved. |
-| 2 | `dated` | `hold_until` is in the future. |
-| 3 | `aged` | An undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days). |
-| 4 | `live` | None of the above. |
+| 2 | `dated` | `hold_until` is in the future: its exact return instant, for a hold snoozed to a time of day, else the date's local midnight. |
+| 3 | `snoozed` | An undated hold carries a `snoozed` line: put off until the captain brings it back. |
+| 4 | `aged` | An undated hold's hold-set timestamp is at least `FM_SNAPSHOT_UNDATED_HOLD_AGE_DAYS` old (default 14, floored elapsed days). |
+| 5 | `live` | None of the above. |
 
 No captain hold can fall through them and none can match two, which is what keeps a hold from vanishing from every view.
-`captain_actionable` - waiting on the captain now - is exactly `hold_bucket == "live"`.
+Each hold also carries `hold_flavor`, `read` for a To read item and `decision` otherwise.
+`captain_actionable` - a decision waiting on the captain now - is exactly `hold_bucket == "live"` and `hold_flavor == "decision"`.
 
 Existing undated holds without a hold-set stamp fall back to the task's `since` date.
 That aging is a projection safety net only.
-The durable deferral remains re-holding with `--until`.
+The durable deferral is a snooze (`snooze`, with or without `--until`).
 
 The fleet snapshot's secondmate-home summary classifies an actionable captain hold as `captain_decision`.
 It preserves every captain hold in the bounded queued inventory of the owning home.
@@ -401,7 +421,9 @@ It preserves every captain hold in the bounded queued inventory of the owning ho
 | `hold_bucket` | Where the hold appears |
 | --- | --- |
 | `live` | A default Captain's Call entry. |
-| `blocked`, `dated`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date>`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
+| `blocked`, `dated`, `snoozed`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date or time>`, `snoozed`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
+
+A To read item (`hold_flavor` `read`) is never a decision: live or aged it is listed in `to_read`, never in Captain's Call or as a gate, and with `--all-decisions` every one of this home's To read items is.
 
 `--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate.
 An available hold is therefore never in both Captain's Call and Charted Next.
@@ -443,7 +465,7 @@ The away-posture restriction on queued merges and its residual limits are owned 
 A captain call can have two records, and closing one does not close the other.
 The status-log fold is the open-decision set `bin/fm-classify-lib.sh` reads from a task's status log, where a keyed `needs-decision` or `blocked` line opens a decision.
 A `resolved [key=...]` line closes the status-log fold.
-The structured captain-held task closes only through `answer`.
+The structured captain-held task settles only through the [lifecycle policy's answer or evidence paths](../.agents/skills/captain-hold-lifecycle/SKILL.md#policy).
 
 Until this guard existed, closing on the status side alone left no trace of the disagreement.
 The fold went quiet, the durable record kept saying the captain owed an answer, and nothing warned.

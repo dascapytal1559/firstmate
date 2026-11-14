@@ -21,11 +21,17 @@
 #
 # Usage:
 #   fm-captain-hold.sh hold <task-id> --reason <reason> \
-#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
+#     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until <when>] [--read]
+#   fm-captain-hold.sh snooze <task-id> [--until <when>] [--at <instant>]
+#   fm-captain-hold.sh unsnooze <task-id>
+#   fm-captain-hold.sh read-done <task-id>
+#   fm-captain-hold.sh archive <task-id> [--at <instant>]
 #   fm-captain-hold.sh context <task-id> --text-file <path> [--changed <one line>] \
 #     [--question <text>] [--option <label>]... \
 #     [--attach report|picture|link|file=<path-or-url> [--label <text>]]...
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
+#   fm-captain-hold.sh pr-policy <task-id> <PR-url> <merged|closed|terminal> <close|release>
+#   fm-captain-hold.sh settle-pr <task-id> <PR-url>
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
 #   fm-captain-hold.sh reconcile-requests --source-id <source-id> --source <provenance>   (task ids on stdin)
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
@@ -56,13 +62,43 @@
 # `complete` and `verify` check. The reason may hold parentheses and line breaks:
 # tasks-axi refuses them, so `hold` escapes them where it writes the reason and
 # readers decode them (bin/fm-hold-reason-lib.sh owns the encoding).
-# `--until` records the captain's own deferral date through `tasks-axi hold
-# --until`, so a "revisit later" answer is stored as a date instead of a live
-# card. A live T3 worker's card shows the hold (bin/fm-t3-crew-status.sh),
-# and every hold, answer, and reconcile close brings that card up to date.
-# The same commands, and `context`, also run bin/fm-t3-needs-me.sh sync before
-# they return, which brings the decisions on the captain's T3 Bridge in line
-# with his open calls in the same step.
+# `--until` puts the item off until <when>: a YYYY-MM-DD date (its local
+# midnight, when the backlog lifts it) or an ISO date-time with Z or an
+# offset, the time of day a T3 snooze preset picks. The backlog's own
+# `tasks-axi hold --until` takes dates only and lifts at local midnight, so it
+# gets the first local date on or after the instant, and the exact instant
+# goes on the `Captain hold returns:` header line below.
+# `--read` marks the item To read: a finished report with nothing to decide,
+# which is not a captain call (`complete` refuses one); on an open decision it
+# changes nothing, since reading is part of deciding. Every hold names its
+# flavor, so a hold without `--read` is a decision.
+#
+# The hold header is the run of `Captain hold <key>: <value>` lines right after
+# the hold-set stamp, written only by this script and read by
+# bin/fm-fleet-snapshot.sh: `origin` (above), `flavor: read`, `snoozed:
+# <UTC instant>` (when the item was put off), and `returns: <UTC instant>`
+# (the exact return of a dated snooze). A re-hold keeps a snooze that is still
+# running, a dated hold from before the snoozed line included, so FirstMate's
+# own update never brings an item back.
+# `snooze` puts an open item off at --at (default now), until <when> or, with
+# no --until, until `unsnooze` brings it back; `unsnooze` brings it back now.
+# Both keep the hold's reason and stamp. A repeat of unsnooze, or of a snooze
+# with the same --at and --until, changes nothing; a snooze without --at
+# records it as put off now.
+# `read-done` records that the captain read a To read item: work still in
+# flight (a kept scout waiting for its cleanup) loses the hold and goes on, and
+# anything else is closed; a task already closed or no longer held is the same
+# retry. `archive` is the captain archiving an item in T3: a To read item is
+# read-done, and a decision is answered "Archived in T3 on <UTC date of --at,
+# default now>: not pursued.", so a replay a day later writes the same words;
+# an item no longer open is already settled. None of these verbs is gated by
+# away mode, since none frees held work.
+# A live T3 worker's card shows the hold (bin/fm-t3-crew-status.sh),
+# and every hold, answer, reconcile close, and PR settlement brings that card
+# up to date.
+# The same commands, `snooze`, `unsnooze`, `read-done`, and `context` also
+# run bin/fm-t3-needs-me.sh sync before they return, which brings the
+# captain's list in T3 in line with his open items in the same step.
 #
 # `context` records what Firstmate told the captain about an open captain call,
 # in data/needs-me/<task-id>.json, the only writer of that record (schema
@@ -222,7 +258,8 @@
 # backlog close and, on 0, returns the row to Queued with its deliverable
 # recorded instead (bin/fm-backlog-transition-lib.sh owns that transition), so
 # holding the very work item a question gates is safe; only `answer` with the
-# captain's words or evidence-backed `reconcile close` closes the call.
+# captain's words, evidence-backed `reconcile close`, or the opt-in PR policy
+# below settles the call.
 # bin/fm-watch.sh asks it when an ordinary
 # crew task reaches a due stale alarm - its open backlog hold need not appear in
 # the task's last status line - and on a 0 bounds repeated alarms from new pane
@@ -231,9 +268,31 @@
 # `diverged` is the read-only guard over the seam between the two records of
 # one captain call. See "record divergence" beside command_diverged below.
 #
+# With config/hold-pr-settle present, pr-policy declares which forge events
+# answer this particular hold. It adds the structured PR link and atomically
+# records data/<task>/hold-pr-policy.json: schema fm-hold-pr.v1, task, url, on,
+# action, fingerprint (SHA-256 of the shown reason, title without its structured
+# links, hold-set timestamp and resolution count), occurrence.
+# `close` asserts the task contains only the decision; `release` preserves
+# unfinished work. `terminal` accepts either merge or unmerged closure.
+# No policy is inferred from links or prose. Re-holding invalidates the policy,
+# and editing the reason or title makes it stale; linking another PR does not.
+# A policy that can no longer settle is removed: silently once the task is done
+# or no longer a captain hold, and with a non-zero exit naming the cause when
+# the question changed or the PR ended in the other terminal state.
+# A `release` policy waits while the home is away, like `answer --release`, and
+# a later settle-pr applies it. Only github.com PRs supported
+# by the contribution observer qualify. settle-pr reads that observer's durable,
+# validated terminal evidence, never caller-supplied state or a captain answer.
+# It records forge-closed/forge-released reconciliation evidence before changing
+# the task, and retries interrupted settlement without duplicating the record.
+# Successful settlement removes the policy after parent-channel publication.
+# Removing the presence flag disables policy registration and settlement.
+#
 # Resolution records: the block written into the body names this script, the
-# decision digest, and a `Resolution mode:` of answered, released, repaired, or
-# reconciled. Records written by the retired fm-decision-hold.sh (routed,
+# decision digest, and a `Resolution mode:` of answered, released, repaired,
+# reconciled, forge-closed, or forge-released.
+# Records written by the retired fm-decision-hold.sh (routed,
 # declined, answered, repaired) are recognized everywhere a record is read, so
 # nothing already closed needs rewriting.
 #
@@ -261,6 +320,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-classify-lib.sh
 # shellcheck disable=SC1091
@@ -301,6 +361,7 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note> [until-date]
 
 CREW_CARD_SYNC=0
 NEEDS_ME_SYNC=0
+CARD_SYNC_DETACHED=0
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
 CAPTAIN_CONTROL_LOCK=
@@ -318,6 +379,12 @@ captain_hold_cleanup() {
   # After the locks, before returning: a T3 crew card and the captain's Bridge
   # decisions follow the hold (each script's header owns how), and a slow or
   # failed sync never changes this command's result; its report goes to stderr.
+  # A PR settlement runs inside the bounded contribution poll, so it starts
+  # both syncs detached and never waits on them or mixes in their output.
+  if [ "$CARD_SYNC_DETACHED" = 1 ]; then
+    { "$SCRIPT_DIR/fm-t3-crew-status.sh" sync; "$SCRIPT_DIR/fm-t3-needs-me.sh" sync; } </dev/null >/dev/null 2>&1 &
+    return 0
+  fi
   [ "$CREW_CARD_SYNC" = 0 ] || "$SCRIPT_DIR/fm-t3-crew-status.sh" sync >&2 || true
   [ "$CREW_CARD_SYNC$NEEDS_ME_SYNC" = 00 ] || "$SCRIPT_DIR/fm-t3-needs-me.sh" sync >&2 || true
 }
@@ -569,11 +636,11 @@ closed_answer_replay_mode_compatible() {  # <mode> <task-body>
 }
 
 # The record's label is what keeps an evidence-backed reconciliation from
-# reading as the captain's own words. `reconciled` closes a call that went moot
-# and carries verified evidence; every other mode carries what the captain said.
+# reading as the captain's own words. Reconciliation modes carry evidence;
+# answer modes carry what the captain said.
 resolution_block() {  # <mode>
   local label='Captain decision:'
-  [ "$1" != reconciled ] || label='Reconciliation evidence:'
+  case "$1" in reconciled|forge-closed|forge-released) label='Reconciliation evidence:' ;; esac
   printf 'Resolution recorded by fm-captain-hold.\nDecision digest: %s\nResolution mode: %s\n\n%s\n%s\n' \
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
@@ -886,6 +953,129 @@ body_hold_origin() {  # <decoded-task-body>
   printf '%s\n' "$1" | sed -n 's/^Captain hold origin: \(.*\)$/\1/p' | head -1
 }
 
+# The hold's header: the lines this script writes right after the hold-set
+# stamp, `Captain hold <key>: <value>` for origin, flavor, snoozed, and
+# returns, blank lines between them skipped. The first other line ends it, so
+# a line further down (an earlier lifecycle's, below a resolution record) is
+# never read as this hold's.
+HOLD_HEADER_KEYS='origin flavor snoozed returns'
+body_hold_header() {  # <decoded-task-body> <key>
+  printf '%s\n' "$1" | awk -v key="Captain hold $2: " '
+    NR == 1 { next }
+    /^[[:space:]]*$/ { next }
+    /^Captain hold (origin|flavor|snoozed|returns): / {
+      if (index($0, key) == 1) { print substr($0, length(key) + 1); exit }
+      next
+    }
+    { exit }'
+}
+
+# write_hold_header <task-id> <shown-body> <key>=<value>...: rewrite the
+# header with each key set to its value, or dropped when the value is empty,
+# keeping every other header line and the rest of the body, less any stale
+# line of a key it writes. One update.
+write_hold_header() {
+  local id=$1 body=$2 stamp header rest key kv value new_body tmp set_keys
+  shift 2
+  body=$(decode_shown_value "$body") \
+    || fail "could not decode the existing body for $id"
+  [ -n "$(body_hold_set_timestamp "$body")" ] \
+    || fail "task $id lost its hold-set stamp before its hold header was recorded"
+  stamp=$(printf '%s\n' "$body" | sed -n 1p)
+  # A key this call writes also loses any stale line of it further down, so
+  # an earlier lifecycle's value can never be read again.
+  set_keys=''
+  for kv in "$@"; do set_keys="$set_keys ${kv%%=*}"; done
+  rest=$(printf '%s\n' "$body" | awk -v keys="$set_keys" '
+    BEGIN { n = split(keys, k, " "); for (i = 1; i <= n; i++) drop["Captain hold " k[i] ": "] = 1 }
+    NR == 1 { next }
+    !done && /^[[:space:]]*$/ { next }
+    !done && /^Captain hold (origin|flavor|snoozed|returns): / { next }
+    { for (p in drop) if (index($0, p) == 1) next; done = 1; print }')
+  header=''
+  for key in $HOLD_HEADER_KEYS; do
+    value=$(body_hold_header "$body" "$key")
+    for kv in "$@"; do
+      [ "${kv%%=*}" != "$key" ] || value=${kv#*=}
+    done
+    [ -z "$value" ] || header="$header${NL_SEP}Captain hold $key: $value"
+  done
+  new_body="$stamp$header"
+  if [ -n "$rest" ]; then
+    new_body=$(printf '%s\n\n%s' "$new_body" "$rest")
+  fi
+  [ "$new_body" != "$body" ] || return 0
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-header.XXXXXX") \
+    || fail "cannot stage the hold header"
+  if ! printf '%s\n' "$new_body" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the hold header for $id"
+  fi
+  if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
+    rm -f -- "$tmp"
+    printf 'fm-captain-hold: could not record the hold header on %s\n' "$id" >&2
+    return 1
+  fi
+  rm -f -- "$tmp"
+}
+
+# normalize_when <value>: a `--until` value as "<tasks-axi date> <instant>":
+# a YYYY-MM-DD date is itself and has no instant ("-"), returning at its
+# local midnight (local_midnight below); an ISO date-time with Z or an offset
+# is that instant in UTC (YYYY-MM-DDTHH:MM:SSZ) and the first local date on or
+# after it, so the backlog's own date gate, which lifts at local midnight,
+# never lifts before the instant. Anything else fails.
+normalize_when() {  # <value>
+  case "$1" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) printf '%s -\n' "$1"; return 0 ;;
+  esac
+  perl -MTime::Local=timegm,timelocal -e '
+    my $v = $ARGV[0];
+    $v =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d)(?:\.\d+)?)?(Z|([+-])(\d\d):?(\d\d))$/ or exit 1;
+    my $t = eval { timegm($6 // 0, $5, $4, $3, $2 - 1, $1) };
+    defined $t or exit 1;
+    $t -= ($8 eq "-" ? -1 : 1) * ($9 * 3600 + $10 * 60) if defined $8;
+    my @u = gmtime($t);
+    my $instant = sprintf("%04d-%02d-%02dT%02d:%02d:%02dZ", $u[5] + 1900, $u[4] + 1, $u[3], $u[2], $u[1], $u[0]);
+    my @d = localtime($t);
+    @d = localtime(timelocal(0, 0, 12, $d[3], $d[4], $d[5]) + 86400) if $t > timelocal(0, 0, 0, $d[3], $d[4], $d[5]);
+    printf("%04d-%02d-%02d %s\n", $d[5] + 1900, $d[4] + 1, $d[3], $instant);
+  ' "$1" || fail "--until must be a YYYY-MM-DD date or an ISO date-time with Z or an offset: $1"
+}
+
+# local_midnight <YYYY-MM-DD>: that date's local midnight, when the backlog
+# lifts a hold dated to it, as a UTC instant (YYYY-MM-DDTHH:MM:SSZ).
+local_midnight() {  # <date>
+  perl -MTime::Local=timelocal -e '
+    $ARGV[0] =~ /^(\d{4})-(\d\d)-(\d\d)$/ or exit 1;
+    my $t = eval { timelocal(0, 0, 0, $3, $2 - 1, $1) };
+    defined $t or exit 1;
+    my @u = gmtime($t);
+    printf("%04d-%02d-%02dT%02d:%02d:%02dZ\n", $u[5] + 1900, $u[4] + 1, $u[3], $u[2], $u[1], $u[0]);
+  ' "$1"
+}
+
+# The current UTC time, or FM_CAPTAIN_HOLD_NOW in tests.
+captain_hold_now() {
+  local now=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+  case "$now" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) printf '%s\n' "$now" ;;
+    *) fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp" ;;
+  esac
+}
+
+# snooze_running <hold-until> <returns> <now>: a snooze with no date runs
+# until it is brought back; a dated one until its return instant (the returns
+# header, else the backlog date's local midnight), as
+# bin/fm-fleet-snapshot.sh buckets it.
+snooze_running() {
+  local until=$1 returns=$2 now=$3
+  [ "$until" != - ] || until=''
+  [ -n "$until" ] || return 0
+  [ -n "$returns" ] || returns=$(local_midnight "$until") || return 1
+  [[ "$returns" > "$now" ]]
+}
+
 task_identity() {
   local id=$1
   if task_show "$id"; then
@@ -897,32 +1087,6 @@ task_identity() {
   printf '%s' "$id"
 }
 
-write_hold_origin() {  # <task-id> <shown-body> <origin>
-  local id=$1 body=$2 origin=$3 stamp rest new_body tmp
-  body=$(decode_shown_value "$body") \
-    || fail "could not decode the existing body for $id"
-  stamp=$(printf '%s\n' "$body" | sed -n 1p)
-  [ -n "$(body_hold_set_timestamp "$body")" ] \
-    || fail "task $id lost its hold-set stamp before its origin was recorded"
-  rest=$(printf '%s\n' "$body" | sed 1d | awk '!/^Captain hold origin: /' \
-    | awk 'NF || started { started = 1; print }')
-  new_body=$(printf '%s\nCaptain hold origin: %s' "$stamp" "$origin")
-  if [ -n "$rest" ]; then
-    new_body=$(printf '%s\n\n%s' "$new_body" "$rest")
-  fi
-  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-origin.XXXXXX") \
-    || fail "cannot stage the hold origin"
-  if ! printf '%s\n' "$new_body" > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot stage the hold origin for $id"
-  fi
-  if ! tasks_axi update "$id" --body-file "$tmp" >/dev/null; then
-    rm -f -- "$tmp"
-    printf 'fm-captain-hold: could not record the hold origin on %s\n' "$id" >&2
-    return 1
-  fi
-  rm -f -- "$tmp"
-}
 
 # Best-effort restoration removes a refused hold attempt's stamp while
 # preserving the prior body; the new origin has not been published yet.
@@ -1106,6 +1270,10 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
   verify_hold_durable "$id"
   id=$(show_field_value "$TASK_SHOW_OUTPUT" id)
   validate_slug backend-task-id "$id"
+  if [ "$(show_field "$TASK_SHOW_OUTPUT" state)" != "done" ] \
+    && [ "$(body_hold_header "$(decode_shown_value "$(show_field "$TASK_SHOW_OUTPUT" body)")" flavor)" = read ]; then
+    fail "task $id is a To read item, not a captain call; list only the calls"
+  fi
   stored=$(body_hold_origin "$(decode_shown_value "$(show_field "$TASK_SHOW_OUTPUT" body)")")
   origin_id=$origin
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
@@ -1127,6 +1295,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
+  local flavor='' until_date='' returns='' snoozed='' keep_snooze=0 decoded
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1136,6 +1305,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --read) flavor='read' ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
@@ -1148,16 +1318,12 @@ command_hold() {
     validate_slug origin-id "$origin"
   fi
   if [ -n "$until" ]; then
-    case "$until" in
-      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
-      *) fail "--until must be a YYYY-MM-DD date: $until" ;;
-    esac
+    returns=$(normalize_when "$until") || exit 1
+    until_date=${returns%% *}
+    returns=${returns#* }
+    [ "$returns" != - ] || returns=''
   fi
-  hold_set=${FM_CAPTAIN_HOLD_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
-  case "$hold_set" in
-    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) : ;;
-    *) fail "FM_CAPTAIN_HOLD_NOW must be a UTC YYYY-MM-DDTHH:MM:SSZ timestamp" ;;
-  esac
+  hold_set=$(captain_hold_now)
   acquire_task_control_lock "$id"
   require_tasks_axi
   if task_show "$id"; then
@@ -1171,6 +1337,22 @@ command_hold() {
     existing_held=$(show_field_value "$show" held)
     if [ "$existing_hold_kind" = captain ] && [ "$existing_held" = yes ]; then
       preserve_hold_set=1
+      decoded=$(decode_shown_value "$(show_field "$show" body)")
+      # An open decision never becomes a To read item: reading is part of
+      # deciding, so its question stays as it is.
+      if [ "$flavor" = read ] && [ "$(body_hold_header "$decoded" flavor)" != read ]; then
+        printf 'fm-captain-hold: task %s already waits on the captain as a decision; it stays one\n' "$id" >&2
+        printf '%s\n' "$id"
+        return 0
+      fi
+      # A re-hold keeps a snooze still running: an update never brings the
+      # item back, only `unsnooze` or its return time does.
+      snoozed=$(body_hold_header "$decoded" snoozed)
+      if [ -z "$until" ] && { [ -n "$snoozed" ] || [ -n "$(show_field_value "$show" hold_until)" ]; } \
+        && snooze_running "$(show_field_value "$show" hold_until)" "$(body_hold_header "$decoded" returns)" "$hold_set"; then
+        keep_snooze=1
+        until_date=$(show_field_value "$show" hold_until)
+      fi
     fi
     if [ -n "$title" ]; then
       existing_title=$(show_field_value "$show" title)
@@ -1198,6 +1380,8 @@ command_hold() {
         || fail "could not create task $id"
     fi
   fi
+  # A repeated hold may ask a different question even if it keeps its timestamp.
+  rm -f -- "$DATA/$id/hold-pr-policy.json"
   # Publish the timestamp before the captain-hold annotation. A concurrent
   # snapshot may see the harmless stamp by itself, but can never see a newly
   # held task without the timestamp that defines this hold lifecycle's age.
@@ -1212,8 +1396,8 @@ command_hold() {
   task_show_or_fail "$id" "task $id disappeared while recording its hold-set stamp"
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id did not retain its hold-set stamp"
-  if [ -n "$until" ]; then
-    tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until" >/dev/null \
+  if [ -n "$until_date" ]; then
+    tasks_axi hold "$id" --reason "$stored_reason" --kind captain --until "$until_date" >/dev/null \
       || hold_status=$?
   else
     tasks_axi hold "$id" --reason "$stored_reason" --kind captain >/dev/null \
@@ -1232,12 +1416,159 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
-  publish_parent_hold "$id" "$occurrence" needs-decision "$reason" "$until"
-  if [ -n "$origin" ]; then
-    write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
+  publish_parent_hold "$id" "$occurrence" needs-decision "$reason" "$until_date"
+  # The header follows this call: the flavor it names, a snooze it sets or a
+  # running one it keeps, and the origin it gives.
+  set -- "flavor=$flavor"
+  if [ -n "$until" ]; then
+    [ -n "$snoozed" ] || snoozed=$hold_set
+    set -- "$@" "snoozed=$snoozed" "returns=$returns"
+  elif [ "$keep_snooze" = 0 ]; then
+    set -- "$@" snoozed= returns=
   fi
+  [ -z "$origin" ] || set -- "$@" "origin=$origin"
+  write_hold_header "$id" "$(show_field "$show" body)" "$@" || exit $?
   CREW_CARD_SYNC=1
   printf '%s\n' "$id"
+}
+
+# open_item_or_fail <task-id>: read an open captain item into `show`, or fail.
+open_item_or_fail() {
+  task_show_or_fail "$1" "captain-held task $1 is absent from this home's configured backlog (data directory $DATA)"
+  [ "$(show_field "$show" state)" != "done" ] || fail "task $1 is already closed"
+  [ "$(show_field_value "$show" hold_kind)" = captain ] || fail "task $1 is not held for the captain"
+}
+
+# rehold <task-id> <tasks-axi-until-date-or-empty>: the same captain hold,
+# reason and all, with only its date changed.
+rehold() {
+  local id=$1 date=$2 reason
+  reason=$(show_field_value "$show" hold_reason)
+  [ -n "$reason" ] || fail "task $id has no hold reason to keep"
+  if [ -n "$date" ]; then
+    tasks_axi hold "$id" --reason "$reason" --kind captain --until "$date" >/dev/null
+  else
+    tasks_axi hold "$id" --reason "$reason" --kind captain >/dev/null
+  fi || fail "could not re-hold task $id for the captain"
+  task_show_or_fail "$id" "task $id disappeared while re-holding it"
+}
+
+command_snooze() {  # <task-id> [--until <when>] [--at <instant>]
+  local id=${1:-} until='' at='' date='' returns=''
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --until) shift; until=${1:-} ;;
+      --at) shift; at=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  if [ -n "$at" ]; then
+    at=$(normalize_when "$at") || exit 1
+    at=${at#* }
+    [ "$at" != - ] || fail "--at must be a date-time"
+  else
+    at=$(captain_hold_now)
+  fi
+  if [ -n "$until" ]; then
+    returns=$(normalize_when "$until") || exit 1
+    date=${returns%% *}
+    returns=${returns#* }
+    [ "$returns" != - ] || returns=''
+  fi
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  open_item_or_fail "$id"
+  [ "$(show_field_value "$show" hold_until)" = "$date" ] || rehold "$id" "$date"
+  write_hold_header "$id" "$(show_field "$show" body)" "snoozed=$at" "returns=$returns" || exit 1
+  NEEDS_ME_SYNC=1
+  printf 'snoozed: %s\n' "$id"
+}
+
+command_unsnooze() {  # <task-id>
+  local id=${1:-}
+  [ "$#" = 1 ] || { usage >&2; exit 2; }
+  validate_slug task-id "$id"
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  open_item_or_fail "$id"
+  [ -z "$(show_field_value "$show" hold_until)" ] || rehold "$id" ''
+  write_hold_header "$id" "$(show_field "$show" body)" snoozed= returns= || exit 1
+  NEEDS_ME_SYNC=1
+  printf 'unsnoozed: %s\n' "$id"
+}
+
+# archive: the captain archived an item in T3. A To read item is read-done; a
+# decision is answered "Archived in T3 on <UTC date of --at>: not pursued.",
+# so a replay on a later day writes the same words and is the same retry. An
+# item no longer open is already settled.
+command_archive() {  # <task-id> [--at <instant>]
+  local id=${1:-} at='' decision rc=0
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --at) shift; at=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  if [ -n "$at" ]; then
+    at=$(normalize_when "$at") || exit 1
+    at=${at#* }
+    [ "$at" != - ] || fail "--at must be a date-time"
+  else
+    at=$(captain_hold_now)
+  fi
+  require_tasks_axi
+  task_show_or_fail "$id" "task $id is absent from this home's configured backlog (data directory $DATA)"
+  if [ "$(show_field "$show" state)" = "done" ] || [ "$(show_field_value "$show" hold_kind)" != captain ]; then
+    printf 'archived: %s\n' "$id"
+    return 0
+  fi
+  if [ "$(body_hold_header "$(decode_shown_value "$(show_field "$show" body)")" flavor)" = read ]; then
+    command_read_done "$id" >/dev/null || exit $?
+  else
+    decision=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-archive.XXXXXX") || fail "cannot stage the archive decision"
+    printf 'Archived in T3 on %s: not pursued.\n' "${at%%T*}" > "$decision" || { rm -f -- "$decision"; fail "cannot stage the archive decision"; }
+    # In this shell, so the exit trap releases the lock answer takes.
+    command_answer "$id" --decision-file "$decision" >/dev/null || rc=$?
+    rm -f -- "$decision"
+    [ "$rc" = 0 ] || exit "$rc"
+    CREW_CARD_SYNC=1
+  fi
+  printf 'archived: %s\n' "$id"
+}
+
+# read-done: the captain read a To read item. Work still in flight (a kept
+# scout waiting for its cleanup) loses the hold and goes on; anything else is
+# closed. A task already closed or no longer held is the same retry.
+command_read_done() {  # <task-id>
+  local id=${1:-}
+  [ "$#" = 1 ] || { usage >&2; exit 2; }
+  validate_slug task-id "$id"
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  task_show_or_fail "$id" "task $id is absent from this home's configured backlog (data directory $DATA)"
+  if [ "$(show_field "$show" state)" = "done" ] || [ "$(show_field_value "$show" hold_kind)" != captain ]; then
+    printf 'read: %s\n' "$id"
+    return 0
+  fi
+  [ "$(body_hold_header "$(decode_shown_value "$(show_field "$show" body)")" flavor)" = read ] \
+    || fail "task $id is a decision, not a To read item; record the captain's answer with answer"
+  if [ "$(show_field "$show" state)" = in_flight ]; then
+    tasks_axi unhold "$id" >/dev/null || fail "could not lift the read hold on $id"
+    task_show_or_fail "$id" "task $id disappeared while lifting its read hold"
+    write_hold_header "$id" "$(show_field "$show" body)" flavor= snoozed= returns= || exit 1
+  else
+    tasks_axi "done" "$id" >/dev/null || fail "could not close read item $id"
+  fi
+  CREW_CARD_SYNC=1
+  printf 'read: %s\n' "$id"
 }
 
 # Record a resolution block beneath any leading active hold-set stamp,
@@ -1830,6 +2161,131 @@ command_reconcile_requests() {
   done
   printf 'reconcile-requests: created=%s skipped=%s\n' "$created" "$skipped"
   [ "$skipped" -eq 0 ]
+}
+
+pr_hold_fingerprint() { # <show-output>
+  local links=, word title=''
+  local -a words=()
+  # The markdown backend shows structured links inside the title, and linking a
+  # follow-up PR or a retained report does not change the question.
+  IFS=, read -r -a words <<< "$(show_field_value "$1" links)"
+  for word in ${words[@]+"${words[@]}"}; do links="$links${word#*:},"; done
+  read -r -a words <<< "$(show_field_value "$1" title)"
+  for word in ${words[@]+"${words[@]}"}; do
+    case "$links" in *,"$word",*) ;; *) title="$title $word" ;; esac
+  done
+  sha256_text "$(show_field "$1" hold_reason)
+$title
+$(body_hold_set_timestamp "$(show_field_value "$1" body)")
+$(resolution_record_count "$(show_field "$1" body)")"
+}
+
+command_pr_policy() {
+  local id=${1:-} url=${2:-} event=${3:-} action=${4:-} show dir tmp occurrence fingerprint
+  [ "$#" -eq 4 ] || { usage >&2; exit 2; }
+  [ -f "$CONFIG/hold-pr-settle" ] || fail 'config/hold-pr-settle is required'
+  validate_slug task-id "$id"
+  jq -ne --arg url "$url" '$url | test("^https://github[.]com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/pull/[1-9][0-9]*$")' >/dev/null \
+    || fail 'pr-policy requires a canonical github.com PR URL'
+  case "$event" in merged|closed|terminal) ;; *) fail 'event must be merged, closed, or terminal' ;; esac
+  case "$action" in close|release) ;; *) fail 'action must be close or release' ;; esac
+  acquire_task_control_lock "$id"
+  require_tasks_axi
+  command_open "$id" || fail "task $id is not an open captain hold"
+  task_show_or_fail "$id" "task $id disappeared while declaring its PR policy"
+  [ "$(body_hold_header "$(decode_shown_value "$(show_field "$show" body)")" flavor)" != read ] \
+    || fail "task $id is To read, not a captain call, so no PR settles it"
+  tasks_axi update "$id" --pr "$url" >/dev/null || fail "could not link the PR on $id"
+  task_show_or_fail "$id" "task $id disappeared while declaring its PR policy"
+  fingerprint=$(pr_hold_fingerprint "$show")
+  occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
+  dir="$DATA/$id"
+  [ ! -L "$dir" ] || fail 'PR policy directory is a symlink'
+  mkdir -p "$dir"
+  [ ! -L "$dir/hold-pr-policy.json" ] || fail 'PR policy is a symlink'
+  [ ! -e "$dir/hold-pr-policy.json" ] || [ -f "$dir/hold-pr-policy.json" ] || fail 'PR policy is not a regular file'
+  tmp=$(umask 077; mktemp "$dir/.hold-pr-policy.XXXXXX")
+  jq -n --arg task "$id" --arg url "$url" --arg on "$event" --arg action "$action" \
+    --arg fingerprint "$fingerprint" --argjson occurrence "$occurrence" \
+    '{schema:"fm-hold-pr.v1",task:$task,url:$url,on:$on,action:$action,fingerprint:$fingerprint,occurrence:$occurrence}' > "$tmp"
+  mv -f -- "$tmp" "$dir/hold-pr-policy.json"
+  printf 'pr-policy: %s %s %s %s\n' "$id" "$url" "$event" "$action"
+}
+
+command_settle_pr() {
+  local id=${1:-} url=${2:-} policy record show body event action mode occurrence observed fingerprint evidence
+  [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+  [ -f "$CONFIG/hold-pr-settle" ] || return 0
+  validate_slug task-id "$id"
+  policy="$DATA/$id/hold-pr-policy.json"
+  [ -f "$policy" ] || return 0
+  # An answer can hold this lock for minutes while it waits on the away record;
+  # the poll that calls this is cut after 30 seconds, so a busy task defers.
+  CAPTAIN_CONTROL_LOCK="$STATE/.control-$id.lock"
+  fm_lock_acquire_wait_bounded "$CAPTAIN_CONTROL_LOCK" 1 2>/dev/null || return 0
+  CAPTAIN_CONTROL_LOCK_HELD=1
+  [ -f "$policy" ] || return 0
+  [ ! -L "$DATA/$id" ] && [ ! -L "$policy" ] || fail 'unsafe PR policy path'
+  jq -e --arg task "$id" '.schema == "fm-hold-pr.v1" and .task == $task
+    and (.on | IN("merged","closed","terminal")) and (.action | IN("close","release"))
+    and (.fingerprint | test("^[a-f0-9]{64}$"))
+    and (.occurrence | type == "number" and . > 0 and floor == .)' "$policy" >/dev/null \
+    || fail "invalid PR settlement policy for $id"
+  [ "$(jq -r .url "$policy")" = "$url" ] || return 0
+  record="$DATA/$id/contributions.json"
+  [ -f "$record" ] && [ ! -L "$record" ] || return 0
+  jq -L "$SCRIPT_DIR" -e --arg task "$id" 'include "fm-contributions"; valid_record and .task == $task' "$record" >/dev/null \
+    || fail "invalid forge evidence for $id"
+  evidence=$(jq -c --arg url "$url" '[.records[] | select(.url == $url and .kind == "pr" and .error == null
+    and .retired == null and .checked_at != null and (.observation.state | IN("merged","closed")))] | first // empty' "$record")
+  [ -n "$evidence" ] || return 0
+  event=$(printf '%s' "$evidence" | jq -r .observation.state)
+  case "$(jq -r .on "$policy")" in
+    "$event"|terminal) ;;
+    *)
+      rm -f -- "$policy"
+      fail "dropped the PR policy for $id: the PR is $event and can no longer reach the declared event; the hold stays open"
+      ;;
+  esac
+  observed=$(printf '%s' "$evidence" | jq -r .checked_at)
+  action=$(jq -r .action "$policy")
+  if [ "$action" = release ]; then
+    release_attended && fm_afk_contract_lock_hold "$STATE" 1 2>/dev/null && release_attended || return 0
+  fi
+  occurrence=$(jq -r .occurrence "$policy")
+  fingerprint=$(jq -r .fingerprint "$policy")
+  if [ "$action" = close ]; then mode=forge-closed; else mode=forge-released; fi
+  DECISION_TEXT="Forge PR $event: $url
+Observed at: $observed
+Settlement policy: $(jq -r .on "$policy") -> $action"
+  DECISION_DIGEST=$(sha256_text "$DECISION_TEXT")
+  require_tasks_axi
+  task_show_or_fail "$id" "task $id is absent while settling its PR hold"
+  body=$(show_field "$show" body)
+  if [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ] \
+    && [ "$(recorded_resolution_mode "$body" || true)" = "$mode" ] \
+    && [ "$(resolution_record_count "$body")" = "$occurrence" ]; then
+    : # Resume an interrupted settlement after its evidence was recorded.
+  else
+    if [ "$(show_field "$show" state)" = "done" ] || [ "$(show_field_value "$show" hold_kind)" != captain ]; then
+      rm -f -- "$policy"
+      return 0
+    fi
+    if [ "$(pr_hold_fingerprint "$show")" != "$fingerprint" ]; then
+      rm -f -- "$policy"
+      fail "dropped the PR policy for $id: its question changed after the policy was declared; the hold stays open"
+    fi
+    write_resolution_record "$id" "$mode" "$body"
+  fi
+  CARD_SYNC_DETACHED=1
+  if [ "$action" = close ]; then close_answered "$id" 0
+  else tasks_axi unhold "$id" >/dev/null; fi
+  remove_interrupted_answer_stamp "$id"
+  publish_parent_hold "$id" "$occurrence" resolved "PR $event: $url ($action)"
+  [ "$PARENT_HOLD_PUBLISHED" = 1 ] || fail "could not publish PR settlement for $id"
+  reconcile_request_retire "$id"
+  rm -f -- "$policy"
+  printf 'pr-settled: %s %s %s %s\n' "$id" "$url" "$event" "$action"
 }
 
 command_reconcile() {
@@ -2463,6 +2919,10 @@ command_context() {  # <task-id> --text-file <path> [...]
 
 case "${1:-}" in
   hold) shift; command_hold "$@" ;;
+  snooze) shift; command_snooze "$@" ;;
+  unsnooze) shift; command_unsnooze "$@" ;;
+  read-done) shift; command_read_done "$@" ;;
+  archive) shift; command_archive "$@" ;;
   context) shift; command_context "$@" ;;
   answer) shift; CREW_CARD_SYNC=1; command_answer "$@" ;;
   answers) shift; command_answers "$@" ;;
@@ -2475,6 +2935,8 @@ case "${1:-}" in
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
+  pr-policy) shift; command_pr_policy "$@" ;;
+  settle-pr) shift; command_settle_pr "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

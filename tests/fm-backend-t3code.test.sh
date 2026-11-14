@@ -868,42 +868,51 @@ test_native_restart_rearms_undelivered_stale_warning() {
         housekeeping "$1"
       ' "$state" || exit 1
       [ -s "$state/.subsuper-escalations" ] || exit 1
-      # The native daemon has stopped without delivering its buffer.
+      # The native daemon has stopped without delivering its buffer. Stop keeps
+      # the delivery buffer for the return/catch-up path but ends the session's
+      # per-task episode state: the stale clock and its report marker are gone.
       "$ROOT/bin/fm-afk-launch.sh" stop || exit 1
       [ -s "$state/.subsuper-escalations" ] || exit 1
-      [ -f "$state/.subsuper-reported-stale-worker" ] || exit 1
-      # A warning already delivered for another condition must stay suppressed.
+      [ ! -e "$state/.subsuper-reported-stale-worker" ] || exit 1
+      [ ! -e "$marker" ] || exit 1
+      # A warning already delivered for another condition is the same
+      # session-scoped episode state; the next entry clears it too.
       printf 900 > "$state/.subsuper-reported-stale-delivered"
       "$ROOT/bin/fm-afk-launch.sh" enter --words 'supervise pending work' >/dev/null || exit 1
       first=$(cat "$state/.subsuper-escalations")
-      # Failed startup must restore both the queue and its suppression markers.
+      # Failed startup must restore both the queue and the markers it captured.
       bash -c '
         . "$0/bin/fm-afk-launch.sh"
         fm_afk_launch_record_write() { return 1; }
         ! fm_afk_launch_main start-native
       ' "$ROOT" || exit 1
       [ "$(cat "$state/.subsuper-escalations")" = "$first" ] || exit 1
-      [ -f "$state/.subsuper-reported-stale-worker" ] || exit 1
+      [ -f "$state/.subsuper-reported-stale-delivered" ] || exit 1
       "$ROOT/bin/fm-afk-launch.sh" start-native || exit 1
       assert_absent "$state/.subsuper-escalations" "fresh startup must discard the old queue"
       assert_absent "$state/.subsuper-reported-stale-worker" "discarding an undelivered warning must re-arm reporting"
-      assert_present "$state/.subsuper-reported-stale-delivered" "startup must preserve suppression of delivered warnings"
-      [ "$(cat "$marker")" = 1 ] || fail "restart must preserve the stale condition's age"
+      assert_absent "$state/.subsuper-reported-stale-delivered" "startup must drop the prior session's suppression markers"
+      [ ! -e "$marker" ] || fail "restart must drop the prior session's stale clock"
       out=$(t3_run 'fm_backend_t3code_busy_state thread-live')
       [ "$out" = unknown ] || fail "the restarted thread must remain unknown"
+      # The still-unknown thread is re-derived on THIS session's fresh clock: a
+      # new stale wake opens a new episode at 1000, so the recheck reports its
+      # own 100s, never the prior session's 999s.
       t3_run '
         . "$0/bin/fm-supervise-daemon.sh"
         _now() { printf 1000; }
         LOG="$1/daemon.log"
+        handle_wake "stale: thread-live" "$1"
         housekeeping "$1"
         _now() { printf 1100; }
         housekeeping "$1"
         housekeeping "$1"
       ' "$state" || exit 1
+      [ "$(cat "$marker")" = 1000 ] || fail "the new session must restart the stale clock"
       [ "$(wc -l < "$state/.subsuper-escalations" | tr -d "[:space:]")" = 1 ] \
         || fail "persistent uncertainty must queue exactly one replacement warning"
       assert_contains "$(cat "$state/.subsuper-escalations")" \
-        'stale persisted 999s (possible wedge): thread-live' "restart must report the retained stale condition"
+        'stale persisted 100s (possible wedge): thread-live' "restart must re-derive the stale condition on a fresh clock"
       # Once that replacement is delivered, uncertainty must not report again.
       t3_run '
         . "$0/bin/fm-supervise-daemon.sh"
@@ -918,7 +927,7 @@ test_native_restart_rearms_undelivered_stale_warning() {
       [ "$(wc -l < "$state/delivered.log" | tr -d "[:space:]")" = 1 ] || exit 1
     ) || fail "$session restart lost or duplicated the stale warning"
   done
-  pass "native restart re-arms discarded T3 stale warnings exactly once and preserves delivered suppression"
+  pass "native restart clears session episode state and re-derives T3 stale warnings once on a fresh clock"
 }
 
 test_housekeeping_preserves_unknown_stale_recheck() {
@@ -1459,10 +1468,12 @@ test_spawn_claude_worker_rides_thread_channels() {
   pass "fm-spawn.sh --backend t3code claude: on a T3 with per-thread facts the environment and statement ride the launch and only the busy hooks stay in the worktree"
 }
 
-# A worker's thread names the T3 thread running its firstmate as its crew
-# parent where T3 offers lineage: the one live thread in the home (t-main),
-# or an explicit FM_SUPERVISOR_TARGET paired with t3code; a T3 without
-# lineage, or a home with several live threads, launches it with no parent.
+# A worker's thread names its firstmate's T3 thread as its crew parent where
+# T3 offers lineage: an explicit FM_SUPERVISOR_TARGET paired with t3code, else
+# the home's one usable pinned coordinator whether or not it is mid-turn, else
+# the one live thread in the home (t-main). A T3 without lineage launches it
+# with no parent; a home with no usable pin and no live thread or several
+# launches it with no parent and says so.
 test_spawn_names_supervisor_thread_as_crew_parent() {  # <case> <world js> <expected parent> [NAME=VALUE...]
   local name=$1 js=$2 expect=$3 id out rc home
   shift 3
@@ -1480,7 +1491,7 @@ w.threads["t-other"] = at("t-other", "completed");'
   out=$(unset FM_SUPERVISOR_TARGET FM_SUPERVISOR_BACKEND; for kv in "$@"; do export "${kv?}"; done; t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "$name: the worker spawn should succeed"$'\n'"$out"
   [ "$(t3_launch_field 'a.parentThreadId')" = "${expect:-undefined}" ] || fail "$name: the launch should name parent '${expect:-none}', got '$(t3_launch_field 'a.parentThreadId')'"
-  [ -n "$expect" ] || [ "$name" != ambiguous ] || assert_contains "$out" "without a crew parent" "an ambiguous home says the thread has no crew parent"
+  [ -n "$expect" ] || [ "$name" = upstream ] || assert_contains "$out" "without a crew parent" "$name: a spawn with no crew parent says so"
   pass "fm-spawn.sh --backend t3code: crew parent ($name) is '${expect:-none}'"
 }
 
@@ -3408,6 +3419,10 @@ test_spawn_names_supervisor_thread_as_crew_parent home ';' t-main
 test_spawn_names_supervisor_thread_as_crew_parent explicit ';' t-other FM_SUPERVISOR_TARGET=t-other FM_SUPERVISOR_BACKEND=t3code
 test_spawn_names_supervisor_thread_as_crew_parent upstream 'delete w.crewLineage' ''
 test_spawn_names_supervisor_thread_as_crew_parent ambiguous 'w.threads["t-other"].status = "running"; w.threads["t-other"].activeRunId = "r-t-other"' ''
+test_spawn_names_supervisor_thread_as_crew_parent between-turns 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-main"], { status: "completed", activeRunId: null, coordinator: true })' t-main
+test_spawn_names_supervisor_thread_as_crew_parent pin-over-ambiguous 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-other"], { status: "running", activeRunId: "r-t-other", coordinator: true })' t-other
+test_spawn_names_supervisor_thread_as_crew_parent archived-pin 'w.coordinatorRestartNote = true; Object.assign(w.threads["t-other"], { archived: true, coordinator: true })' t-main
+test_spawn_names_supervisor_thread_as_crew_parent none 'Object.assign(w.threads["t-main"], { status: "completed", activeRunId: null })' ''
 test_spawn_refuses_harness_without_a_channel_or_full_access
 test_spawn_effective_downgrade_returns_lease
 test_spawn_external_forge_codex_ship_carries_push_guard

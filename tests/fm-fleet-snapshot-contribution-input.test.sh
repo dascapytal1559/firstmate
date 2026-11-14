@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regression coverage for bin/fm-fleet-snapshot.sh --contribution-input:
 # a failing final jq assembly must exit non-zero instead of exiting 0 with
-# empty output (issue #5349).
+# empty output (issue #5349), and captain holds land in exactly one bucket.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -63,4 +63,47 @@ test_contribution_input_propagates_jq_failure() {
   pass "contribution-input propagates a failing jq assembly as a non-zero exit"
 }
 
+# Hold buckets: blocked, then dated (to the instant when the hold names a
+# time of day), then snoozed, then aged, then live; and a To read item's
+# flavor, which is never a decision waiting on the captain.
+test_hold_buckets_and_flavor() {
+  local home out
+  home=$(make_home buckets)
+  cat > "$home/data/backlog.md" <<'EOF'
+## Queued
+- [ ] blocker - Unfinished work (repo: alpha) (kind: ship) (since 2026-07-01)
+- [ ] blocked-snoozed - Waits on the blocker blocked-by: blocker (repo: alpha) (kind: captain) (since 2026-07-01) (hold: a) (hold-kind: captain)
+  Captain hold set: 2026-07-01T00:00:00Z
+  Captain hold snoozed: 2026-07-02T00:00:00Z
+- [ ] dated-time - Back this evening (repo: alpha) (kind: captain) (since 2026-07-01) (hold: b) (hold-kind: captain) (hold-until: 2026-07-11)
+  Captain hold set: 2026-07-01T00:00:00Z
+  Captain hold snoozed: 2026-07-09T00:00:00Z
+  Captain hold returns: 2026-07-10T20:00:00Z
+- [ ] dated-past - Was back this morning (repo: alpha) (kind: captain) (since 2026-07-01) (hold: c) (hold-kind: captain) (hold-until: 2026-07-11)
+  Captain hold set: 2026-07-01T00:00:00Z
+  Captain hold snoozed: 2026-07-09T00:00:00Z
+  Captain hold returns: 2026-07-10T08:00:00Z
+- [ ] snoozed-old - Put off with no date, long ago (repo: alpha) (kind: captain) (since 2026-01-01) (hold: d) (hold-kind: captain)
+  Captain hold set: 2026-01-01T00:00:00Z
+  Captain hold snoozed: 2026-01-02T00:00:00Z
+- [ ] aged - Old and live (repo: alpha) (kind: captain) (since 2026-01-01) (hold: e) (hold-kind: captain)
+  Captain hold set: 2026-01-01T00:00:00Z
+- [ ] to-read - A finished report (repo: alpha) (kind: captain) (since 2026-07-09) (hold: f) (hold-kind: captain)
+  Captain hold set: 2026-07-09T00:00:00Z
+  Captain hold flavor: read
+EOF
+  out=$(FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-10T12:00:00Z "$SNAPSHOT" --contribution-input \
+    | jq -c '[.backlog.records[] | select(.hold_bucket != null) | {id, hold_bucket, hold_flavor, captain_actionable}]') \
+    || fail "the snapshot failed"
+  assert_equals '[{"id":"blocked-snoozed","hold_bucket":"blocked","hold_flavor":"decision","captain_actionable":false},{"id":"dated-time","hold_bucket":"dated","hold_flavor":"decision","captain_actionable":false},{"id":"dated-past","hold_bucket":"live","hold_flavor":"decision","captain_actionable":true},{"id":"snoozed-old","hold_bucket":"snoozed","hold_flavor":"decision","captain_actionable":false},{"id":"aged","hold_bucket":"aged","hold_flavor":"decision","captain_actionable":false},{"id":"to-read","hold_bucket":"live","hold_flavor":"read","captain_actionable":false}]' \
+    "$out" "each hold lands in exactly one bucket, in order, with its flavor"
+  out=$(FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-10T12:00:00Z "$SNAPSHOT" --contribution-input \
+    | jq -c '.backlog.records[] | select(.id == "dated-time" or .id == "snoozed-old") | {id, hold_snoozed_at, hold_returns}') \
+    || fail "the snapshot failed"
+  assert_equals "$(printf '%s\n%s' '{"id":"dated-time","hold_snoozed_at":"2026-07-09T00:00:00Z","hold_returns":"2026-07-10T20:00:00Z"}' \
+    '{"id":"snoozed-old","hold_snoozed_at":"2026-01-02T00:00:00Z","hold_returns":null}')" "$out" "a snooze carries when and until when"
+  pass "contribution-input buckets holds blocked, dated, snoozed, aged, live, and marks To read items"
+}
+
 test_contribution_input_propagates_jq_failure
+test_hold_buckets_and_flavor

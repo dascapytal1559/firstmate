@@ -59,7 +59,14 @@
 //   - a T3 with the restart registry (world restartStatus, the T3 Code fork)
 //     offers t3_restart_status, whose serverStartedAt is the time this
 //     process started (world serverStartedAt answers another value), so a
-//     restart behind the same origin reads a new one.
+//     restart behind the same origin reads a new one. World restartRegistry
+//     also offers t3_restart_request {reason} and t3_restart_cancel, which
+//     set and clear world restartRequest {reason, requestedAt} (a request
+//     while one is pending replaces only its reason) and answer the status,
+//     or world restartAnswer instead; the status's activeTurns counts threads
+//     with an active run unless world activeTurns says otherwise, and
+//     drained is pending with none. A process restart does not clear the
+//     request, so a test that restarts the fake clears it itself.
 //   - a T3 with pending-request push (world pendingPush, the T3 Code fork)
 //     declares t3_thread_wait's settleOnPendingRequest and knownRequestIds,
 //     and such a wait also ends on a question or approval outside the known
@@ -93,6 +100,18 @@
 //     set it to stand for the captain's reply), a changed one loses it, and an
 //     identical list writes nothing. It answers {replyTo, decisions [{id,
 //     revision, answered}]} (world decisionsAnswer answers another value).
+//     An item may carry the fork's kind, thread {id, finished}, and snoozed
+//     {at, until|null}.
+//   - a T3 with the captain's action log (world actionsTool) offers
+//     t3_decisions_actions {after?, waitMs?, ack?}: an ack lands at once,
+//     appended to world acks (each with `list`, the decisions as they stood
+//     then) and dropping those seqs from world actions,
+//     then it answers {actions (those after `after`), lastSeq}, waiting up
+//     to waitMs for one while re-reading the world, so a test can append to
+//     world actions meanwhile.
+//   - a T3 with pinned reports (world reportsTool) offers t3_reports_unpin
+//     {id}, which drops that id from world pinnedReports [{id, title,
+//     pinnedAt}] and answers {reports} as left.
 //   - t3_thread_organize serves archive, and refuses any other action unless
 //     the T3 keeps threads for their reader (world reviews, the T3 Code
 //     fork). Such a T3 offers t3_thread_note, enumerates organize's actions
@@ -108,8 +127,8 @@
 //     same id answers created:false with no new item, the same id with other
 //     text and a new id on an archived thread are refused as invalid_request.
 //     A fenced thread refuses t3_thread_send. World reviewsUnread reads the
-//     review fields back as an older T3 would, absent; archiveOnNote archives
-//     the thread right after a new note lands, as a captain's close racing
+//     review fields back as an older T3 would, absent; archiveOnTag archives
+//     the thread right after a tag lands, as a captain's close racing
 //     publication; reviewActions replaces the review actions organize lists.
 //   - every prompt a launch or send makes is a user_message item carrying
 //     its messageId and runId, and t3_thread_read view "messages" keeps only
@@ -175,7 +194,9 @@ const ALL_TOOLS = [
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
 const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.rulesTool ? ["t3_rules_set"] : [], w.decisionsTool ? ["t3_decisions_set"] : [],
-  w.restartStatus ? ["t3_restart_status"] : [], w.reviews ? ["t3_thread_note"] : []);
+  w.actionsTool ? ["t3_decisions_actions"] : [], w.reportsTool ? ["t3_reports_unpin"] : [],
+  w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : [],
+  w.reviews ? ["t3_thread_note"] : []);
 const ORGANIZE_ACTIONS = ["archive", "unarchive", "settle", "unsettle", "snooze", "unsnooze", "pin", "unpin", "mark_read", "mark_unread"];
 const REVIEW_ACTIONS = ["tag", "untag", "disable_auto_settle", "enable_auto_settle", "fence", "unfence"];
 const STARTED_AT = new Date().toISOString();
@@ -391,7 +412,7 @@ const notFound = (id) => err("thread_not_found", `Thread ${id} is no longer avai
 // The fork's Decision (packages/contracts/src/decisions.ts): exactly these
 // fields, trimmed text within its bounds, and a positive revision. Returns
 // the first problem, or null.
-const LIST_DECISION_FIELDS = new Set(["id", "title", "projectName", "since", "question", "options", "entries", "revision", "wakeAt"]);
+const LIST_DECISION_FIELDS = new Set(["id", "title", "projectName", "since", "question", "options", "entries", "revision", "wakeAt", "kind", "thread", "snoozed"]);
 function listDecisionProblem(d) {
   const text = (v, max) => typeof v === "string" && v.trim() !== "" && v.trim().length <= max;
   const optionalText = (v, max) => v === undefined || text(v, max);
@@ -403,6 +424,9 @@ function listDecisionProblem(d) {
   if (d.projectName !== undefined && !text(d.projectName, 200)) return "projectName must be bounded non-empty text";
   if ((d.since !== undefined && !time(d.since)) || (d.wakeAt !== undefined && !time(d.wakeAt))) return "since and wakeAt must be dates";
   if (!(Number.isInteger(d.revision) && d.revision > 0)) return `revision must be a positive integer, not ${d.revision}`;
+  if (d.kind !== undefined && !["decision", "read"].includes(d.kind)) return "kind must be decision or read";
+  if (d.thread !== undefined && !(typeof d.thread?.id === "string" && typeof d.thread.finished === "boolean" && Object.keys(d.thread).length === 2)) return "thread must be {id, finished}";
+  if (d.snoozed !== undefined && !(time(d.snoozed?.at) && (d.snoozed.until === null || time(d.snoozed.until)) && Object.keys(d.snoozed).length === 2)) return "snoozed must be {at, until}";
   if (!Array.isArray(d.options) || d.options.length > 12) return "at most 12 options";
   for (const o of d.options) if (!text(o.label, 200)) return "an option needs a bounded label";
   if (!Array.isArray(d.entries) || d.entries.length > 24) return "at most 24 entries";
@@ -436,6 +460,18 @@ function descendants(threads, id) {
     }
   }
   return out;
+}
+
+// The fork's t3_restart_status answer. activeTurns counts the threads with an
+// active run, or world activeTurns when a test sets it.
+function restartStatus(w, threads) {
+  const request = w.restartRequest ?? null;
+  const activeTurns = w.activeTurns ?? Object.values(threads).filter((x) => ACTIVE.has(x.status)).length;
+  return {
+    pending: request !== null, reason: request?.reason ?? null, requestedAt: request?.requestedAt ?? null,
+    activeTurns, drained: request !== null && activeTurns === 0,
+    serverStartedAt: w.serverStartedAt ?? STARTED_AT,
+  };
 }
 
 // Returns [result, changed].
@@ -496,14 +532,50 @@ async function callTool(w, name, a) {
       const answer = { replyTo: next.replyTo, decisions: decisions.map((d) => ({ id: d.id, revision: d.revision, answered: d.answered !== undefined })) };
       return [ok(w.decisionsAnswer ?? answer), changed];
     }
+    case "t3_decisions_actions": {
+      // The fork's action log: world actions [{seq, ...}], acknowledged ones
+      // leave it; with none after `after`, waits up to waitMs (polling the
+      // world, so a test can append one meanwhile).
+      // Acknowledgements land at once (world acks records them in order);
+      // the wait re-reads the world, so this call writes nothing itself.
+      if ((a.ack ?? []).length) {
+        const fresh = loadWorld();
+        // Each ack keeps the list as it stood when the ack landed.
+        fresh.acks = [...(fresh.acks ?? []), ...a.ack.map((k) => ({ ...k, list: fresh.decisionList?.decisions ?? [] }))];
+        fresh.actions = (fresh.actions ?? []).filter((x) => !a.ack.some((k) => k.seq === x.seq));
+        saveWorld(fresh);
+      }
+      const after = a.after ?? 0;
+      const deadline = Date.now() + (a.waitMs ?? 0);
+      for (;;) {
+        const cur = loadWorld();
+        const pending = (cur.actions ?? []).filter((x) => x.seq > after);
+        if (pending.length || Date.now() >= deadline) {
+          const lastSeq = Math.max(0, ...(cur.actions ?? []).map((x) => x.seq), cur.lastActionSeq ?? 0);
+          return [ok({ actions: pending, lastSeq }), false];
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    case "t3_reports_unpin": {
+      w.pinnedReports ??= [];
+      const changed = w.pinnedReports.some((r) => r.id === a.id);
+      w.pinnedReports = w.pinnedReports.filter((r) => r.id !== a.id);
+      return [ok({ reports: w.pinnedReports }), changed];
+    }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
+    case "t3_restart_request": {
+      const reason = typeof a.reason === "string" ? a.reason.trim() : "";
+      if (!reason || reason.length > 500) return [err("invalid_params", "reason must be 1 to 500 characters"), false];
+      w.restartRequest = w.restartRequest ? { ...w.restartRequest, reason } : { reason, requestedAt: new Date().toISOString() };
+      return [ok(w.restartAnswer ?? restartStatus(w, threads)), true];
+    }
+    case "t3_restart_cancel":
+      w.restartRequest = null;
+      return [ok(w.restartAnswer ?? restartStatus(w, threads)), true];
     case "t3_restart_status":
-      return [ok({
-        pending: false, reason: null, requestedAt: null, drained: false,
-        activeTurns: Object.values(threads).filter((x) => ACTIVE.has(x.status)).length,
-        serverStartedAt: w.serverStartedAt ?? STARTED_AT,
-      }), false];
+      return [ok(restartStatus(w, threads)), false];
     case "orchestrator_capabilities":
       return [ok({
         parentThreadId: null, runtimeMode: "full-access", interactionMode: "default", providers: servedProviders(w, a.search),
@@ -668,7 +740,6 @@ async function callTool(w, name, a) {
       t.notes[a.clientRequestId] = { text, messageId, sequence: w.sequence };
       t.items = t.items ?? [];
       t.items.push({ type: "user_message", status: "completed", text, note: true, runId: null, itemId: `turn-item:message:${messageId}` });
-      if (w.archiveOnNote) t.archived = true;
       return [ok({ threadId: t.threadId, messageId, sequence: w.sequence, created: true }), true];
     }
     case "t3_thread_organize": {
@@ -683,6 +754,7 @@ async function callTool(w, name, a) {
             if (!tag) return [err("invalid_request", "This action needs `tag`."), false];
             const tags = t.tags ?? [];
             t.tags = a.action === "untag" ? tags.filter((x) => x !== tag) : tags.includes(tag) ? tags : [...tags, tag];
+            if (a.action === "tag" && w.archiveOnTag) t.archived = true;
             return done();
           }
           case "disable_auto_settle":

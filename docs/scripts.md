@@ -11,7 +11,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-sessionstart-nudge.sh` | Print the native session-start hook nudge when the primary has not already run the digest |
 | `fm-sessionstart-run.sh` | Route a native session-open hook to the full digest, a context re-emit, or the nudge |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
-| `fm-bootstrap.sh`        | Detect toolchain and fleet problems, run the locked session-start sweeps, and install approved tools |
+| `fm-bootstrap.sh`        | Detect toolchain and fleet problems, report home-local record inconsistencies when `config/record-hygiene` is present, run the locked session-start sweeps, and install approved tools |
 | `fm-startup-network.sh`  | Run session start's network checks and inactive-outcome scan off its blocking path, retaining reports and durable findings |
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, and bounded recovery from an orphaned `.git/packed-refs.lock` |
 | `fm-fleet-snapshot.sh`   | Print structured fleet snapshot JSON and refresh only its parent-side remote-ledger cache (schema `fm-fleet-snapshot.v1`) |
@@ -33,7 +33,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-remote-doctor.sh`    | Check, and with `--fix` repair, one remote account's [second-mate readiness](remote-secondmates.md#readiness-repair-and-the-human-steps) |
 | [`fm-backlog-handoff.sh`](../bin/fm-backlog-handoff.sh) | Move queued backlog items into a secondmate home; its header owns route-specific wake outcomes and retries |
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
-| `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, and report record divergence between the status log and the backlog |
+| `fm-captain-hold.sh`     | Hold tasks for the captain, record the captain's answers, gate investigation completion, settle declared holds from forge PR evidence, and report record divergence between the status log and the backlog |
 | `fm-decision-hold.sh`    | One-release compatibility shim mapping the retired decision commands onto fm-captain-hold.sh |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`, plus the project's registered `--forge` and `--pr`), scout, secondmate-charter, and Herdr-lab briefs, with Captain's intent and Firstmate spec subsections on ship/scout |
 | [`fm-dod-lib.sh`](../bin/fm-dod-lib.sh) | Own ship/scout worker role scope, ship definitions of done, the named-head reachability gate on ship `done:` acceptance, and the no-mistakes `--intent` contract |
@@ -103,16 +103,20 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
-| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its holds, kept reviews, and current state |
-| `fm-t3-review.sh`        | Keep a finished T3 scout's thread and copy for the captain: publish the handoff note, notice his close, and gate cleanup on it |
+| `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
+| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Testing", "Waiting", "Ready", "Failed") in line with its current state |
+| `fm-t3-review.sh`        | Keep a finished T3 scout's thread and copy for the captain: mark its thread kept and To read, record it closed when he archives the report or the thread, and gate cleanup on it |
 | `fm-t3-review-lib.sh`    | The one reader of a task's kept-review record, shared by the card, watcher, recovery, and cleanup |
-| `fm-t3-needs-me.sh`      | Keep the captain's T3 Bridge in line with his open captain calls, objectives file, model routing table, and rule inventory, and read a decision reply's task id |
+| `fm-t3-needs-me.sh`      | Keep the captain's list in T3 in line with his open captain items, and the Bridge with his objectives file, model routing table, and rule inventory, and read a reply's task id |
+| `fm-t3-captain-sync.sh`  | Keep the captain's T3 list and the backlog in step in real time: the listener, applying his actions, the ten-minute check, and the one-time migration |
+| `fm-t3-captain-sync.mjs` | The Node half of the captain's-list listener: file watches and the action loop |
 | `fm-rules.sh`            | Record the captain's answer to a rule on T3's Bridge and track the rule-file edit it still needs |
 | `fm-t3-main-pretool-check.sh` | PreToolUse credential seatbelt for a T3 home's main |
 | `fm-extension.sh`        | Expose extension binding commands through the tracked shell and remote-home command boundary |
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
 | `fm-procevent-remote-reply.sh` | Relay the remote-secondmate status stream through non-destructive process-event deltas |
 | `fm-procevent-quota.sh`  | Wake Firstmate when tracked quota drops below a threshold, is exhausted, or cannot be polled |
+| `fm-procevent-t3-captain-sync.sh` | Keep the captain's-list listener running for as long as its home does |
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
 | `fm-fleet-idle.sh`       | Exit 0 when no direct report of this home is mid-turn or running its own work, for a "do X when the fleet goes idle" watch |
 | `fm-job.sh`              | Run a worker's long command as a detached job that an app restart cannot stop, record it, deliver its result through the steering inbox, and stop it at cleanup |
@@ -169,10 +173,11 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-startup-growth-check.sh` | Daily metadata-only growth check for startup memory and tracked startup/instruction surfaces |
 | `fm-usage-warner.sh`     | Opt-in macOS threshold warner that notifies once when a configured Claude usage window crosses its percentage |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation, the branch-to-PR lookup shared by teardown and the PR health monitor, plus private atomic PR-poll publication, merge-notification identity, and retirement |
-| `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated pull-request, merge-request, and Gerrit-change poll sidecars |
+| `fm-pr-poll.sh`          | Provide the byte-static watcher program for validated pull-request, merge-request, and Gerrit-change poll sidecars; reports merged or post-ready degradation for GitHub checks, GitLab head pipelines, and merge-train drops (see [GitLab merge watch](gitlab-merge-watch.md)) |
 | `fm-contributions.sh`    | Observe owned publications, retain exact-head judgments, measure required actors, and wake on maintainer or configured review-bot signals |
 | `fm-pr-health.sh`        | Opt-in: enroll owned PRs; wake once per latest commit for conflicts, failing checks, and author actions; record maintainer-gated CI and missing required reviews without waking the task, using GitHub notifications plus a fallback sweep (see [configuration.md](configuration.md#pr-health-monitor-configpr-health-monitor)) |
-| `fm-pr-check.sh`         | Record validated task `pr=` and `pr_head=` values, then atomically arm a static merge poll; refuses GitHub drafts and persistent secondmate records (see [architecture.md](architecture.md)); `scan`, run by the watcher's check sweep when `config/pr-register-scan` is present, records each PR a task's `done:` line reports when no `pr=` exists |
+| `fm-park.sh`             | Park a ship lane whose PR or MR only awaits human review from a verified clean state, relaunch a fresh worker on review activity, and clean it up on merge (see [configuration.md](configuration.md#park-on-review)) |
+| `fm-pr-check.sh`         | Record validated task `pr=` and `pr_head=` values, then atomically arm a static merge poll that also wakes on degraded ready PR/MR states (GitHub checks, GitLab pipelines, and merge-train drops) when `config/pr-degraded-watch` is present; refuses GitHub drafts and persistent secondmate records (see [architecture.md](architecture.md)); `scan`, run by the watcher's check sweep when `config/pr-register-scan` is present, records a task's ready `done:` PR when no `pr=` exists, its matching poll is missing, or it replaces one its status log named |
 | `fm-review-check.sh`    | Record a forge=external task's validated `review=` and `review_head=` without arming a merge watch ([design](external-review-forge.md)) |
 | `fm-external-review-lib.sh` | Shared readers for the forge=external review tool adapter, ready-URL pattern, backup remote, and remote URLs |
 | `fm-pr-merge.sh`         | Record PR metadata, merge a task's canonical full GitHub, GitLab, or Forgejo URL, refuse a Gerrit change because firstmate never submits one, then refuse an outcome it cannot prove landed or queued |

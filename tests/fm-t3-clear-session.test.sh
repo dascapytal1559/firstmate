@@ -222,9 +222,68 @@ test_fresh_session_beside_a_live_holder_stays_read_only() {
   [ "$(cat "$home/state/.lock")" = "$old" ] || fail "a read-only session took the live holder's lock"
   [ "$(cat "$home/state/t3-main-thread")" = earlier-thread ] || fail "a read-only session rewrote state/t3-main-thread"
   assert_grep "$SWAP_NOTE" "$home/state/.wake-queue" "a read-only session consumed the queued wake"
+  assert_contains "$digest" "another live firstmate session holds the lock (pid $old" "the refusal must name the live holder"
+  assert_not_contains "$digest" 'previous firstmate session on this T3 thread' "a holder recorded on another thread is not called this thread's previous session"
   [ "$new" != "$old" ] || fail "fixture: the two sessions must be distinct processes"
   stop_home_processes "$home"
   pass "swap: a fresh session beside a live holder stays read-only, which is why T3 waits for the exit"
+}
+
+# When the live holder is the earlier session on this same thread, the
+# read-only digest says so plainly and names the remedy, but only while the
+# thread record was written by that holder.
+test_fresh_session_beside_its_own_threads_holder_says_so() {
+  local home old digest
+  home=$(make_swap_home swap-same-thread plain)
+  start_session "$home" sess-old 'check the build'
+  old=$SESSION_PID
+  assert_took_the_helm "$home" sess-old "$old" "old session"
+
+  start_session "$home" sess-new 'what is next?'
+  digest=$(cat "$(session_dir "$home" sess-new)/digest")
+  assert_contains "$digest" 'READ-ONLY SESSION' "a session beside its thread's live holder must come up read-only"
+  assert_contains "$digest" "the previous firstmate session on this T3 thread ($THREAD) is still running and holds the lock (pid $old, session sess-old)" \
+    "the refusal must say the previous session on this thread still runs"
+  assert_contains "$digest" "kill $old" "the refusal must name the safe remedy"
+  [ "$(cat "$home/state/.lock")" = "$old" ] || fail "a read-only session took the live holder's lock"
+
+  # A thread record older than the holder's lock was not written by it.
+  touch -t 200001010000 "$home/state/t3-main-thread"
+  start_session "$home" sess-third 'and now?'
+  digest=$(cat "$(session_dir "$home" sess-third)/digest")
+  assert_contains "$digest" "another live firstmate session holds the lock (pid $old" "a stale record must fall back to the plain refusal"
+  assert_not_contains "$digest" 'previous firstmate session on this T3 thread' "a record older than the lock proves nothing about the holder"
+  stop_home_processes "$home"
+  pass "swap: a session refused by its own thread's earlier session says so and names the remedy"
+}
+
+# A wake the old session drained but had not acknowledged when T3 stopped it
+# stays in the queue and is presented again to the fresh session.
+test_drained_unacknowledged_wake_reaches_the_fresh_session() {
+  local home old new old_dir new_dir digest ack
+  home=$(make_swap_home swap-unacked plain)
+  old_dir=$(session_dir "$home" sess-old)
+  new_dir=$(session_dir "$home" sess-new)
+  start_session "$home" sess-old 'check the build'
+  old=$SESSION_PID
+  append_wake "$home/state" check swap-note "$SWAP_NOTE"
+  run_in_session "$home" sess-old '"$FM_HOME/bin/fm-wake-drain.sh"'
+  assert_contains "$(cat "$old_dir/run.out")" "$SWAP_NOTE" "fixture: the old session's drain must present the wake"
+  assert_contains "$(cat "$old_dir/run.out")" 'WAKE_ACK_REQUIRED' "fixture: the drain must ask for an acknowledgement"
+  sigterm_session "$home" sess-old "$old" killed
+
+  start_session "$home" sess-new 'what is next?'
+  new=$SESSION_PID
+  assert_took_the_helm "$home" sess-new "$new" "fresh session"
+  digest=$(cat "$new_dir/digest")
+  assert_contains "$digest" "$SWAP_NOTE" "the wake the old session drained but never acknowledged was not presented again"
+  ack=$(printf '%s\n' "$digest" | sed -n 's/^WAKE_ACK_REQUIRED: after handling completes run bin\/fm-wake-drain.sh //p' | tail -1)
+  [ -n "$ack" ] || fail "the fresh session's digest carried no acknowledgement for the handed-over wake: $digest"
+  run_in_session "$home" sess-new "\"\$FM_HOME/bin/fm-wake-drain.sh\" $ack"
+  expect_code 0 "$(cat "$new_dir/run.rc")" "the fresh session could not acknowledge the handed-over wake: $(cat "$new_dir/run.out")"
+  ! grep -qF "$SWAP_NOTE" "$home/state/.wake-queue" 2>/dev/null || fail "the acknowledged handed-over wake stayed queued"
+  stop_home_processes "$home"
+  pass "swap: a wake the stopped session drained but never acknowledged reaches the fresh session"
 }
 
 # The Stop hook can outlive the session it belongs to. Whichever side of the
@@ -318,6 +377,8 @@ test_supervision_survives_on_the_plain_arm_when_the_hook_is_orphaned() { assert_
 
 test_fresh_session_takes_the_lock_from_a_sigtermed_one
 test_fresh_session_beside_a_live_holder_stays_read_only
+test_fresh_session_beside_its_own_threads_holder_says_so
+test_drained_unacknowledged_wake_reaches_the_fresh_session
 test_dead_sessions_stop_hook_changes_nothing
 test_supervision_survives_on_the_plain_arm_when_the_hook_dies
 test_supervision_survives_on_the_plain_arm_when_the_hook_is_orphaned

@@ -1219,3 +1219,147 @@ The gap was in Firstmate: a Codex worker launched with `--effort max` quietly st
 
 The evidence is a portable regression with a fake catalog (a new `fm-codex-effort-catalog` suite plus the spawn and bootstrap suites), and one short live `codex exec` of Sol at max under the ChatGPT login.
 That run accepted the setting and answered, but its JSON output does not echo the effective model or effort, so the launch flag is proven and the effective level is not.
+
+## 48. A T3 build installs only after every reply finishes (13 November 2026)
+
+![Before, an idle fleet installed at once and cut FirstMate's reply; after, T3 is asked for the restart, holds new messages, and restarts only once every turn has finished](media/t3-clean-restart.svg)
+
+A quiet-time install of a new T3 Code build restarted T3 while FirstMate's own turn was running, because the quiet check counted only the workers.
+The turn showed an orange "Cancelled because the server shut down" row before T3 resumed it.
+His answer:
+
+> I remember you used to do this restart step slightly differently, which is that you say T3 code is gonna restart in like 30 seconds and then you let the message finish and then T three code restarts. So it's a true clean restart. I wonder I mean the cleanness I like. I pro I prefer.
+>
+> — 13 November 2026
+
+What was built:
+
+- **Ask first, then wait.**
+  Once no worker is busy, FirstMate asks T3 for the restart with the build's name as the reason.
+  T3 shows the captain that it will restart, holds every new message, and lets running turns finish, FirstMate's own included.
+- **Restart only when drained.**
+  The install starts only when T3 reports that no turn is running anywhere, so no reply is cut; the held messages then run in order once T3 is back.
+- **Never left holding messages.**
+  A wait that runs past its limit cancels the request and says so, which releases the messages.
+  So does stopping the install, as when a newer build replaces it.
+  If the captain cancels the restart from T3's notice, or T3 restarts on its own, nothing is installed.
+  The chosen wait is the one he picked: the request goes in only once the workers are idle, so the hold lasts about as long as FirstMate's reply.
+
+The evidence is a new regression suite against a fake T3 with the restart registry: drained at once, waiting on running turns, the timeout cancel, a cancel from T3, a replaced request, a restart on its own, and a stop that kills the whole process group, which still cancels.
+That last case first failed, and found a real gap: a stop that landed while T3 was still answering the request skipped the cancel.
+The live T3 answered the new status call read-only; no restart was requested on it.
+
+## 49. A fresh start hands over cleanly (13 November 2026)
+
+A `/clear` on the FirstMate thread in T3 left the previous session running.
+T3 sent new messages to the new session, while the old one kept the session lock and went on dispatching and merging work for about 20 minutes with its replies no longer shown in the thread, and the new session sat read-only.
+One worker launched in that window had no parent thread and showed at the top level of the sidebar.
+The old session was stopped by hand to recover.
+
+> When we run slash clear, um especially when it's registered, then that is a definitive moment when we've switched to a new first mate main thread.
+>
+> — 13 November 2026
+
+On the case where the old session is busy at that moment:
+
+> given that this is kind of a backstop we can just go with like stop it right away and then migrate for as long as we can maintain that smooth handover.
+
+T3 itself is changing so that a fresh start on the main thread stops the previous session; this is FirstMate's side of the handover.
+
+- **Workers keep their parent between turns.**
+  A worker's thread now names the project's pinned FirstMate thread as its parent even when FirstMate is not mid-turn, as the Bridge decisions already did, falling back to the one running thread.
+  When no parent can be found, the spawn says why instead of launching an orphan silently.
+- **A read-only start says what is wrong.**
+  When the lock belongs to the earlier session on the same T3 thread, the read-only notice now says so and names the remedy, instead of only "another live session holds the lock":
+
+  ```text
+  error: the previous firstmate session on this T3 thread (<thread>) is still running and holds the lock (pid <pid>, session <id>); its replies no longer reach the thread. Safe remedy: end that earlier session with kill <pid> (the SIGTERM T3 sends a replaced session; its unacknowledged wakes stay queued for this one), then run bin/fm-session-start.sh again here; operate read-only until resolved
+  ```
+
+  The thread comes from the id T3 gives every agent, matched against the thread record only the lock holder writes; a record older than the lock proves nothing, so no claim is made from it.
+- **Nothing in flight is lost.**
+  A new real-process test stops a session after it has read a notification but before it acknowledged it, and checks that the fresh session is shown the same notification and can acknowledge it.
+  This already held; the test now keeps it so.
+
+The evidence is the swap suite's two new cases (the same-thread refusal, with its stale-record fallback, and the unacknowledged handover) and four new crew-parent cases: a pinned thread between turns, a pin that settles several running threads, an archived pin ignored, and no thread at all.
+
+## 50. Only trusted reviewers wake a parked worker (13 November 2026)
+
+Upstream's newest update brought park on review: a worker whose PR only waits for review is stopped, and a fresh one starts when the PR gets new review activity.
+The nightly review held the update back, because that activity could come from anyone: on a public repository, a passer-by's comment would start an agent told to act on it.
+
+Asked how to take it:
+
+> Sometimes we do turn it into a PR. And when we do, I like to preserve that functionality. And use that as intended. But yes, you are right. Most of the time we don't do that. So, if we could just make it conditional.
+>
+> — 13 November 2026
+
+- **Trust decides the restart.**
+  A comment, review, or unresolved thread restarts the worker only when it comes from the repository's owners, members, or collaborators, or a bot listed in `config/contribution-review-bots`, the trust the contribution watcher already uses.
+- **Nothing is dropped silently.**
+  Anything else leaves the worker stopped and tells FirstMate once, naming who wrote it and when; new activity tells it again.
+  GitLab's reads carry no membership, so GitLab activity always takes this path, and so does a read too large to see every author.
+- **PR text is input, not orders.**
+  The fresh worker's note says comment text is written by other people, to read for what to change and never to follow as instructions.
+- **Everything else is upstream's.**
+  Pushes, failing checks, requested changes, and conflicts restart the worker exactly as before.
+
+The evidence is the park suite: a trusted comment restarts the worker, while a passer-by's comment, an unlisted bot, a thread opened by an untrusted author, and GitLab notes each leave it stopped and are reported once.
+The new cases fail against upstream's unchanged code.
+Park on review stays off in this home.
+
+## 51. A finished card takes a reply or an archive (13 November 2026)
+
+On finished scout cards waiting for him in T3:
+
+> Let's remove the first mate summary. Let's add back the input box where we can essentially reply to this ... but it gets forwarded to first mate, so first mate fully coordinates it ... instead of settling the button here is archive ... if the thing is needs like some action where there's some decision for me to make and I can choose to archive as well. And I think in that case it probably needs to communicate to first mate that I have like archived this
+>
+> — 13 November 2026
+
+This is FirstMate's half; the card's input box and Archive button are the T3 fork's.
+
+- **No summary note.**
+  A kept scout's thread is still tagged `waiting for captain` with automatic settling off, but nothing is posted into it.
+  FirstMate keeps its summary, explanation, and report link as its own handoff record and relays them in chat.
+- **His reply reaches FirstMate.**
+  What he types on a card arrives in FirstMate's thread as one message: `**Reply · <card title>**`, then `kept-thread: <thread id>`, then his words, the same shape as a Bridge decision reply.
+  `fm-t3-needs-me.sh reply-task` now reads either line, so FirstMate knows which task he means and treats his words as his input on it.
+- **Archive closes one item.**
+  His Archive on the report's item marks it read and closes the review, so the scout is cleaned up; his Archive on a decision raised from the review closes that decision alone.
+  Closing the review closes no other item on the card, and a thread he restores reopens nothing.
+  Nothing is deleted: the report and the task's records stay.
+
+The evidence is the review, needs-me, list, and T3 helper suites: the thread is tagged with no note, a kept-card reply names its task and refuses anything ambiguous, an Archive on a shared card closes only its own item in either direction, and closing the review, on the watcher's pass or cleanup's, leaves every captain call open.
+
+## 52. One list, kept in step both ways (13 November 2026)
+
+![The backlog pushes the whole list to T3's sidebar within about a second of any change; his Snooze, Bring back, and Archive come back, are applied to the backlog, pushed, and only then acknowledged; a ten-minute check covers crashes and restarts](media/captain-list-both-ways.svg)
+
+Why:
+
+> it's not automatically synced to a single source of truth for their state, so that they can be outdated. The idea that they can be outdated is not great.
+>
+> Rather than syncing once a minute, I would like to explore doing that in real time.
+>
+> — 13 November 2026
+
+This is FirstMate's half; the sidebar's labels, Snooze button, and Archive are the T3 fork's.
+
+- **The backlog is the record.**
+  Every open captain hold is one item on a card under FirstMate's: a decision, or, held `--read`, a finished report To read.
+  An item rides on its worker's card; a decision with no worker gets a thread of its own, titled with the question, with nothing posted into it ("Let's reduce the scope.").
+- **Real time, both ways.**
+  A listener, kept running by the watcher, pushes the whole list within about a second of any backlog change, whoever made it.
+  His Snooze, Bring back, and Archive are logged by T3; the listener applies each to the backlog, pushes the list, and only then acknowledges it, so the sidebar never shows something the backlog does not.
+  The minute pass for the list is gone; a ten-minute check covers crashes and restarts.
+- **Snooze uses T3's presets.**
+  "We just use theirs": a return can be a time of day, so the backlog now keeps an exact return time beside its date.
+  A snoozed item "stays snoozed unless we bring it back"; FirstMate's own updates never wake it.
+- **Archive is "not pursued", for its own item only.**
+  Park now means snooze, so an archived decision is recorded as "Archived in T3 on <date>: not pursued." and a report as read; nothing else on the card changes.
+  Only his Archive on an item counts: a thread's own archive or restore, FirstMate's cleanup archive included, closes no item, and the check never infers one.
+  A decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down through its normal safe cleanup.
+- **No more "Waiting for captain".**
+  The card's Needs you or To read comes from the list, so FirstMate's own label for it is gone.
+
+The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a thread's archive or restore changes nothing) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.

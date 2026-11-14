@@ -48,6 +48,8 @@
 # no-mistakes mode only (bin/fm-project-mode.sh --pr; bin/fm-dod-lib.sh's
 # fm_pr_text_valid owns where it is accepted); the ship's Definition of done then
 # carries it.
+# A To read hold on the scout's own task (its kept report) is marked read,
+# since promoting acts on the report; a decision held on it stays open.
 # Usage: fm-promote.sh <task-id> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--upstream-consent <host>/<owner>/<repo>]
 # --upstream-consent records the captain's one-off approval for this task to
 # publish to firstmate's own upstream repository; promotion applies the same
@@ -399,7 +401,8 @@ fi
 BRIEF_REPLACEMENT=
 
 TMP="$STATE/.$ID.meta.promote.${BASHPID:-$$}"
-grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' -e '^upstream_consent=' "$META" > "$TMP"
+grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^branch=' -e '^upstream_consent=' -e '^t3_review=' -e '^t3_review_target=' \
+  -e '^t3_review_revision=' -e '^t3_review_request=' "$META" > "$TMP"
 {
   echo "kind=ship"
   echo "mode=$MODE"
@@ -418,6 +421,20 @@ rm -f -- "$BRIEF_ORIGINAL" 2>/dev/null || true
 BRIEF_ORIGINAL=
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
+fm_lock_release "$CONTROL_LOCK"
+CONTROL_LOCK_HELD=0
+
+# Promoting acts on the scout's report, so a To read hold on it is read; a
+# decision held on the task stays the captain's.
+if FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+  "$SCRIPT_DIR/fm-captain-hold.sh" open "$ID" >/dev/null 2>&1 </dev/null \
+  && ! READ_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" read-done "$ID" 2>&1 >/dev/null </dev/null); then
+  case "$READ_OUT" in
+    *'is a decision'*) ;;
+    *) echo "warning: $ID's report is still held To read: ${READ_OUT##*$'\n'}; mark it with bin/fm-captain-hold.sh read-done $ID" >&2 ;;
+  esac
+fi
 
 HOME_Q=$(printf '%q' "$FM_HOME")
 INSTRUCTIONS_Q=$(printf '%q' "$INSTRUCTIONS")

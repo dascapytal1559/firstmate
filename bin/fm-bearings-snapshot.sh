@@ -40,9 +40,12 @@
 # buckets are total and mutually exclusive, so every captain hold appears in
 # exactly one decision bucket and none can fall through both. An actively worked
 # held task may also appear in Underway. A "live" hold is a default Captain's Call
-# entry; "blocked", "dated", and "aged" leave the default Captain's Call, render
-# as Charted Next gates stating why (the blocking work, the until date, or the
-# floored age), and are counted in omitted[].
+# entry; "blocked", "dated", "snoozed", and "aged" leave the default Captain's
+# Call, render as Charted Next gates stating why (the blocking work, the until
+# date or time, "snoozed", or the floored age), and are counted in omitted[].
+# A live or aged To read item (hold_flavor read) is never a decision: it is
+# listed in to_read instead of Captain's Call or a gate; under --all-decisions
+# every To read item is, whatever its bucket.
 # --all-decisions reveals every captain hold available within the bounded snapshot
 # and drops its gate, so a hold is never in both Captain's Call and Charted Next.
 # Aging is a projection safety net only; the durable
@@ -165,6 +168,7 @@ Default fields: schema, home, generated, priorities{text}, objectives{text}, prs
   secondmate_reconcile{id,spawn_gen,host,kind,ids},
   decisions_open{id,key,verb,summary,question,owner}, landed{id,what,artifact,owner},
   gates{id,title,blocked_by,reason,owner,filed},
+  to_read{id,title,repo} (this home's live or aged To read items, every one with --all-decisions; never decisions),
   ideas{total,list,newest{id,title,repo,owner,filed}}, reports{id,path}, recorded_prs{id,url},
   unhealthy_endpoints{...} (only when non-empty), omitted{surface,reveal}.
 Default gates are selected newest filed first before their bound; undated gates
@@ -410,6 +414,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       elif length > $n then (if $n == 1 then "…" else (.[:($n - 1)] + "…") end)
       else . end;
   def live_captain_call: .hold_bucket == "live";
+  def waiting_to_read: .hold_flavor == "read" and (.hold_bucket == "live" or .hold_bucket == "aged");
   def projected_deferred_hold:
     .hold_bucket != null and .hold_bucket != "live";
   def bounded_blocker_note($n):
@@ -429,7 +434,8 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       end;
   def hold_note:
     if .hold_bucket == "blocked" then bounded_blocker_note(70)
-    elif .hold_bucket == "dated" then ("until " + (.hold_until // "-"))
+    elif .hold_bucket == "dated" then ("until " + (.hold_returns // .hold_until // "-"))
+    elif .hold_bucket == "snoozed" then "snoozed"
     elif .hold_bucket == "aged" and .hold_age_days != null then
       ("held " + (.hold_age_days | tostring) + "d")
     else null end;
@@ -548,7 +554,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
             doing:((.doing // .state) | trunc(90))} ]) as $in_flight_all
   | ([ .backlog.records[]
          | . as $record
-         | select(.structured and .hold_bucket != null)
+         | select(.structured and .hold_bucket != null and .hold_flavor != "read")
          | select(($all_decisions == 1) or live_captain_call)
          | {id,key:.id,verb:"captain-hold",
             summary:hold_summary(.title; .hold_reason),
@@ -562,7 +568,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                                       (.reason // "captain decision pending")),
                  question:(.question // ((.summary // .id) + ": " + (.reason // "captain decision pending"))),owner:$m.id} ]
             + [ $m.queued[]?
-                | select($all_decisions == 1 and .hold_kind == "captain")
+                | select($all_decisions == 1 and .hold_kind == "captain" and .hold_flavor != "read")
                 | select(.id as $id
                          | [$m.decisions_open[]?
                             | select(.source == "backlog" and .verb == "captain-hold")
@@ -574,9 +580,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
                    question:(.question // ((.title // .id) + ": " + (.hold_reason // "captain decision pending"))),owner:$m.id} ])[] ]) as $decisions_all
   | ([ .backlog.records[]
          | . as $record
-         | select(.structured and projected_deferred_hold) ]
+         | select(.structured and .hold_flavor != "read" and projected_deferred_hold) ]
      + [ (.secondmate_current.records // [])[] | .queued[]?
-         | select(.hold_kind == "captain" and projected_deferred_hold) ]
+         | select(.hold_kind == "captain" and .hold_flavor != "read" and projected_deferred_hold) ]
      | length) as $decisions_marked_deferred
   | (if ($return_catchup.pending // false) then
        [{id:"(return-catchup)",
@@ -604,13 +610,13 @@ MODEL=$(printf '%s' "$SNAP" | jq \
          | select(.structured and
              (.hold_bucket != null or .state == "queued" or
               (.state == "in_flight" and .current_role == "held" and ($working_ids | index($record.id) | not))))
-         | select(.captain_actionable != true and .current_role != "idea")
+         | select(.captain_actionable != true and .current_role != "idea" and (waiting_to_read | not))
          | select((.hold_bucket == null) or ($all_decisions == 0))
          | as_gate("(main)") ]
      + [ (.secondmate_current.records // [])[] as $m
          | select($m.provenance.selected == "structured-home")
          | $m.queued[]?
-         | select(.captain_actionable != true and .kind != "idea")
+         | select(.captain_actionable != true and .kind != "idea" and .hold_flavor != "read")
          | select((.hold_bucket == null) or ($all_decisions == 0))
          | as_gate($m.id) ]) as $gates_all
   | ([ .backlog.records[] | select(.structured and .current_role == "idea")
@@ -682,6 +688,10 @@ MODEL=$(printf '%s' "$SNAP" | jq \
       gates: ($return_catchup_gate
               + ($gates_all | newest_filed_first
                  | if $all_queued == 1 then . else .[:$gates_n] end)),
+      to_read: [ .backlog.records[]
+                 | select(.structured and (waiting_to_read
+                     or ($all_decisions == 1 and .hold_flavor == "read" and .hold_bucket != null)))
+                 | {id, title:(.title | trunc(70)), repo:(.repo // null)} ],
       ideas: {total:($ideas_all | length),
               list:"bin/fm-tasks-axi.sh list --state queued --kind idea",
               newest:($ideas_all | reverse | newest_filed_first | .[:$ideas_n])},
@@ -725,7 +735,7 @@ MODEL=$(printf '%s' "$SNAP" | jq \
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.input_truncated == true or .parent_event.activity_scan.retained_truncated == true)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence truncated for \($n) record(s)"), reveal:"raise FM_SNAPSHOT_PARENT_ACTIVITY_LINES, FM_SNAPSHOT_PARENT_ACTIVITY_BYTES, or FM_SNAPSHOT_PARENT_ACTIVITIES"} else empty end),
         (([($snap.secondmate_current.records // [])[] | select(.parent_event.activity_scan.available == false)] | length) as $n | if $n > 0 then {surface:("secondmate parent activity evidence unavailable for \($n) record(s)"), reveal:"inspect the parent status logs"} else empty end),
         (if $all_decisions == 0 and ($decisions_all | length) > $decisions_n then {surface:("decisions_open showing \($decisions_n) of \($decisions_all | length)"), reveal:"--all-decisions"} else empty end),
-        (if $all_decisions == 0 and $decisions_marked_deferred > 0 then {surface:("captain holds bucketed blocked, dated, or aged: \($decisions_marked_deferred)"), reveal:"--all-decisions"} else empty end),
+        (if $all_decisions == 0 and $decisions_marked_deferred > 0 then {surface:("captain decisions bucketed blocked, dated, snoozed, or aged: \($decisions_marked_deferred)"), reveal:"--all-decisions"} else empty end),
         (if $all_queued == 0 and ($gates_all | length) > $gates_n then {surface:("gates showing \($gates_n) of \($gates_all | length)"), reveal:"--all-queued"} else empty end),
         (if $all_reports == 0 and ($reports_all | length) > $reports_n then {surface:("reports showing \($reports_n) of \($reports_all | length)"), reveal:"--all-reports"} else empty end),
         (if $all_recorded_prs == 0 and ($recorded_prs_all | length) > $recorded_prs_n then {surface:("recorded_prs showing \($recorded_prs_n) of \($recorded_prs_all | length)"), reveal:"--all-recorded-prs"} else empty end),
