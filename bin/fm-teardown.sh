@@ -1361,7 +1361,7 @@ if [ "$BACKEND" = t3code ]; then
       FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || t3_review_rc=$?
     if [ "$t3_review_rc" != 0 ]; then
       echo "REFUSED: $ID is a finished review kept for the captain in T3 and cannot be cleaned up yet (the reason is above); nothing was changed." >&2
-      echo "It is cleaned up once he archives or deletes its thread there and T3 can fence it (the watcher then asks for this cleanup)." >&2
+      echo "It is cleaned up once he archives its report on the card, or archives or deletes its thread there, and T3 can fence it (the watcher then asks for this cleanup)." >&2
       exit 1
     fi
     T3_REVIEW=closed
@@ -1963,7 +1963,11 @@ backlog_refresh_reminder() {
   else
     backlog_display="${DATA%/}/backlog.md"
   fi
-  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
+  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ] \
+    && FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$SCRIPT_DIR/fm-tasks-axi.sh" show "$ID" --full 2>/dev/null </dev/null | grep -q 'Captain hold flavor: read'; then
+    printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held To read for the captain with its deliverable recorded. It stays To read until he archives it in T3, or mark it with bin/fm-captain-hold.sh read-done once he says he read it."
+  elif [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
     printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   elif [ "$BACKLOG_CLOSED" = 1 ]; then
     printf '%s\n' "Backlog: $ID is closed in $backlog_display. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."

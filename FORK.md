@@ -84,7 +84,7 @@ An item rides on its worker's card; one with no worker gets a thread of its own,
 This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
 Upstream keeps decisions in chat alone; the fork shows them where the work is, so nothing can quietly go out of date.
 FirstMate pushes the whole list within about a second of any change to the backlog, whoever made it, and his Snooze (with T3 Code's own presets, so a return can be a time of day), Bring back, and Archive change the backlog at once.
-Archive closes a decision as not pursued, and on a worker still running it asks FirstMate to wind the worker down safely; a snoozed item stays snoozed until it is brought back or its time comes.
+Archive acts on its own item only: it closes a decision as not pursued or marks a report read, and a thread's own archive or restore changes nothing; a decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down safely; a snoozed item stays snoozed until it is brought back or its time comes.
 A ten-minute check covers crashes and restarts, and a list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
 A T3 Code without the list simply shows none.
 Details: [Captain's list](docs/t3code-backend.md#captains-list) and [`fm-t3-captain-sync.sh`](bin/fm-t3-captain-sync.sh).

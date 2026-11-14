@@ -1324,12 +1324,12 @@ This is FirstMate's half; the card's input box and Archive button are the T3 for
 - **His reply reaches FirstMate.**
   What he types on a card arrives in FirstMate's thread as one message: `**Reply · <card title>**`, then `kept-thread: <thread id>`, then his words, the same shape as a Bridge decision reply.
   `fm-t3-needs-me.sh reply-task` now reads either line, so FirstMate knows which task he means and treats his words as his input on it.
-- **Archive means done.**
-  On a card with no open decision, archiving just closes it.
-  On a card that still carries one, archiving records "Archived the card in T3 on <date>: parked, not pursued" as his decision on each open call held from that review, once, when the close is first noticed, so it leaves his open decisions; the wake FirstMate gets names what was parked.
+- **Archive closes one item.**
+  His Archive on the report's item marks it read and closes the review, so the scout is cleaned up; his Archive on a decision raised from the review closes that decision alone.
+  Closing the review closes no other item on the card, and a thread he restores reopens nothing.
   Nothing is deleted: the report and the task's records stay.
 
-The evidence is the review, needs-me, and T3 helper suites: the thread is tagged with no note, a kept-card reply names its task and refuses anything ambiguous, and archiving parks the calls the card carried while leaving another task's call, an already answered call, and a call raised after the archive alone, on both the watcher's pass and cleanup's.
+The evidence is the review, needs-me, list, and T3 helper suites: the thread is tagged with no note, a kept-card reply names its task and refuses anything ambiguous, an Archive on a shared card closes only its own item in either direction, and closing the review, on the watcher's pass or cleanup's, leaves every captain call open.
 
 ## 52. One list, kept in step both ways (13 November 2026)
 
@@ -1355,9 +1355,11 @@ This is FirstMate's half; the sidebar's labels, Snooze button, and Archive are t
 - **Snooze uses T3's presets.**
   "We just use theirs": a return can be a time of day, so the backlog now keeps an exact return time beside its date.
   A snoozed item "stays snoozed unless we bring it back"; FirstMate's own updates never wake it.
-- **Archive is "not pursued".**
-  Park now means snooze, so an archived decision is recorded as "Archived in T3 on <date>: not pursued.", a report as read, and on a worker still running FirstMate is asked to wind it down through its normal safe cleanup.
+- **Archive is "not pursued", for its own item only.**
+  Park now means snooze, so an archived decision is recorded as "Archived in T3 on <date>: not pursued." and a report as read; nothing else on the card changes.
+  Only his Archive on an item counts: a thread's own archive or restore, FirstMate's cleanup archive included, closes nothing, and the check never infers one.
+  A decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down through its normal safe cleanup.
 - **No more "Waiting for captain".**
   The card's Needs you or To read comes from the list, so FirstMate's own label for it is gone.
 
-The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a lost archive caught by the check) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.
+The evidence is the new listener suite (a backlog edit is one push; an action changes the backlog, then the list, then is acknowledged; a replay the next day writes the same words; T3 down and back; a thread's archive or restore changes nothing) and the hold, snapshot, needs-me, review, card, helper, and bearings suites.

@@ -406,7 +406,7 @@ cmd_check_close() {
     fi
     return 0
   fi
-  echo "t3-review: $id's thread is kept open for the captain; it is cleaned up once he archives or deletes it in T3" >&2
+  echo "t3-review: $id's thread is kept open for the captain; it is cleaned up once he archives its report on the card, or archives or deletes the thread, in T3" >&2
   return 1
 }
 
