@@ -1449,3 +1449,44 @@ The evidence is the suites for every script the change touches.
 The cleanup cases cover a running turn, a turn that already failed, a turn state that cannot be read, a detached job, the explicit discard, and a runtime with no liveness check.
 The tmux case cannot run on this Mac, so it was run in a Linux container, where the whole file passed with nothing skipped.
 
+## 55. A usage limit never stops the work (15 November 2026)
+
+![Before, a worker stopped by a usage limit was reported only as quiet, filed as routine, and could not be steered; after, the watcher names the limit, the account and the reset to FirstMate itself, the thread is moved to another account with the same model and effort, and the ordinary steer continues it](media/usage-limit-moves-at-once.svg)
+
+What happened: two scouts hit an account's 5-hour limit just after midnight.
+FirstMate heard only that two workers had gone quiet, the background session filed both as routine, and the steer that should have resumed them refused, as though their agents had exited.
+An investigation found three layers that each did nothing, and proposed five pieces.
+
+His answers to the investigation's calls:
+
+> 1 yes 2 yes 3 move at once 4 no 5 i tell u 6 no 7 how would u even test this
+>
+> — 15 November 2026
+
+That is: fix it, the steer as a daytime fix and the rest at bedtime; switch on T3 Code's own resume at reset; move a stopped worker to another account at once, however close the reset; a moved worker stays where it is and only new work goes back; an early reset is announced by him, not detected; nothing offered upstream.
+The daytime fix, a steer that rings a stopped thread, landed the same evening, and the rest started with:
+
+> ok im going to bed
+
+What was built:
+
+- **The watcher says why a worker stopped.**
+  When a T3 Code worker's run ends failed, the watcher reads the run once: T3's typed failure fields when it has them, otherwise the run's "Usage limit reached" error and Claude's limit notice, which carries the window and the reset time.
+  A usage-limit stop becomes one notification per stopped run, naming the account, the limit and its reset, in place of the bare "went quiet" one.
+  It goes to FirstMate itself, never only to the background session; any other failure keeps the ordinary path.
+- **A small record per stopped worker.**
+  The account, the window, the reset time and the run that failed, later noting where the worker was moved or that it was resumed.
+- **Never routine.**
+  The stuck-worker playbook and the background session's instructions each gained a line: a usage-limit stop is acted on or escalated.
+- **Moving at once.**
+  `bin/fm-usage-limit.sh move` checks in T3 Code's own catalog that the other account offers the same model and effort, rebinds the thread there, reads the binding back, records the move, and only then sends the continuation through the ordinary steer.
+  Configuring first matters: a message sent first restarts the run on the exhausted account.
+  Which account to move to stays FirstMate's choice under his account rules; the command never chooses and never waits.
+- **Resuming an account he reset.**
+  `bin/fm-usage-limit.sh resume <account>` rings every worker still stopped on that account, skipping any that already moved.
+
+What this costs: moving between Claude accounts hands the conversation over trimmed, without the old session's reasoning, so a worker deep in an investigation can lose some of its thread; its instructions, status and files are untouched.
+
+On call 7, a live proof of the move: FirstMate answered in chat that a worker had already been moved mid-task to another account that same night, which exercised the same T3 Code call, so no scratch thread was spent.
+The evidence here is the suites for every file the change touches, with new cases against the fake T3 Code server built from the three real items the stopped run left: classification by title, notice and typed fields; one notification per run and none for an ordinary failure; the move's refusals, its order of configure before message, and its read-back; and resume ringing exactly the workers still stopped on the reset account.
+

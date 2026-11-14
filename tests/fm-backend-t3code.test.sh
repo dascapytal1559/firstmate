@@ -1739,6 +1739,184 @@ test_watcher_rings_a_failed_thread() {
   pass "watcher: a failed T3 thread's unread message is rung once instead of escalated; an archived thread still escalates"
 }
 
+# --- usage-limit stops -------------------------------------------------------
+
+# t3_limited_thread_json <id> [instance] [error-title] [typed-class]: a thread
+# whose one run failed, carrying the three items a real Claude usage-limit
+# stop leaves (the notice whose id ends in its window and reset, the limit
+# text, and the error item), as read from a live thread on 14 Nov 2026. A
+# different error title makes it an ordinary provider failure; a typed class
+# adds T3's typed failure fields with a reset of their own.
+t3_limited_thread_json() {
+  local id=$1 instance=${2:-claudeAgent} title=${3:-Usage limit reached} typed=${4:-}
+  local typed_fields=
+  [ -z "$typed" ] || typed_fields=",\"lastErrorClass\":\"$typed\",\"usageLimitResetAt\":\"2026-11-14T16:00:00.000Z\""
+  printf '{"threadId":"%s","projectId":"proj-1","status":"failed","activeRunId":null,"latestRunId":"run-1","archived":false,"worktreePath":null,"pendingRequestCount":0,"providerInstanceId":"%s","model":"claude-sonnet-5","modelSelection":{"instanceId":"%s","model":"claude-sonnet-5","options":[{"id":"effort","value":"high"}]},"runtimeMode":"full-access","parentThreadId":null%s,"items":[{"type":"user_message","status":"completed","text":"do the thing","runId":"run-1"},{"itemId":"turn-item:claudeAgent:usage-limit:turn-9:five_hour:1794669600","type":"system_notice","status":"completed","title":"Claude usage limit reached. This turn is paused until the 5-hour limit resets in 2h 13m.","runId":"run-1"},{"type":"assistant_message","status":"completed","text":"You have hit your 5-hour limit","runId":"run-1"},{"type":"error","status":"failed","title":"%s","text":"Claude API rate limit reached. Try again later.","runId":"run-1"}],"runs":[{"runId":"run-1","status":"failed","requestedAt":"2026-11-14T13:00:00.000Z","startedAt":"2026-11-14T13:00:00.000Z","completedAt":"2026-11-14T13:07:25.541Z"}]}' \
+    "$id" "$instance" "$instance" "$typed_fields" "$title"
+}
+
+# Two Claude accounts and Codex. The second account offers claude-sonnet-5
+# with the same effort values unless given another model list.
+t3_two_accounts() {  # [second-account-models-json]
+  FM_T3_SECOND_MODELS=${1:-'["claude-sonnet-5"]'} t3_world_set '
+const claude = (id, models) => ({ providerInstanceId: id, driverKind: "claudeAgent", displayName: id, constraints: [],
+  models: models.map((m) => ({ id: m, label: m, options: [{ id: "effort", label: "effort", type: "select", options: ["low", "medium", "high"].map((v) => ({ id: v, label: v })) }] })) });
+w.providers = [claude("claudeAgent", ["claude-sonnet-5"]), claude("claudeAgent_2", JSON.parse(process.env.FM_T3_SECOND_MODELS)),
+  { providerInstanceId: "codex", driverKind: "codex", displayName: "Codex", constraints: [], models: [{ id: "claude-sonnet-5", label: "x", options: [] }] }];'
+}
+
+# The run is classified from its own items: the error title decides, and
+# Claude's notice id gives the window and reset; T3's typed fields win when
+# present, either way; an ordinary failure or a healthy thread is no limit.
+test_usage_limit_classified() {
+  local row rc thread=mcp:8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a
+  t3_case limit-classify
+  t3_world "$(t3_limited_thread_json "$thread")"
+  row=$(t3_run 'fm_backend_t3code_usage_limit "$1"' "$thread"); rc=$?
+  expect_code 0 "$rc" "a usage-limit stop must classify as limited"
+  [ "$row" = "run-1	claudeAgent	claude-sonnet-5	five_hour	1794669600	items" ] || fail "the row must name run, account, model, window, reset, and source, got '$row'"
+  t3_world "$(t3_limited_thread_json "$thread" claudeAgent "Provider error")"
+  t3_run 'fm_backend_t3code_usage_limit "$1"' "$thread" >/dev/null; rc=$?
+  expect_code 1 "$rc" "an ordinary provider failure is not a usage limit"
+  t3_world "$(t3_limited_thread_json "$thread" claudeAgent "Provider error" usage_limit)"
+  row=$(t3_run 'fm_backend_t3code_usage_limit "$1"' "$thread"); rc=$?
+  expect_code 0 "$rc" "T3's typed usage_limit class decides when present"
+  [ "$row" = "run-1	claudeAgent	claude-sonnet-5	five_hour	1794672000	typed" ] || fail "the typed reset wins over the notice's, got '$row'"
+  t3_world "$(t3_limited_thread_json "$thread" claudeAgent "Usage limit reached" provider_error)"
+  t3_run 'fm_backend_t3code_usage_limit "$1"' "$thread" >/dev/null; rc=$?
+  expect_code 1 "$rc" "a typed class other than usage_limit decides against the item title"
+  t3_world "$(t3_thread_json "$thread" completed false)"
+  t3_run 'fm_backend_t3code_usage_limit "$1"' "$thread" >/dev/null; rc=$?
+  expect_code 1 "$rc" "a completed thread is no usage limit"
+  pass "usage limit: classified from T3's typed fields when present, else the run's error title and Claude's notice id; other failures are not limits"
+}
+
+# usage_limit_stale <window> <task> <hash> <key> under the watcher's own
+# functions, with wake recorded instead of exiting.
+t3_watch_usage_limit() {  # <thread> <task> <hash>
+  FM_STATE_OVERRIDE="$CTRL_STATE" FM_CONFIG_OVERRIDE="$CONFIG" FM_ROOT_OVERRIDE="$ROOT" WAKES="$CASE_DIR/wakes" \
+    bash -c '. "$0/bin/fm-watch.sh"; wake() { printf "%s\n" "$1" >> "$WAKES"; }; usage_limit_stale "$1" "$2" "$3" "$(window_key "$1")"' "$ROOT" "$@" 2>/dev/null
+}
+
+# The watcher raises one typed check wake per stopped run, naming the account,
+# window, and reset, and records the stop; the same quiet screen and the same
+# run are absorbed without another wake or another classification, and an
+# ordinary failure keeps the stale path.
+test_watcher_raises_usage_limit_once() {
+  local id rc thread=mcp:9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b rec reads
+  id=$(t3_uid t3limit-watch)
+  make_t3_control_task limit-watch "$id" "$thread" failed
+  t3_world "$(t3_limited_thread_json "$thread")"
+  : > "$CASE_DIR/wakes"
+  t3_watch_usage_limit "$thread" "$id" hash-a; rc=$?
+  expect_code 0 "$rc" "a usage-limit stop takes the usage-limit path"
+  [ "$(wc -l < "$CASE_DIR/wakes" | tr -d ' ')" = 1 ] || fail "one wake per stopped run, got: $(cat "$CASE_DIR/wakes")"
+  assert_contains "$(cat "$CASE_DIR/wakes")" "check: usage-limit: $id stopped on account claudeAgent (five_hour limit, resets 2026-11-14T15:20Z)" "the wake names cause, account, window, and reset"
+  assert_contains "$(cat "$CTRL_STATE/.wake-queue")" "usage-limit:$id:run-1" "the wake is durably queued as a check row keyed by the run"
+  rec="$CTRL_STATE/$id.usage-limit"
+  assert_contains "$(cat "$rec")" "run=run-1" "the record names the failed run"
+  assert_contains "$(cat "$rec")" "instance=claudeAgent" "the record names the account"
+  assert_contains "$(cat "$rec")" "reset=1794669600" "the record keeps the reset time"
+  reads=$(t3_fake_calls t3_thread_read | wc -l | tr -d ' ')
+  t3_watch_usage_limit "$thread" "$id" hash-a; rc=$?
+  expect_code 0 "$rc" "the same quiet screen stays on the usage-limit path"
+  [ "$(t3_fake_calls t3_thread_read | wc -l | tr -d ' ')" = "$reads" ] || fail "the same quiet screen must not be classified again"
+  t3_watch_usage_limit "$thread" "$id" hash-b; rc=$?
+  expect_code 0 "$rc" "a new screen of the same stopped run is absorbed"
+  [ "$(wc -l < "$CASE_DIR/wakes" | tr -d ' ')" = 1 ] || fail "the same run must not wake twice, got: $(cat "$CASE_DIR/wakes")"
+  t3_world "$(t3_limited_thread_json "$thread" claudeAgent "Provider error")"
+  rm -f "$rec"
+  t3_watch_usage_limit "$thread" "$id" hash-c; rc=$?
+  expect_code 1 "$rc" "an ordinary failure keeps the stale path"
+  [ "$(wc -l < "$CASE_DIR/wakes" | tr -d ' ')" = 1 ] || fail "an ordinary failure raises no usage-limit wake"
+  [ ! -e "$rec" ] || fail "an ordinary failure writes no usage-limit record"
+  pass "watcher: a usage-limit stop raises one check wake per run naming account and reset, and is recorded; other failures keep the stale path"
+}
+
+run_usage_limit() {  # <args...>
+  FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-usage-limit.sh" "$@" 2>&1
+}
+
+# The move checks the target against the catalog, configures first, reads the
+# binding back, records the move, and only then steers; every refusal leaves
+# the thread unmoved and sends nothing.
+test_usage_limit_move() {
+  local id out rc thread=mcp:0f1a2b3c-4d5e-4f6a-9b7c-8d9e0f1a2b3c configure send
+  id=$(t3_uid t3limit-move)
+  make_t3_control_task limit-move "$id" "$thread" failed
+  t3_world "$(t3_limited_thread_json "$thread")"
+  t3_two_accounts
+  for target in codex claudeAgent nowhere; do
+    out=$(run_usage_limit move "$id" --instance "$target"); rc=$?
+    expect_code 4 "$rc" "a move to $target must be refused"$'\n'"$out"
+  done
+  t3_two_accounts '["claude-haiku-5-5"]'
+  out=$(run_usage_limit move "$id" --instance claudeAgent_2); rc=$?
+  expect_code 4 "$rc" "a target without the thread's model must be refused"$'\n'"$out"
+  assert_contains "$out" "model_unknown" "the refusal names the missing model"
+  assert_not_contains "$(t3_fake_calls t3_thread_configure)" modelSelection "a refused move must not change the binding"
+  [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "a refused move must send nothing"
+  t3_two_accounts
+  t3_world_set 'w.moveBinds = { model: "claude-haiku-5-5" }'
+  out=$(run_usage_limit move "$id" --instance claudeAgent_2); rc=$?
+  expect_code 1 "$rc" "a binding that reads back wrong must fail"$'\n'"$out"
+  assert_contains "$out" "move_unproven" "the failure names the unproven binding"
+  [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "an unproven move must send nothing"
+  t3_world "$(t3_limited_thread_json "$thread")"
+  t3_two_accounts
+  : > "$LOG"
+  out=$(run_usage_limit move "$id" --instance claudeAgent_2); rc=$?
+  expect_code 0 "$rc" "a move to a second Claude account with the model should succeed"$'\n'"$out"
+  [ "$(t3_fake_calls t3_thread_configure | grep modelSelection)" = '{"threadId":"'"$thread"'","modelSelection":{"instanceId":"claudeAgent_2","model":"claude-sonnet-5","options":[{"id":"effort","value":"high"}]}}' ] \
+    || fail "the move must keep the model and effort, got: $(t3_fake_calls t3_thread_configure)"
+  configure=$(t3_log_line_of 'r.tool === "t3_thread_configure" && r.arguments && r.arguments.modelSelection')
+  send=$(t3_log_line_of 'r.tool === "t3_thread_send"')
+  [ "$configure" -gt 0 ] && [ "$send" -gt "$configure" ] || fail "configure must come before the message (configure line $configure, send line $send)"
+  assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the continuation goes through the ordinary steer"
+  assert_contains "$(cat "$CTRL_STATE/$id.usage-limit")" "moved_to=claudeAgent_2" "the move is recorded"
+  assert_contains "$(run_usage_limit list)" "moved_to=claudeAgent_2" "list shows the move"
+  pass "fm-usage-limit.sh move: catalog-checked, configured before the message, read back, recorded, then steered; refusals move and send nothing"
+}
+
+# A reset account rings every worker still stopped on it, and no other.
+test_usage_limit_resume() {
+  local a b c d rc out t1=mcp:1a2b3c4d-5e6f-4a7b-8c8d-9e0f1a2b3c4d t2=mcp:2b3c4d5e-6f7a-4b8c-9d9e-0f1a2b3c4d5e
+  local t3=mcp:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f t4=mcp:4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a sends
+  a=$(t3_uid t3limit-ra); b=$(t3_uid t3limit-rb); c=$(t3_uid t3limit-rc); d=$(t3_uid t3limit-rd)
+  make_t3_control_task limit-resume "$a" "$t1" failed
+  t3_world "$(t3_limited_thread_json "$t1")" "$(t3_limited_thread_json "$t2")" "$(t3_limited_thread_json "$t3" claudeAgent_2)" "$(t3_limited_thread_json "$t4")"
+  for pair in "$b:$t2" "$c:$t3" "$d:$t4"; do
+    mkdir -p "$CTRL_DATA/${pair%%:*}"
+    write_spawn_brief "$CTRL_DATA" "${pair%%:*}"
+    fm_write_meta "$CTRL_STATE/${pair%%:*}.meta" "window=fm-${pair%%:*}" "endpoint_task_id=${pair%%:*}" "worktree=$CTRL_WT" \
+      "project=$CTRL_PROJ" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" "backend=t3code" \
+      "t3_thread_id=${pair#*:}" "t3_project_id=proj-1"
+  done
+  printf 'thread=%s\nrun=run-1\ninstance=claudeAgent\n' "$t1" > "$CTRL_STATE/$a.usage-limit"
+  printf 'thread=%s\nrun=run-1\ninstance=claudeAgent\n' "$t2" > "$CTRL_STATE/$b.usage-limit"
+  printf 'thread=%s\nrun=run-1\ninstance=claudeAgent_2\n' "$t3" > "$CTRL_STATE/$c.usage-limit"
+  printf 'thread=%s\nrun=run-1\ninstance=claudeAgent\nmoved_to=claudeAgent_2\n' "$t4" > "$CTRL_STATE/$d.usage-limit"
+  : > "$LOG"
+  out=$(run_usage_limit resume claudeAgent); rc=$?
+  expect_code 0 "$rc" "resume should succeed"$'\n'"$out"
+  sends=$(t3_fake_calls t3_thread_send)
+  [ "$(printf '%s\n' "$sends" | grep -c threadId)" = 2 ] || fail "exactly the two workers stopped on the account are rung, got: $sends"
+  assert_contains "$sends" "$t1" "the first stopped worker is rung"
+  assert_contains "$sends" "$t2" "the second stopped worker is rung"
+  assert_contains "$(cat "$CTRL_STATE/$a.usage-limit")" "resumed_at=" "a rung worker's record notes the resume"
+  [ -z "$(fm_usage_limit_get_test "$CTRL_STATE/$c.usage-limit" resumed_at)" ] || fail "a worker on another account is not rung"
+  [ -z "$(fm_usage_limit_get_test "$CTRL_STATE/$d.usage-limit" resumed_at)" ] || fail "a moved worker stays on its new account"
+  out=$(run_usage_limit resume nobody); rc=$?
+  expect_code 0 "$rc" "resume of an account with no stopped worker is not an error"
+  assert_contains "$out" "no worker is recorded as stopped on account nobody" "it says nothing was stopped there"
+  pass "fm-usage-limit.sh resume: rings every worker still stopped on the reset account, not a moved one or another account's"
+}
+
+fm_usage_limit_get_test() {  # <record> <key>
+  bash -c '. "$1/bin/fm-usage-limit-lib.sh"; fm_usage_limit_get "$2" "$3"' _ "$ROOT" "$1" "$2"
+}
+
 test_kill_stops_delegated_threads() {
   local call
   t3_case kill-children
@@ -2319,6 +2497,7 @@ test_scout_teardown_archives_before_slot_return() {
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
   printf 'report\n' > "$data/$id/report.md"
+  printf 'thread=%s\ninstance=claudeAgent\n' "$thread" > "$state/$id.usage-limit"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "worktree=$wt" "project=$proj" \
@@ -2332,6 +2511,7 @@ test_scout_teardown_archives_before_slot_return() {
     "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
   rc=$?
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
+  assert_absent "$state/$id.usage-limit" "teardown should remove the task's usage-limit record"
   [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "teardown of a finished scout must archive exactly once with no interrupt, got '$(t3_dispatch_types)'"
   local archive_line return_line
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
@@ -3509,3 +3689,7 @@ test_send_records_its_cause_and_rings_with_it
 test_steer_rings_a_failed_thread
 test_steer_refuses_archived_or_missing_thread
 test_watcher_rings_a_failed_thread
+test_usage_limit_classified
+test_watcher_raises_usage_limit_once
+test_usage_limit_move
+test_usage_limit_resume

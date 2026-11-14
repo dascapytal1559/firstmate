@@ -137,6 +137,27 @@
 //   fm-t3-mcp.mjs read --thread <id> [--limit <n>]
 //     t3_thread_read: the thread record and its latest run, unchanged. T3
 //     caps --limit at 100.
+//   fm-t3-mcp.mjs limit --thread <id>
+//     Whether the thread's latest run failed on a provider usage limit:
+//     {runId, failed, limited, instanceId, model, window, resetAt, source}.
+//     Only a thread and run both reading failed are read further. T3's typed
+//     failure fields (lastErrorClass usage_limit, usageLimitResetAt) decide
+//     when the thread read carries them (source typed); otherwise that run's
+//     error item titled "Usage limit reached" does (source items). The window
+//     (five_hour, seven_day, ...) and reset time come from Claude's
+//     usage-limit notice id when that run has one, else stay null. Changes
+//     nothing.
+//   fm-t3-mcp.mjs move --thread <id> --instance <instance-id>
+//     Rebind a stopped thread to another provider instance (another account)
+//     with its current model and every option (effort included) unchanged,
+//     through t3_thread_configure modelSelection, so its next turn runs
+//     there. Refuses (exit 4, nothing moved) a missing, archived, or running
+//     thread, the instance it already runs on, and a target the catalog does
+//     not list, that runs another driver, cannot run threads or full access,
+//     or does not offer that model and option values. T3 refusing the
+//     configure is exit 3 with nothing moved. The binding is then read back:
+//     anything but exactly the target instance, model, and options exits 1
+//     (move_unproven). Prints {threadId, from, instanceId, model, options}.
 //   fm-t3-mcp.mjs capture --thread <id> [--lines <n>]
 //     The activity view rendered as a plain-text tail of at most 500 lines (a
 //     larger --lines reads 500); the one verb whose stdout is text rather
@@ -363,8 +384,8 @@ export const REQUIRED_TOOLS = [
   "t3_thread_list",
   "t3_project_list",
   "t3_project_create",
-  // Called with only threadId, the read of a thread's binding (this helper
-  // never sends modelSelection).
+  // Called with only threadId, the read of a thread's binding; only move
+  // sends modelSelection.
   "t3_thread_configure",
   // action list|read|respond.
   "t3_pending_request",
@@ -1634,6 +1655,125 @@ async function capture(flags) {
   return { text: renderCapture({ ...out, items }, lines) };
 }
 
+// --- usage limits -----------------------------------------------------------
+
+// T3 titles a run's terminal error item exactly this when its failure class is
+// usage_limit, for every provider (provider-core's failure.ts). Claude's
+// adapter also writes a system notice whose item id ends in its native id,
+// usage-limit:<provider turn>:<window>:<reset in epoch seconds or "unknown">.
+const USAGE_LIMIT_TITLE = "Usage limit reached";
+const USAGE_LIMIT_NOTICE = /usage-limit:.+:([A-Za-z0-9_]+):([0-9]+|unknown)$/;
+// The failed run's last items are read; its error and notice are its tail.
+const LIMIT_ITEMS = 40;
+
+// classifyLimit: whether <run>, the thread's latest run, failed on a usage
+// limit. T3's typed failure fields win when the thread read carries them (the
+// MCP thread detail omits them today); otherwise the run's own error item
+// title decides, and Claude's notice id adds the window and reset time.
+export function classifyLimit(t, run, items) {
+  const base = {
+    runId: run?.runId ?? null,
+    failed: t?.status === "failed" && run?.status === "failed",
+    limited: false,
+    instanceId: run?.providerInstanceId ?? t?.providerInstanceId ?? null,
+    model: run?.model ?? t?.model ?? null,
+    window: null,
+    resetAt: null,
+    source: null,
+  };
+  if (!base.failed || !base.runId) return base;
+  const own = (items ?? []).filter((it) => it?.runId === base.runId);
+  let window = null;
+  let resetMs = null;
+  for (const it of own) {
+    const m = it?.type === "system_notice" ? USAGE_LIMIT_NOTICE.exec(String(it.itemId ?? "")) : null;
+    if (!m) continue;
+    window = m[1];
+    resetMs = m[2] === "unknown" ? null : Number(m[2]) * 1000;
+  }
+  const iso = (ms) => (ms === null ? null : new Date(ms).toISOString());
+  if (typeof t.lastErrorClass === "string") {
+    if (t.lastErrorClass !== "usage_limit") return { ...base, source: "typed" };
+    const typedMs = Date.parse(t.usageLimitResetAt ?? "");
+    return { ...base, limited: true, window, resetAt: iso(Number.isFinite(typedMs) ? typedMs : resetMs), source: "typed" };
+  }
+  if (!own.some((it) => it?.type === "error" && it?.title === USAGE_LIMIT_TITLE)) return { ...base, source: "items" };
+  return { ...base, limited: true, window, resetAt: iso(resetMs), source: "items" };
+}
+
+async function limit(flags) {
+  const threadId = need(flags, "thread");
+  const { session } = await verifiedSession(flags);
+  const out = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 });
+  const t = threadOf(out);
+  const run = (out?.recentRuns ?? [])[0] ?? null;
+  const failed = t.status === "failed" && run?.status === "failed";
+  const items = failed ? (await readTail(session, threadId, t.itemCount ?? 0, LIMIT_ITEMS)).items : [];
+  return { ok: true, threadId, ...classifyLimit(t, run, items) };
+}
+
+// move: rebind a stopped thread to another provider instance (another
+// account) with the same model and options, then prove the binding.
+async function move(flags) {
+  const threadId = need(flags, "thread");
+  const target = need(flags, "instance");
+  const { session } = await verifiedSession(flags);
+  let t;
+  try {
+    t = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  } catch (err) {
+    if (isNotFound(err)) throw new Refusal("thread_missing", `T3 has no thread ${threadId}; nothing was moved`);
+    throw err;
+  }
+  if (t.archived === true || t.archivedAt) throw new Refusal("thread_archived", `thread ${threadId} is archived; nothing was moved`);
+  if (t.activeRunId) throw new Refusal("thread_running", `thread ${threadId} has an active run (${t.activeRunId}); stop it first, since a move applies to the next turn only; nothing was moved`);
+  const from = (await session.call("t3_thread_configure", { threadId }))?.modelSelection ?? {};
+  if (from.instanceId === target) throw new Refusal("same_instance", `thread ${threadId} already runs on instance '${target}'; nothing was moved`);
+  const providers = (await session.call("orchestrator_capabilities", {}))?.providers ?? [];
+  const source = providers.find((p) => p.providerInstanceId === from.instanceId);
+  const provider = providers.find((p) => p.providerInstanceId === target);
+  if (!provider) throw new Refusal("instance_unknown", `T3 has no provider instance '${target}'; nothing was moved`);
+  if (!source || provider.driverKind !== source.driverKind) {
+    throw new Refusal(
+      "driver_mismatch",
+      `T3 instance '${target}' runs the ${provider.driverKind} driver, ${source ? `not ${source.driverKind} like '${from.instanceId}'` : `and the thread's own instance '${from.instanceId}' is not in the catalog to compare`}; nothing was moved`,
+    );
+  }
+  if ((provider.constraints ?? []).length) throw new Refusal("instance_unavailable", `T3 instance '${target}' cannot run threads: ${provider.constraints.join(" ")}; nothing was moved`);
+  if (Array.isArray(provider.runtimeModes) && !provider.runtimeModes.includes("full-access")) {
+    throw new Refusal("full_access_unsupported", `T3 instance '${target}' does not run full-access; nothing was moved`);
+  }
+  const model = await catalogModel(session, provider, from.model);
+  if (!model) throw new Refusal("model_unknown", `T3 instance '${target}' does not list model '${from.model}'; nothing was moved`);
+  for (const option of from.options ?? []) {
+    const problem = optionProblem(model, option);
+    if (problem) throw new Refusal("option_unsupported", `T3 instance '${target}' cannot keep the thread's selection: ${problem}; nothing was moved`);
+  }
+  const selection = { instanceId: target, model: from.model, ...(from.options !== undefined ? { options: from.options } : {}) };
+  try {
+    await session.call("t3_thread_configure", { threadId, modelSelection: selection });
+  } catch (err) {
+    // A specific typed refusal proves nothing changed; anything else may have
+    // been applied, so the read-back below decides.
+    if (err instanceof Refusal && err.exit === 3 && err.code !== UNPROVEN_TOOL_ERROR) {
+      throw new Refusal(err.code, `${err.message}; nothing was moved`, 3, err.extra);
+    }
+  }
+  const bound = (await session.call("t3_thread_configure", { threadId }))?.modelSelection ?? {};
+  const after = threadOf(await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 1 }));
+  const problems = [];
+  if (after.providerInstanceId !== target || bound.instanceId !== target) problems.push(`provider ${bound.instanceId ?? after.providerInstanceId ?? "none"}`);
+  if (bound.model !== selection.model) problems.push(`model ${bound.model ?? "none"}`);
+  for (const option of selection.options ?? []) {
+    const got = (bound.options ?? []).find((o) => o.id === option.id);
+    if (got?.value !== option.value) problems.push(`option ${option.id}=${got ? got.value : "none"}`);
+  }
+  if (problems.length) {
+    throw new Refusal("move_unproven", `T3 read thread ${threadId} back bound to ${problems.join(", ")}, not instance '${target}' with model ${selection.model} and its options`, 1, { threadId });
+  }
+  return { ok: true, threadId, from: from.instanceId ?? null, instanceId: target, model: selection.model, options: selection.options ?? [] };
+}
+
 // t3_thread_wait in slices of at most WAIT_SLICE_MS until the run is terminal
 // or timeoutMs passes; runId selects the exact run, else T3 waits on the
 // thread's latest run.
@@ -2462,6 +2602,8 @@ const VERBS = {
   "cause-check": (flags) => ({ ok: true, causedBy: causeFlag({ "caused-by": need(flags, "json") }) }),
   read,
   capture,
+  limit,
+  move,
   wait,
   interrupt,
   requests,

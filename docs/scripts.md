@@ -151,6 +151,8 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-path-lib.sh`         | Fork-free `dirname`/`basename` equivalents with no source-time side effects             |
 | `fm-classify-lib.sh`     | Shared wake classification, durable keyed-decision folds and scans, unread status selection, home-owned status-append ranges, and bounded latest-event snapshots |
 | `fm-send.sh`             | Steer a task via a durable inbox record plus doorbell, or send a supported key or typed harness invocation through the recorded backend |
+| `fm-usage-limit.sh`      | Act on a T3 worker stopped by a provider usage limit: `move` it to another account at once, `resume` every worker stopped on an account the captain says was reset, or `list` the records ([t3code-backend.md](t3code-backend.md)) |
+| `fm-usage-limit-lib.sh`  | Single owner of the per-task usage-limit record that the watcher writes and `fm-usage-limit.sh` updates |
 | `fm-branch-prompt.sh`    | Emit the shared supervision branch's byte-stable system prompt ([pi-supervision-branch.md](pi-supervision-branch.md), [supervision-host.md](supervision-host.md)) |
 | `fm-branch-outcome.sh`   | Own the supervision branch's append-only outcome store, cursors, bounded status-coverage indexes, and session-start replay |
 | `fm-lease.sh`            | Claim, release, inspect, and sweep per-task supervision leases                       |

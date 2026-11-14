@@ -15,6 +15,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
 - [Clean restarts](FORK.md#clean-t3-restarts): a new T3 build installs only once every running turn has finished.
+- [Usage limits](FORK.md#a-usage-limit-never-stops-the-work): a worker stopped by an account's usage limit reaches FirstMate by name and moves to another account at once.
 - [Long commands](FORK.md#long-commands-a-restart-cannot-cut): a worker's long test run or build survives a T3 restart.
 - [Fresh sessions](FORK.md#a-fresh-firstmate-session-takes-over-cleanly): after `/clear`, the new FirstMate session takes over the same thread.
 - [Alerts](FORK.md#a-wake-turn-alerts-only-when-it-needs-the-captain): a turn nobody typed into sounds only when it needs the captain.

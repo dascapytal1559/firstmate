@@ -293,6 +293,8 @@ WATCH_HOME_EXISTED=0
 # (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-usage-limit-lib.sh
+. "$SCRIPT_DIR/fm-usage-limit-lib.sh"
 # The away-posture record (state/.afk-contract) is the posture in both the
 # attended and the afk session; bin/fm-afk-contract.sh owns its schema and its
 # away-or-quiet reading, which is all this watcher reads (away_record_present
@@ -3178,6 +3180,52 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   wake "$reason"
 }
 
+# usage_limit_stale: a T3 worker gone quiet because its latest run failed on a
+# provider usage limit is not an ordinary quiet worker: work never stops for an
+# account limit, so firstmate itself must move it or escalate. On the first
+# sight of each stale hash of a T3 window whose thread reads failed, the run is
+# classified once (bin/fm-t3-mcp.mjs limit). A usage-limit stop is recorded
+# (bin/fm-usage-limit-lib.sh) and raised as one `check: usage-limit:` wake per
+# failed run, in place of the bare stale wake; a check wake is never the
+# supervision session's while the captain is present, so it reaches firstmate.
+# The same hash is then absorbed on every later poll instead of entering the
+# stale ladder, and any other failure keeps the ordinary path. The record is
+# written only after its wake was durably appended, so a failed append is
+# retried rather than silenced. Returns 0 when it raised or absorbed the stop,
+# 1 for the ordinary path.
+usage_limit_stale() {  # <window> <task> <hash> <window-key>
+  local w=$1 task=$2 h=$3 seen rec row rc=0 run reason
+  [ -n "$task" ] && [ "$(window_backend "$w")" = t3code ] || return 1
+  seen="$STATE/.usage-limit-seen-$4"
+  case "$(cat "$seen" 2>/dev/null || true)" in
+    "$h limit") return 0 ;;
+    "$h other") return 1 ;;
+  esac
+  fm_backend_source t3code || return 1
+  if [ "$(fm_backend_t3code_probe "$w")" != error ]; then
+    printf '%s other' "$h" > "$seen"
+    return 1
+  fi
+  row=$(fm_backend_t3code_usage_limit "$w") || rc=$?
+  case "$rc" in
+    0) ;;
+    1) printf '%s other' "$h" > "$seen"; return 1 ;;
+    *) return 1 ;;
+  esac
+  rec=$(fm_usage_limit_path "$STATE" "$task")
+  run=${row%%$'\t'*}
+  if [ "$(fm_usage_limit_get "$rec" run)" != "$run" ]; then
+    reason=$(fm_usage_limit_reason "$task" "$row")
+    fm_wake_append check "usage-limit:$task:$run" "$reason" || exit 1
+    fm_usage_limit_write "$rec" "$w" "$row" || triage_log "usage-limit record could not be written: $rec"
+    printf '%s limit' "$h" > "$seen"
+    wake "$reason"
+  fi
+  printf '%s limit' "$h" > "$seen"
+  triage_log "absorbed stale (usage-limit stop already raised for run $run): $w"
+  return 0
+}
+
 # Bound repeat first-sight alarms only when the semantic busy reader cannot
 # classify the pane, the recovery-grade endpoint probe confirms its agent is
 # still alive, AND the pane shows progress evidence inside one
@@ -4772,6 +4820,9 @@ EOF
             paused) handle_paused_stale "$w" "$task" "$h" ;;
             *)      clear_pause_tracking "$key" ;;
           esac
+        elif usage_limit_stale "$w" "$task" "$h" "$key"; then
+          # A usage-limit stop, raised once per failed run; never routine.
+          printf '%s' "$h" > "$sf"
         elif afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before,
           # except that a captain-held pane is never handed over while the

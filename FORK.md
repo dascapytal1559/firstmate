@@ -139,6 +139,21 @@ A worker that has reported since the restart is left alone, and every other work
 Until such a worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
+## A usage limit never stops the work
+
+When a T3 Code worker's run ends on a provider usage limit, the worker used to sit stopped until someone noticed.
+FirstMate heard only that a worker had gone quiet, the supervision session filed it as routine, and FirstMate's own steer refused the stopped thread as if its agent had exited.
+Now a stopped thread takes a steer like any other, since T3 Code continues the same conversation on a new message.
+The watcher reads why the run failed, using T3's typed failure fields when it has them and otherwise the run's "Usage limit reached" error and Claude's limit notice, and raises one notification per stopped run naming the account, the limit, and its reset time.
+That notification goes to FirstMate itself, never only to the supervision session, and the stuck-worker playbook and the supervision session's instructions both say a usage-limit stop is acted on or escalated, never filed as routine.
+FirstMate moves the worker at once with `bin/fm-usage-limit.sh move`, which checks the other account offers the same model and effort, rebinds the thread there, reads the binding back, records the move, and sends the continuation through the ordinary steer.
+Which account to move to stays FirstMate's choice under the captain's account rules, and a moved worker finishes where it is; only new work goes back.
+When the captain says an account was reset early, `bin/fm-usage-limit.sh resume <account>` rings every worker still stopped on it; nothing detects such a reset on its own.
+T3 Code's own "Resume after usage limits" setting stays the backstop for the natural reset, when no account has room or FirstMate itself was down.
+Moving across accounts hands the conversation over trimmed, so a worker deep in an investigation can lose some of its thread; its brief, status, and files are untouched.
+Approved by the captain on 2026-11-15.
+Details: [usage-limit stops](docs/t3code-backend.md#usage-limit-stops).
+
 ## Do it when no worker is running
 
 ![Before, the idle hook waited for two quiet 30 second polls; after, the watcher rings it on the turn-end itself and it fires about a second and a half later](devlog/media/fleet-idle-doorbell.svg)

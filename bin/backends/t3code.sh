@@ -404,6 +404,33 @@ fm_backend_t3code_takes_turn_when_dead() {  # <thread-id>
   [ "$(fm_backend_t3code_probe "$1")" = error ]
 }
 
+# fm_backend_t3code_usage_limit: classify the thread's latest run once
+# (bin/fm-t3-mcp.mjs limit owns the evidence order). Prints one tab-separated
+# line, run, instance, model, window, reset epoch seconds, source, with an
+# unknown window or reset as `-`, and returns 0 when that run failed on a
+# provider usage limit; returns 1 for any other state or failure, and 2 when
+# the thread could not be read.
+fm_backend_t3code_usage_limit() {  # <thread-id>
+  local out
+  out=$(fm_backend_t3code_mcp limit --thread "$1" 2>/dev/null) || return 2
+  printf '%s' "$out" | node -e '
+let d;
+try { d = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch { process.exit(2); }
+if (!d || d.ok !== true) process.exit(2);
+if (!d.limited) process.exit(1);
+const reset = Date.parse(d.resetAt ?? "");
+const field = (v) => (v === null || v === undefined || v === "" ? "-" : String(v).replace(/[\t\n]/g, " "));
+process.stdout.write([d.runId, d.instanceId, d.model, d.window, Number.isFinite(reset) ? Math.floor(reset / 1000) : null, d.source].map(field).join("\t") + "\n");
+'
+}
+
+# fm_backend_t3code_move: rebind a stopped thread to another provider
+# instance with the same model and options, proven by read-back
+# (bin/fm-t3-mcp.mjs move owns the checks and exit codes).
+fm_backend_t3code_move() {  # <thread-id> <instance-id>
+  fm_backend_t3code_mcp move --thread "$1" --instance "$2"
+}
+
 fm_backend_t3code_target_exists() {  # <thread-id>
   case "$(fm_backend_t3code_agent_state "$1")" in
     alive|dead) return 0 ;;

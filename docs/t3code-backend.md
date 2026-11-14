@@ -397,6 +397,27 @@ That turn tells the secondmate to re-read its `AGENTS.md` and config first, and 
 A secondmate thread that reads missing is closed again through the idempotent archive before a replacement thread is launched, and when that close cannot be proven the thread and its record stay as recorded and nothing is spawned; other backends keep their existing best-effort close ([`bin/fm-secondmate-liveness-lib.sh`](../bin/fm-secondmate-liveness-lib.sh)).
 Teardown still requires a proven archive before returning the worktree.
 
+<a id="usage-limit-stops"></a>
+
+### Usage-limit stops
+
+A worker whose run fails on a provider usage limit reads failed like any other failure, so the watcher classifies the run once, on the first sight of the stopped thread's quiet screen ([`bin/fm-t3-mcp.mjs`](../bin/fm-t3-mcp.mjs) `limit` owns the evidence order).
+T3's typed failure fields decide when the thread read carries them; the MCP thread detail omits them today, so the run's error item titled "Usage limit reached" decides, and Claude's usage-limit notice id adds the limit window and reset time.
+A usage-limit stop is written to the task's record `state/<task>.usage-limit` ([`bin/fm-usage-limit-lib.sh`](../bin/fm-usage-limit-lib.sh) owns its fields) and raised as one `check: usage-limit:` wake per failed run, naming the account, the window, and the reset time, in place of the stale wake; any other failure keeps the ordinary stale path.
+A check wake is never the supervision session's while the captain is present, so it reaches firstmate.
+
+[`bin/fm-usage-limit.sh`](../bin/fm-usage-limit.sh) acts on it, and its header owns the commands and exit codes:
+
+- `move <task> --instance <instance>` rebinds the stopped thread to another provider instance at once, through `t3_thread_configure` with the thread's own model and options, refused unless T3's catalog shows the target runs the same driver and offers that model and every option value, effort included.
+  It reads the binding back before it records the move in the task's record, then sends the continuation through the ordinary steer.
+  Choosing the instance stays firstmate's, under the captain's account rules; a moved worker stays on its new instance.
+- `resume <instance>` rings every worker recorded as stopped on that instance and not moved since, for an account the captain says was reset early; no reset is detected automatically.
+- `list` shows every record.
+
+Configure first and message second matters: a message to the old binding restarts the run on the exhausted account.
+Between Claude instances with separate logins, T3 starts a new provider session and hands the conversation over as a trimmed selection, without the old session's reasoning.
+T3's own "Resume after usage limits" setting (Settings, Threads) resumes a stop at its recorded reset time and is the backstop when no instance has room; any new message cancels its pending continuation.
+
 ## Push events and polling fallback
 
 T3 accepts an `mcp-client` session only on `/mcp`, so its WebSocket event stream is not available to this credential.
