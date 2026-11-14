@@ -342,6 +342,7 @@ test_follow_streams_survives_a_cut_and_reattaches() {
 test_follow_from_end_reattaches_at_the_last_lines() {
   local h r out rc i
   h=$(new_home from-end)
+  # shellcheck disable=SC2016 # Expanded by the inner shell.
   job "$h" start t1 -- bash -c 'for i in 01 02 03 04 05 06 07 08 09 10; do echo "row-$i"; done; sleep 2; echo after; exit 0' >/dev/null \
     || fail "start failed"
   r=$(rec "$h" 1)
