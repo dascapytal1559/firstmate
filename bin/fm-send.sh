@@ -1262,7 +1262,13 @@ else
     case "$ring_rc" in
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
-    3) echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2 ;;
+    3) if [ "$TARGET_BACKEND" = t3code ]; then
+         # A T3 thread whose last run failed takes the doorbell (rc 0), so a
+         # refusal here means the thread is missing or archived, never "exited".
+         echo "fm-send: doorbell not sent because T3 thread $T is missing or archived; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring it" >&2
+       else
+         echo "fm-send: doorbell not typed because the agent in $T has exited; the steer is durably recorded at $INBOX_RECORD for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane" >&2
+       fi ;;
     esac
     exit 0
   fi

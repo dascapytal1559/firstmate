@@ -1665,6 +1665,80 @@ test_send_records_its_cause_and_rings_with_it() {
   pass "fm-send.sh to a T3 worker: the turn's prompt is kept in the steer's record and rides its doorbell, and a refused cause never stops the doorbell"
 }
 
+# A worker stopped by a failed run (a usage limit, a provider error) still takes
+# a new message on the same thread. The steer rings it once and succeeds,
+# without claiming the agent exited.
+test_steer_rings_a_failed_thread() {
+  local id out rc thread=mcp:5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d
+  id=$(t3_uid t3failed-send)
+  make_t3_control_task send-failed "$id" "$thread" failed
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$ROOT/bin/fm-send.sh" "$id" "resume after the reset" 2>&1); rc=$?
+  expect_code 0 "$rc" "a steer to a failed T3 thread should succeed"$'\n'"$out"
+  assert_not_contains "$out" "has exited" "a failed T3 thread's steer must not claim the agent exited"
+  assert_not_contains "$out" "not typed" "a failed T3 thread's steer must not report a skipped doorbell"
+  [ "$(t3_fake_calls t3_thread_send | wc -l | tr -d ' ')" = 1 ] \
+    || fail "a steer to a failed thread must send exactly one message, got: $(t3_fake_calls t3_thread_send)"
+  assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the message sent is the steering doorbell"
+  pass "fm-send.sh to a failed T3 thread: one doorbell is sent and the steer succeeds"
+}
+
+# An archived or missing thread takes no turn: the steer is recorded, nothing is
+# sent, and the message names the thread rather than an exited agent.
+test_steer_refuses_archived_or_missing_thread() {
+  local mode id out rc thread=mcp:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e
+  for mode in archived missing; do
+    id=$(t3_uid "t3gone-$mode")
+    make_t3_control_task "send-$mode" "$id" "$thread" completed
+    case "$mode" in
+      archived) t3_world "$(t3_thread_json "$thread" completed true)" ;;
+      missing) t3_world ;;
+    esac
+    out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CTRL_STATE" FM_DATA_OVERRIDE="$CTRL_DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+      "$ROOT/bin/fm-send.sh" "$id" "anyone there" 2>&1); rc=$?
+    expect_code 0 "$rc" "a steer to a $mode thread still records and exits 0"$'\n'"$out"
+    assert_contains "$out" "missing or archived" "a $mode thread's refusal names the thread, not an exited agent"
+    assert_not_contains "$out" "has exited" "a $mode thread must not be reported as an exited agent"
+    [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "a $mode thread must receive no message, got: $(t3_fake_calls t3_thread_send)"
+    [ -n "$(find "$CTRL_STATE/$id.inbox" -maxdepth 1 -name '*.msg')" ] || fail "the steer to a $mode thread must stay durably recorded"
+  done
+  pass "fm-send.sh to an archived or missing T3 thread: nothing is sent and the record stays for recovery"
+}
+
+# The watcher rings an unread message on a failed thread, once, and does not
+# escalate it as an exited agent or defer it behind T3's uncertain busy reading.
+# An archived thread still escalates without a ring.
+test_watcher_rings_a_failed_thread() {
+  local mode id thread=mcp:7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f state rec
+  for mode in failed archived; do
+    id=$(t3_uid "t3watch-$mode")
+    make_t3_control_task "watch-$mode" "$id" "$thread" completed
+    case "$mode" in
+      failed) t3_world "$(t3_thread_json "$thread" failed false)" ;;
+      archived) t3_world "$(t3_thread_json "$thread" completed true)" ;;
+    esac
+    state=$CTRL_STATE
+    rec=$(bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_write "$2" "$3" "please continue"' _ "$ROOT" "$state" "$id")
+    : > "$CASE_DIR/wakes"
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$CONFIG" FM_ROOT_OVERRIDE="$ROOT" FM_TASK_INBOX_GRACE_SECS=0 WAKES="$CASE_DIR/wakes" \
+      bash -c '. "$0/bin/fm-watch.sh"; wake() { printf "%s\n" "$1" >> "$WAKES"; }; inbox_steer_check "$1" "$2"' "$ROOT" "$thread" "$id" >/dev/null 2>&1 || true
+    case "$mode" in
+      failed)
+        [ "$(t3_fake_calls t3_thread_send | wc -l | tr -d ' ')" = 1 ] \
+          || fail "the watcher must ring a failed thread's unread message once, got: $(t3_fake_calls t3_thread_send)"
+        assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the watcher sends the steering doorbell"
+        [ ! -s "$CASE_DIR/wakes" ] || fail "ringing a failed thread must not wake firstmate: $(cat "$CASE_DIR/wakes")"
+        [ -f "$state/$id.inbox/.ring-state" ] || fail "the ring must enter the re-ring ladder"
+        ;;
+      archived)
+        [ -z "$(t3_fake_calls t3_thread_send)" ] || fail "an archived thread must not be rung"
+        assert_contains "$(cat "$CASE_DIR/wakes")" "unread firstmate instruction" "an archived thread still escalates its unread message"
+        ;;
+    esac
+  done
+  pass "watcher: a failed T3 thread's unread message is rung once instead of escalated; an archived thread still escalates"
+}
+
 test_kill_stops_delegated_threads() {
   local call
   t3_case kill-children
@@ -3430,3 +3504,6 @@ test_kill_stops_delegated_threads
 test_turn_start_carries_its_cause_and_never_drops_the_message
 test_spawn_records_and_sends_its_turns_cause
 test_send_records_its_cause_and_rings_with_it
+test_steer_rings_a_failed_thread
+test_steer_refuses_archived_or_missing_thread
+test_watcher_rings_a_failed_thread

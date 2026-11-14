@@ -309,6 +309,17 @@ test_ring_skips_dead_agent() {
   pass "inbox: the ring skips dead or missing endpoints and still rings live or unclassifiable endpoints"
 }
 
+# The optional "takes a turn although its agent reads dead" question answers no
+# for every backend but T3, so a dead pane is never typed into.
+test_dead_pane_backends_never_take_a_turn() {
+  local backend
+  for backend in tmux herdr zellij rex orca cmux paseo tern hc; do
+    bash -c '. "$1/bin/fm-backend.sh"; fm_backend_takes_turn_when_dead "$2" some-target' _ "$ROOT" "$backend" \
+      && fail "$backend must never take a turn when its agent reads dead"
+  done
+  pass "inbox: no backend but T3 takes a turn when its agent reads dead"
+}
+
 # A fake tmux whose pane is a Claude-style composer that keeps its content in
 # FM_FAKE_COMPOSER: literal input appends to it, capture renders it wrapped
 # between rules, and Enter submits it (logged as SUBMIT) unless
@@ -1376,6 +1387,7 @@ test_write_is_durable_and_exact
 test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls
 test_ring_skips_dead_agent
+test_dead_pane_backends_never_take_a_turn
 test_ring_submits_its_own_stuck_doorbell
 test_idempotent_write_dedups_exact_body
 test_idempotent_write_prefilters_history

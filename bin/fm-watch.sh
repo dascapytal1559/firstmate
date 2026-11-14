@@ -622,7 +622,7 @@ inbox_steer_busy() {  # <window> <backend> <task> <tail40>
 # Runs for secondmates too: their pane-staleness exemption is about quiet panes
 # being healthy, while an unacknowledged instruction can still be a stuck steer.
 inbox_steer_check() {  # <window> <task>
-  local w=$1 task=$2 action verb rec count tail40 reason='' ring_rc backend agent_state
+  local w=$1 task=$2 action verb rec count tail40 reason='' ring_rc backend agent_state dead_takes_turn
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
@@ -639,19 +639,29 @@ inbox_steer_check() {  # <window> <task>
   esac
   backend=$(window_backend "$w")
   agent_state=$(fm_backend_agent_state "$backend" "$w" 2>/dev/null || true)
+  # A dead agent on an endpoint that still takes a new turn (a T3 thread whose
+  # last run failed) is rung like a live one, and has no running turn to defer
+  # behind: T3's native busy reading of a failed thread is uncertain, which the
+  # busy guard below would otherwise treat as busy.
+  dead_takes_turn=
+  if [ "$agent_state" = dead ] && fm_backend_takes_turn_when_dead "$backend" "$w" 2>/dev/null; then
+    dead_takes_turn=1
+  fi
   case "$agent_state" in
     dead|missing)
-      if [ "$verb" = retry ]; then
-        fm_task_inbox_clear_retry "$STATE" "$task" "$rec" || true
-      else
-        inbox_steer_escalate_unavailable "$w" "$task" "$rec"
+      if [ -z "$dead_takes_turn" ]; then
+        if [ "$verb" = retry ]; then
+          fm_task_inbox_clear_retry "$STATE" "$task" "$rec" || true
+        else
+          inbox_steer_escalate_unavailable "$w" "$task" "$rec"
+        fi
+        return 0
       fi
-      return 0
       ;;
   esac
   watcher_capture "$backend" "$w" 40 "$(window_label "$w")" || WATCHER_CAPTURE=
   tail40=$WATCHER_CAPTURE
-  if inbox_steer_busy "$w" "$backend" "$task" "$tail40"; then
+  if [ -z "$dead_takes_turn" ] && inbox_steer_busy "$w" "$backend" "$task" "$tail40"; then
     [ "$verb" != retry ] || return 0
     if ! count=$(fm_task_inbox_record_busy "$STATE" "$task" "$rec"); then
       [ -f "$rec" ] || return 0

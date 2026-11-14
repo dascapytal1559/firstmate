@@ -1550,6 +1550,19 @@ fm_backend_agent_state() {  # <backend> <target>
   esac
 }
 
+# fm_backend_takes_turn_when_dead: 0 iff <target>, whose agent state reads
+# `dead`, still takes a new turn, so a steering doorbell may ring it. Optional
+# per backend; every backend without the question answers no, so a dead tmux,
+# Herdr, or other pane is never typed into. Only the t3code adapter answers
+# yes, for a thread whose last run failed: a T3 thread has no shell to
+# mis-type into, and a new message resumes the same conversation.
+fm_backend_takes_turn_when_dead() {  # <backend> <target>
+  local backend=$1 target=$2
+  [ "$backend" = t3code ] || return 1
+  fm_backend_source "$backend" || return 1
+  fm_backend_t3code_takes_turn_when_dead "$target"
+}
+
 # Backward-compatible three-state view for existing callers. An
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.

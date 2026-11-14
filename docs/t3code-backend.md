@@ -305,7 +305,7 @@ Thread persistence alone does not prove a live agent.
 - A thread with a pending runtime request (`pendingRequestCount`, a question or a permission approval) reads `blocked`, idle/alive, so a wait on a human is never taken for progress.
 - `preparing`, `queued`, `starting`, `running`, and `waiting` (the run's post-turn drain) read busy/alive.
 - `idle`, `completed`, `interrupted`, `cancelled`, and `rolled_back` read idle/alive.
-- `failed` reads unknown/dead.
+- `failed` reads unknown/dead, yet it still takes a new message: the adapter alone answers `fm_backend_takes_turn_when_dead` (`bin/fm-backend.sh`) yes for it, so the steering doorbell rings a failed thread and the watcher rings its unread message instead of escalating it as an exited agent. A missing or archived thread still refuses, and no other backend takes a turn when dead.
 - An archived thread with no active run, or one the verified server does not have, reads missing.
 - An archived thread whose run is still draining is not proven closed, so it reads `unknown unreadable` until the run ends.
 - An unreachable server, a refused gate, or a failed read reads `unknown unreadable`, which is never treated as proof that a replacement agent is safe.
@@ -390,7 +390,7 @@ A startup check from the old session that is still running can refuse the lock f
 
 The main's credential guard in the same PreToolUse hook denies a Read or Grep of `config/t3code-token`, a Grep over `config/`, and a shell command that would print the file or a glob over `config/`, so the full-access credential stays out of the main thread's transcript; it guards against a mistake, not a determined reader.
 
-Inspect a failed worker's thread error before sending a new turn through its normal steer path.
+Inspect a failed worker's thread error before sending a new turn through its normal steer path, which rings a failed thread like any other.
 A new turn continues the same driver and transcript; `fm-control.sh relaunch` remains refused.
 Automatic secondmate recovery treats a failed run the same way: the thread is still readable, so recovery resumes it in place with one recovery turn instead of archiving it and launching a second thread, and the relaunch ledger bounds repeats.
 That turn tells the secondmate to re-read its `AGENTS.md` and config first, and startup still delivers its queued config re-read retries, because a resumed conversation does not re-read on its own the way a fresh launch does.
