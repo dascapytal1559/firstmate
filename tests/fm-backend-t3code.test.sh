@@ -2309,11 +2309,12 @@ test_uncertain_launch_message_keeps_task_record() {
   pass "fm-spawn.sh --backend t3code: a launch brief whose reply is lost is reported unconfirmed and keeps its task record"
 }
 
-test_scout_teardown_stops_and_archives_before_slot_return() {
+test_scout_teardown_archives_before_slot_return() {
   local proj wt data state id out rc neutral fb thread=mcp:2c8f0d4e-7b1a-4f3c-9e2d-abcdef012345
   id=$(t3_uid t3teardownz1)
-  t3_case teardown running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown completed
+  # A finished scout: a plain cleanup refuses while the worker's turn runs.
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
@@ -2331,14 +2332,14 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
     "$ROOT/bin/fm-teardown.sh" "$id" 2>&1 )
   rc=$?
   expect_code 0 "$rc" "t3code scout teardown should succeed once the report exists"$'\n'"$out"
-  [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] || fail "teardown must interrupt then archive exactly once, got '$(t3_dispatch_types)'"
+  [ "$(t3_dispatch_types)" = "t3_thread_organize" ] || fail "teardown of a finished scout must archive exactly once with no interrupt, got '$(t3_dispatch_types)'"
   local archive_line return_line
   archive_line=$(t3_log_line_of 'r.tool === "t3_thread_organize"')
   return_line=$(t3_log_line_of 'r.tool === "treehouse" && r.args.indexOf("return --force") === 0')
   [ "$return_line" -gt 0 ] || fail "teardown must return the slot through treehouse"
   [ "$archive_line" -lt "$return_line" ] || fail "the thread must be archived before the slot is returned (archive line $archive_line, return line $return_line)"
   assert_absent "$state/$id.meta" "teardown should remove task metadata"
-  pass "fm-teardown.sh backend=t3code: interrupts and archives the thread with a proven close, then returns the slot"
+  pass "fm-teardown.sh backend=t3code: archives a finished scout's thread with a proven close, then returns the slot"
 }
 
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete() {
@@ -2915,8 +2916,8 @@ test_spawn_rejected_lease_is_neither_cleaned_nor_returned() {
 test_teardown_keeps_tracked_claude_local_md_and_codex_config() {
   local proj wt data state id out rc neutral fb thread=mcp:5a9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d
   id=$(t3_uid t3teardownz2)
-  t3_case teardown-tracked-claude-local running
-  t3_world "$(t3_thread_json "$thread" running false)"
+  t3_case teardown-tracked-claude-local completed
+  t3_world "$(t3_thread_json "$thread" completed false)"
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   printf 'project instructions\n' > "$wt/CLAUDE.local.md"
@@ -3451,7 +3452,7 @@ test_spawn_codex_scout_thread_environment_carries_traceparent
 test_spawn_secondmate_runs_thread_in_home_with_env
 test_spawn_codex_secondmate_rides_thread_environment
 test_spawn_refuses_t3code_when_token_rejected
-test_scout_teardown_stops_and_archives_before_slot_return
+test_scout_teardown_archives_before_slot_return
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete
 test_pooled_t3_secondmate_home_returned_only_after_provider_exits
 test_teardown_refuses_when_t3_is_unreachable
