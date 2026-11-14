@@ -41,6 +41,27 @@
 # lift the deferral (it authorizes discarding unlanded WORK, never the
 # captain's question), and bin/fm-captain-hold.sh answer stays the only act
 # that closes the call.
+# REFUSES, exiting 5 with nothing stopped or removed, while a ship or scout
+# task's worker is still working. Closing the endpoint and reaping the copy's
+# processes ends whatever the worker is running, and landed work proves the
+# code landed, never that the worker stopped: its brief may place a step after
+# the merge (observed 2026-11-14: a production step killed 51 seconds in). Two
+# mechanical readings refuse, and neither judges whether the work matters:
+#   - the worker's turn is running: bin/fm-busy-lib.sh's activity guard
+#     (fm_busy_verdict_is_busy) says so and the endpoint's agent is not
+#     confirmed gone (the recovery-grade classifier's dead or missing, or, on
+#     a backend with no classifier, an endpoint that no longer exists), so a
+#     turn record a crashed agent left behind never blocks cleanup;
+#   - one of its detached jobs is still running (bin/fm-job.sh live).
+# Exit 5 means only "the worker is still working; retry once it stops", so a
+# caller can defer without reading text. Cleanup never waits for the worker
+# itself: the caller retries at a later wake. The check runs before the
+# landed-work proof, which keeps a deferred retry cheap, and again immediately
+# before the first step that stops or removes anything. --force lifts it,
+# because ending a worker's unfinished step is the discard --force authorizes;
+# a wedged worker is stopped first with bin/fm-control.sh <task-id> interrupt
+# (or exit), never forced. A secondmate is exempt: idle is its healthy state
+# and its retirement has its own gates.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch other than the local no-mistakes
@@ -102,8 +123,10 @@
 # no longer a readable worktree is reported at once with the lost pool slot and
 # what remains. Teardown then finishes every cleanup step, reports the lost slot
 # instead of a clean return, and exits 4. Exit 4 means only "cleaned up, but a
-# returned pool slot was lost"; refusals and errors exit 1, and an invalid
-# request exits 2. A local retirement of a remote secondmate whose remote run
+# returned pool slot was lost" and exit 5 only the still-working refusal above;
+# other refusals and errors exit 1 (a held supervision lease exits as
+# bin/fm-lease-lib.sh defines), and an invalid request exits 2. A local
+# retirement of a remote secondmate whose remote run
 # exits 4 still completes locally, forwards only the remote lost-slot warning
 # to stderr, and then exits 4.
 # Before destructive cleanup, teardown validates task check artifacts as
@@ -210,10 +233,11 @@
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
-#   --force skips ordinary-task dirty and landed-work checks, skips scout report
-#   checks and closes the scout as discarded with no report recorded, and
-#   discards secondmate child work for kind=secondmate. Only use it when the
-#   captain has explicitly said to discard the work.
+#   --force skips the still-working refusal and ordinary-task dirty and
+#   landed-work checks, skips scout report checks and closes the scout as
+#   discarded with no report recorded, and discards secondmate child work for
+#   kind=secondmate. Only use it when the captain has explicitly said to
+#   discard the work.
 #   --legacy-record accepts a task record that predates the spawn_gen field:
 #   teardown then proceeds only when the recorded endpoint is confirmed dead or
 #   agent-less (bin/fm-backend.sh's recovery-grade classifier), and without
@@ -331,7 +355,9 @@
 #     outside the worktree). Just before Fix 2, `fm-job.sh reap` stops every
 #     job of this task that is still running and removes its job records;
 #     a job whose process group survives KILL refuses cleanup with the
-#     records kept, like a Fix 2 survivor.
+#     records kept, like a Fix 2 survivor. Without --force the still-working
+#     refusal has already deferred cleanup while a job runs, so the reap
+#     stops one only under --force, or one started after that check.
 # After Fix 1 and Fix 2, when config/pipeline-spend opts this home in, a ship
 # task whose local copy this teardown owns has its no-mistakes pipeline spend
 # recorded by bin/fm-pipeline-spend.sh, which owns the attribution and the
@@ -395,6 +421,7 @@ for _teardown_source in \
   fm-timeout-lib.sh \
   fm-backend.sh \
   fm-control-lib.sh \
+  fm-busy-lib.sh \
   fm-lock-lib.sh \
   fm-classify-lib.sh \
   fm-gate-refuse-lib.sh \
@@ -429,6 +456,8 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-lock-lib.sh
 . "$SCRIPT_DIR/fm-lock-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -3736,6 +3765,42 @@ remove_secondmate_registry_entry() {
 require_exclusive_task_worktree_slot || exit 1
 require_owned_task_worktree_slot || exit 1
 
+# The still-working refusal (contract: script header): returns 5 while the
+# worker's turn or one of its detached jobs is running. The activity guard also
+# holds a T3 turn state the server could not report, which the message names.
+teardown_refuse_working_worker() {
+  local agent harness verdict jobs
+  [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ] || return 0
+  if [ -n "$T" ]; then
+    agent=$(fm_backend_agent_state "$BACKEND" "$T")
+    [ "$agent" != unverified ] || fm_backend_target_exists "$BACKEND" "$T" || agent=missing
+    case "$agent" in
+      dead|missing) ;;
+      *)
+        harness=$(fm_meta_get "$META" harness)
+        verdict=$(fm_busy_classify "$BACKEND" "$T" "$harness" "$ID" "$STATE")
+        if fm_busy_verdict_is_busy "$verdict"; then
+          case "$verdict" in
+            busy\ *) echo "REFUSED: task $ID's worker is still running a turn ($verdict); nothing was stopped or removed" >&2 ;;
+            *) echo "REFUSED: task $ID's worker may still be running a turn: its turn state could not be read ($verdict); nothing was stopped or removed" >&2 ;;
+          esac
+          echo "Cleanup would stop it mid-step. Retry once the turn ends; if the worker is wedged, stop it first with bin/fm-control.sh $ID interrupt (or exit)." >&2
+          return 5
+        fi
+        ;;
+    esac
+  fi
+  jobs=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-job.sh" live 2>/dev/null \
+    | awk -F '\t' -v id="$ID" '$1 == id' || true)
+  if [ -n "$jobs" ]; then
+    echo "REFUSED: task $ID still has a detached job running; nothing was stopped or removed" >&2
+    echo "Cleanup would stop it. Retry once it ends (bin/fm-job.sh status $ID), or stop it with bin/fm-job.sh stop $ID <job>." >&2
+    return 5
+  fi
+  return 0
+}
+teardown_refuse_working_worker || exit $?
+
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
 
 if [ "$KIND" = secondmate ]; then
@@ -3893,6 +3958,7 @@ fi
 # kind=secondmate: a secondmate home's own runtime lifecycle is owned by the
 # dedicated process-event and firstmate-home removal machinery further below,
 # not by task-worktree cleanup.
+teardown_refuse_working_worker || exit $?
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
   conclude_task_no_mistakes_run "$WT"
 fi

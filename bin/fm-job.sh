@@ -53,10 +53,11 @@
 # live     Print "<task-id><TAB><runner-pid>" for every job still running whose
 #          runner is the process that recorded itself (pid plus start
 #          identity). bin/fm-fleet-idle.sh reads it to leave a running job out
-#          of its "is this worker mid-turn" verdict.
-# reap     Teardown's step: stop every running job of <task-id>, then remove
-#          its job records. Exits 1, keeping the records, when a job's process
-#          group survives KILL.
+#          of its "is this worker mid-turn" verdict, and bin/fm-teardown.sh to
+#          defer a plain cleanup while a job of the task runs.
+# reap     Teardown's step (bin/fm-teardown.sh owns when it runs): stop every
+#          running job of <task-id>, then remove its job records. Exits 1,
+#          keeping the records, when a job's process group survives KILL.
 #
 # Records live in this home's state/<task-id>.jobs/<n>/: `record` holds
 # key=value lines read last-value-wins (task, job, command, cwd, log,

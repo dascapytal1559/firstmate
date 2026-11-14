@@ -1587,6 +1587,245 @@ test_already_gone_endpoint_still_completes_without_a_refusal() {
   pass "fm-teardown: an already-exited endpoint, and a server that is already gone, still complete cleanup silently"
 }
 
+# run_plain: teardown with no flags, so every refusal --force would lift applies.
+run_plain() {  # <case> <id>
+  local dir=$1 id=$2
+  env -u TMUX -u TMUX_PANE FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" "$TEARDOWN" "$id"
+}
+
+# write_t3_thread_case: a T3 worker with one thread in the given status and no
+# local copy, so the cases below stay on the still-working refusal.
+write_t3_thread_case() {  # <case-dir> <id> <thread> <status> <active-run|null>
+  local dir=$1 id=$2 thread=$3 status=$4 run=$5
+  t3_fake_start "$dir/t3-server"
+  t3_fake_case "$dir/t3-case" "{\"threads\":{\"$thread\":{\"threadId\":\"$thread\",\"projectId\":\"proj-1\",\"status\":\"$status\",\"activeRunId\":$run,\"archived\":false,\"worktreePath\":\"$dir/nonexistent-worktree\",\"pendingRequestCount\":0,\"items\":[],\"runs\":[]}}}"
+  t3_fake_credential "$dir/home/config/t3code-token"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" \
+    "worktree=$dir/nonexistent-worktree" "project=$dir/nonexistent-project" \
+    "kind=ship" "mode=no-mistakes" \
+    backend=t3code "t3_thread_id=$thread" t3_project_id=proj-1 harness=claude
+}
+
+# write_running_turn_record: the recorded turn state of a Claude worker whose
+# turn is open, for the backends whose turn state is a record and not a native
+# read.
+write_running_turn_record() {  # <case-dir> <id>
+  printf 'harness=claude\n' >> "$1/home/state/$2.meta"
+  "$ROOT/bin/fm-busy-event.sh" arm "$1/home/state" "$2" >/dev/null
+  "$ROOT/bin/fm-busy-event.sh" apply "$1/home/state" "$2" busy --current-gen \
+    --source claude-hook --event UserPromptSubmit
+}
+
+test_running_turn_defers_cleanup_on_t3_until_the_turn_ends() {
+  local dir id=running-t3-task rc=0 mutations
+  local thread=mcp:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+
+  dir=$(make_case running-turn-t3)
+  write_t3_thread_case "$dir" "$id" "$thread" running '"run-7"'
+
+  run_plain "$dir" "$id" > "$dir/running.out" 2> "$dir/running.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  [ "$rc" -eq 5 ] || { t3_fake_stop; fail "a running T3 turn must defer cleanup with exit 5, got $rc: $(cat "$dir/running.err")"; }
+  assert_grep "still running a turn (busy t3code-native)" "$dir/running.err" \
+    "the deferral did not name the running turn"
+  [ -z "$mutations" ] || { t3_fake_stop; fail "cleanup changed the T3 thread of a worker mid-turn: $mutations"; }
+  assert_present "$dir/home/state/$id.meta" "cleanup removed the record of a worker mid-turn"
+
+  # The same record, once the turn ends, cleans up with no flag.
+  rc=0
+  t3_fake_set "w.threads['$thread'].status = 'completed'; w.threads['$thread'].activeRunId = null;"
+  run_plain "$dir" "$id" > "$dir/idle.out" 2> "$dir/idle.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  t3_fake_stop
+  [ "$rc" -eq 0 ] || fail "cleanup still refused after the turn ended: $(cat "$dir/idle.err")"
+  [ "$mutations" = "t3_thread_organize" ] || fail "cleanup after the turn ended must archive the thread, got '$mutations'"
+  assert_absent "$dir/home/state/$id.meta" "cleanup after the turn ended left the record behind"
+  pass "fm-teardown backend=t3code: a running turn defers cleanup untouched with exit 5, and the same cleanup finishes once the turn ends"
+}
+
+test_failed_t3_turn_does_not_defer_cleanup() {
+  local dir id=failed-t3-task rc=0 mutations
+  local thread=mcp:2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+
+  dir=$(make_case failed-turn-t3)
+  write_t3_thread_case "$dir" "$id" "$thread" failed null
+
+  run_plain "$dir" "$id" > "$dir/failed.out" 2> "$dir/failed.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  t3_fake_stop
+  [ "$rc" -eq 0 ] || fail "a worker whose turn already failed must still be cleaned up: $(cat "$dir/failed.err")"
+  [ "$mutations" = "t3_thread_organize" ] || fail "cleanup of a failed worker must archive its thread, got '$mutations'"
+  assert_absent "$dir/home/state/$id.meta" "cleanup of a failed worker left the record behind"
+  pass "fm-teardown backend=t3code: a worker whose turn already failed is cleaned up without a deferral"
+}
+
+# A status the T3 server reports but this adapter cannot place is neither a
+# running turn nor a stopped worker. Cleanup must not read it as stopped.
+test_unreadable_t3_turn_state_defers_cleanup() {
+  local dir id=unreadable-t3-task rc=0 mutations
+  local thread=mcp:5e6f7a8b-9c0d-4e1f-8a3b-4c5d6e7f8a9b
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+
+  dir=$(make_case unreadable-turn-t3)
+  write_t3_thread_case "$dir" "$id" "$thread" not-a-status-this-adapter-knows null
+
+  run_plain "$dir" "$id" > "$dir/unreadable.out" 2> "$dir/unreadable.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  t3_fake_stop
+  [ "$rc" -eq 5 ] || fail "a T3 turn state that could not be read must defer cleanup with exit 5, got $rc: $(cat "$dir/unreadable.err")"
+  assert_grep "its turn state could not be read (unknown t3code-native)" "$dir/unreadable.err" \
+    "the deferral did not say the turn state was unreadable"
+  [ -z "$mutations" ] || fail "cleanup changed the T3 thread of a worker whose turn state it could not read: $mutations"
+  assert_present "$dir/home/state/$id.meta" "cleanup removed the record of a worker whose turn state it could not read"
+  pass "fm-teardown backend=t3code: a turn state T3 reports but the adapter cannot place defers cleanup untouched"
+}
+
+test_running_turn_defers_cleanup_on_tmux_and_a_gone_agent_does_not() {
+  local dir socket session='running turn' id=running-tmux-task gone=gone-agent-task rc
+  [ -n "$REAL_TMUX" ] || { echo "skip - tmux not installed"; return 0; }
+  dir=$(make_case running-turn-tmux)
+  socket=dedicated.sock
+  ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" new-session -d -s "$session" -n control )
+  # A foreground that is not a shell is what a live agent's turn looks like to
+  # the recovery-grade classifier; a bare shell is an agent that is gone.
+  ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" new-window -d -t "=$session:" -n "fm-$id" 'sleep 600' )
+  ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" new-window -d -t "=$session:" -n "fm-$gone" )
+  write_close_failing_tmux_shim "$dir" "$socket" "$REAL_TMUX"
+
+  write_endpoint_close_meta "$dir" "$id" "$session:fm-$id"
+  write_running_turn_record "$dir" "$id"
+  write_endpoint_close_meta "$dir" "$gone" "$session:fm-$gone"
+  write_running_turn_record "$dir" "$gone"
+
+  set +e
+  run_plain "$dir" "$id" > "$dir/running.out" 2> "$dir/running.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 5 ] || fail "a running turn must defer cleanup with exit 5, got $rc: $(cat "$dir/running.err")"
+  assert_grep "still running a turn (busy claude-hook)" "$dir/running.err" \
+    "the deferral did not name the running turn"
+  assert_no_grep "kill-window" "$dir/runtime.log" "cleanup closed the endpoint of a worker mid-turn"
+  assert_present "$dir/home/state/$id.meta" "cleanup removed the record of a worker mid-turn"
+  isolated_tmux_window_exists "$dir" "$socket" "$session" "fm-$id" \
+    || fail "cleanup ended the worker mid-turn"
+
+  # The same record, once the turn ends, cleans up with no flag.
+  "$ROOT/bin/fm-busy-event.sh" apply "$dir/home/state" "$id" idle --current-gen \
+    --source claude-hook --event Stop
+  run_plain "$dir" "$id" > "$dir/idle.out" 2> "$dir/idle.err" \
+    || fail "cleanup still refused after the turn ended: $(cat "$dir/idle.err")"
+  assert_absent "$dir/home/state/$id.meta" "cleanup after the turn ended left the record behind"
+
+  # A turn record a crashed agent left behind must not hold cleanup forever.
+  run_plain "$dir" "$gone" > "$dir/gone.out" 2> "$dir/gone.err" \
+    || fail "a stale running-turn record blocked cleanup of a gone agent: $(cat "$dir/gone.err")"
+  assert_absent "$dir/home/state/$gone.meta" "cleanup of a gone agent left the record behind"
+
+  ( cd "$dir" && env -u TMUX -u TMUX_PANE "$REAL_TMUX" -S "$socket" kill-server 2>/dev/null ) || true
+  pass "fm-teardown: a running turn defers cleanup untouched, the turn's end releases it, and a gone agent's stale turn record never blocks it"
+}
+
+# Zellij has no recovery-grade liveness classifier, so the only proof that a
+# worker which left an open turn record is gone is that its endpoint no longer
+# exists. The same record and the same open turn refuse while the pane is
+# there and clean up once it is not.
+test_stale_turn_record_without_a_liveness_classifier_follows_the_endpoint() {
+  local dir id=zellij-turn-task rc=0
+  command -v jq >/dev/null 2>&1 || { printf 'note: %s skipped: jq absent\n' "${FUNCNAME[0]}"; return 0; }
+  dir=$(make_case stale-turn-no-classifier)
+  cat > "$dir/fakebin/zellij" <<SH
+#!/usr/bin/env bash
+printf 'zellij' >> "\${FM_RUNTIME_LOG:?}"
+printf ' <%s>' "\$@" >> "\${FM_RUNTIME_LOG:?}"
+printf '\n' >> "\${FM_RUNTIME_LOG:?}"
+[ -e '$dir/zellij.live' ] || exit 0
+case " \$* " in
+  *" list-sessions "*) echo lab ;;
+  *" list-panes "*) echo '[{"id":7,"is_plugin":false}]' ;;
+esac
+SH
+  chmod +x "$dir/fakebin/zellij"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:7" "endpoint_task_id=$id" \
+    "worktree=$dir/nonexistent-worktree" "project=$dir/nonexistent-project" \
+    "kind=ship" "mode=no-mistakes" \
+    "backend=zellij" "zellij_session=lab" "zellij_tab_id=3" "zellij_pane_id=7"
+  write_running_turn_record "$dir" "$id"
+
+  : > "$dir/zellij.live"
+  run_plain "$dir" "$id" > "$dir/live.out" 2> "$dir/live.err" || rc=$?
+  [ "$rc" -eq 5 ] || fail "an open turn on a live endpoint must defer cleanup with exit 5, got $rc: $(cat "$dir/live.err")"
+  assert_grep "still running a turn (busy claude-hook)" "$dir/live.err" \
+    "the deferral did not name the running turn"
+  assert_no_grep "close-" "$dir/runtime.log" "cleanup closed the endpoint of a worker mid-turn"
+  assert_present "$dir/home/state/$id.meta" "cleanup removed the record of a worker mid-turn"
+
+  rm -f "$dir/zellij.live"
+  run_plain "$dir" "$id" > "$dir/gone.out" 2> "$dir/gone.err" \
+    || fail "a stale running-turn record blocked cleanup of an endpoint that is gone: $(cat "$dir/gone.err")"
+  assert_absent "$dir/home/state/$id.meta" "cleanup of a gone endpoint left the record behind"
+  pass "fm-teardown backend=zellij: with no liveness classifier, an open turn defers cleanup while the endpoint exists and never once it is gone"
+}
+
+test_forced_cleanup_goes_through_a_running_turn() {
+  local dir id=forced-running-task rc=0 mutations
+  local thread=mcp:3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+  dir=$(make_case forced-running-turn)
+  write_t3_thread_case "$dir" "$id" "$thread" running '"run-3"'
+
+  run_case "$dir" "$id" > "$dir/forced.out" 2> "$dir/forced.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  t3_fake_stop
+  [ "$rc" -eq 0 ] || fail "--force must still discard a worker mid-turn: $(cat "$dir/forced.err")"
+  case " $mutations " in *" t3_thread_organize "*) ;; *) fail "forced cleanup must archive the thread, got '$mutations'" ;; esac
+  assert_absent "$dir/home/state/$id.meta" "forced cleanup left the record behind"
+  pass "fm-teardown backend=t3code: --force still discards a worker mid-turn"
+}
+
+test_running_detached_job_defers_cleanup_until_it_ends() {
+  local dir id=running-job-task rc=0 job mutations
+  local thread=mcp:4d5e6f7a-8b9c-4d0e-9f2a-3b4c5d6e7f8a
+  command -v node >/dev/null 2>&1 || { printf 'note: %s skipped: node absent\n' "${FUNCNAME[0]}"; return 0; }
+  dir=$(make_case running-job)
+  # The worker ended its turn and is waiting on a job it started.
+  write_t3_thread_case "$dir" "$id" "$thread" completed null
+  FM_HOME="$dir/home" "$ROOT/bin/fm-job.sh" start "$id" --cwd "$dir" -- sleep 600 > "$dir/job.out" 2>&1 \
+    || { t3_fake_stop; fail "fixture could not start a detached job: $(cat "$dir/job.out")"; }
+  job=$(sed -n 's/^job: //p' "$dir/job.out")
+
+  run_plain "$dir" "$id" > "$dir/job-running.out" 2> "$dir/job-running.err" || rc=$?
+  mutations=$(t3_fake_mutations)
+  if [ "$rc" -ne 5 ] || [ -n "$mutations" ] \
+     || ! FM_HOME="$dir/home" "$ROOT/bin/fm-job.sh" status "$id" "$job" | grep -q running; then
+    FM_HOME="$dir/home" "$ROOT/bin/fm-job.sh" stop "$id" "$job" >/dev/null 2>&1
+    t3_fake_stop
+    fail "a running detached job must defer cleanup untouched with exit 5; got rc=$rc mutations='$mutations': $(cat "$dir/job-running.err")"
+  fi
+  assert_grep "still has a detached job running" "$dir/job-running.err" \
+    "the deferral did not name the running job"
+  assert_present "$dir/home/state/$id.meta" "cleanup removed the record of a worker waiting on its job"
+
+  rc=0
+  FM_HOME="$dir/home" "$ROOT/bin/fm-job.sh" stop "$id" "$job" >/dev/null 2>&1
+  run_plain "$dir" "$id" > "$dir/job-ended.out" 2> "$dir/job-ended.err" || rc=$?
+  t3_fake_stop
+  [ "$rc" -eq 0 ] || fail "cleanup still refused after the job ended: $(cat "$dir/job-ended.err")"
+  assert_absent "$dir/home/state/$id.meta" "cleanup after the job ended left the record behind"
+  pass "fm-teardown backend=t3code: a detached job still running defers cleanup untouched, and the job's end releases it"
+}
+
+test_running_turn_defers_cleanup_on_t3_until_the_turn_ends
+test_failed_t3_turn_does_not_defer_cleanup
+test_unreadable_t3_turn_state_defers_cleanup
+test_running_turn_defers_cleanup_on_tmux_and_a_gone_agent_does_not
+test_stale_turn_record_without_a_liveness_classifier_follows_the_endpoint
+test_forced_cleanup_goes_through_a_running_turn
+test_running_detached_job_defers_cleanup_until_it_ends
 test_invalid_endpoint_records_refuse_before_mutation
 test_worktree_identity_refusal_names_the_repair_path
 test_control_lock_contention_refuses_before_mutation

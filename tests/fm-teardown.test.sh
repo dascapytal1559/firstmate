@@ -5520,16 +5520,26 @@ test_detached_job_is_stopped_and_its_records_removed() {
   done
   kill -0 -- "-$pgid" 2>/dev/null || fail "detached-job-reap: the job's command is not running"
 
+  # A running job is the worker's own work under way, so plain cleanup defers.
   rc=0
   FM_JOB_KILL_GRACE=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  if [ "$rc" -ne 5 ] || ! kill -0 -- "-$pgid" 2>/dev/null; then
+    kill -KILL -- "-$pgid" "$runner" 2>/dev/null || true
+    fail "detached-job-reap: plain teardown must defer with exit 5 and leave the running job alone, got $rc"
+  fi
+  assert_present "$case_dir/state/task-x1.meta" "detached-job-reap: the deferred teardown removed the task record"
 
-  expect_code 0 "$rc" "detached-job-reap: teardown should succeed"
+  # The captain's discard still stops it, wherever it works.
+  rc=0
+  FM_JOB_KILL_GRACE=1 run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "detached-job-reap: forced teardown should succeed"
   if kill -0 -- "-$pgid" 2>/dev/null; then
     kill -KILL -- "-$pgid" "$runner" 2>/dev/null || true
-    fail "detached-job-reap: the job's command survived teardown"
+    fail "detached-job-reap: the job's command survived forced teardown"
   fi
-  assert_absent "$case_dir/state/task-x1.jobs" "detached-job-reap: teardown left the job records behind"
-  pass "teardown stops a task's detached job, wherever it works, and removes its records"
+  assert_absent "$case_dir/state/task-x1.jobs" "detached-job-reap: forced teardown left the job records behind"
+  pass "plain teardown defers while a task's detached job runs, and a forced one stops it, wherever it works, and removes its records"
 }
 
 test_lsof_absent_reaps_tmux_process_group() {

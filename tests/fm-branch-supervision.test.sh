@@ -65,6 +65,13 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"A worker whose pull request has landed is finished, not stuck"*"\`check: merge landed:\` wake names exactly that moment"*"\`bin/fm-teardown.sh <task>\` with no flags"*"never forced, worked around, or repaired by hand"*) ;;
     *) fail "branch prompt lost the landed-work cleanup rule" ;;
   esac
+  # 2026-11-14: a landed worker was cleaned up 51 seconds into a step its
+  # brief placed after the merge. Cleanup now defers for a working worker, and
+  # the prompt must keep that deferral from being reported as a refusal.
+  case "$out_a" in
+    *"Any cleanup that exits 5 found the worker still working, which is a wait and not a refusal"*"let a later wake retry it"*"\`bin/fm-control.sh <task> interrupt\` first, and never force cleanup."*) ;;
+    *) fail "branch prompt lost the still-working cleanup deferral rule" ;;
+  esac
   case "$out_a" in
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;

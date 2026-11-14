@@ -711,6 +711,16 @@ wait_land_settled() {  # <world> <label>
   compgen -G "$1/state/.review-park-report-*" >/dev/null || fail "$2: the pending request was cleared without a reported outcome"
 }
 
+# Waits for a detached action on the lane to release the lane lock, so the
+# next tick is free to start another.
+wait_lane_free() {  # <world> <label>
+  for _ in $(seq 1 200); do
+    [ -d "$1/state/.review-park-lane.lock" ] || return 0
+    sleep 0.1
+  done
+  fail "$2: the detached action still held the lane after 20s"
+}
+
 # One tick that starts a lane action, then the next tick, which reports its
 # outcome; prints that report.
 tick_and_report() {  # <world> <label>
@@ -1162,6 +1172,52 @@ SH
   pass "a temporary control-lock refusal stays pending and retries to one reported cleanup outcome"
 }
 
+# A cleanup that teardown defers because the lane's worker is still working
+# (its exit 5) is a wait, not an outcome: nothing is reported, the request
+# stays, and the tick retries it until the worker stops.
+test_cleanup_deferred_for_a_working_worker_stays_pending_and_silent() {
+  local w out rc before
+  w=$(make_world land-deferred "$GH_URL"); gh_fixture "$w/gh.1.json"
+  : > "$w/config/auto-land"
+  cat > "$w/fakebin/fm-teardown.sh" <<SH
+#!/usr/bin/env bash
+n=\$(cat "$w/teardown.count" 2>/dev/null || echo 0)
+n=\$((n + 1)); printf '%s\\n' "\$n" > "$w/teardown.count"
+if [ -e "$w/worker.working" ]; then
+  echo "REFUSED: task lane's worker is still running a turn (busy claude-hook); nothing was stopped or removed" >&2
+  exit 5
+fi
+echo "Torn down \$1"
+SH
+  chmod +x "$w/fakebin/fm-teardown.sh"
+  : > "$w/worker.working"
+
+  # Run directly, the deferral is the command's own exit status and no outcome line.
+  rc=0; out=$(run_park "$w" land lane --if-eligible 2>/dev/null) || rc=$?
+  [ "$rc" = 5 ] || fail "land-deferred: a direct land exited $rc, not 5"
+  [ -z "$out" ] || fail "land-deferred: a direct land printed an outcome: $out"
+
+  printf 'pr=%s\n' "$GH_URL" > "$w/state/lane.review-park-land"
+  for _ in 1 2 3; do
+    before=$(cat "$w/teardown.count")
+    out=$(run_park "$w" tick 2>&1)
+    [ -z "$out" ] || fail "land-deferred: a deferral was reported as an outcome: $out"
+    for _ in $(seq 1 100); do [ "$(cat "$w/teardown.count")" -gt "$before" ] && break; sleep 0.1; done
+    [ "$(cat "$w/teardown.count")" -gt "$before" ] || fail "land-deferred: a tick did not retry the pending cleanup"
+    wait_lane_free "$w" land-deferred
+    [ -e "$w/state/lane.review-park-land" ] || fail "land-deferred: the deferral dropped the pending request"
+    ! compgen -G "$w/state/.review-park-report-*" >/dev/null || fail "land-deferred: the deferral published an outcome"
+  done
+
+  rm -f "$w/worker.working"
+  out=$(run_park "$w" tick 2>&1)
+  [ -z "$out" ] || fail "land-deferred: the retry tick printed: $out"
+  wait_land_settled "$w" land-deferred
+  out=$(run_park "$w" tick 2>&1)
+  [ "$out" = "cleaned up lane: PR $GH_URL merged; lane torn down and its working copy returned" ] || fail "land-deferred: outcome: $out"
+  pass "a cleanup deferred for a working worker reports nothing, keeps its request, and finishes once the worker stops"
+}
+
 # A cleanup killed partway through its teardown leaves its request behind, so
 # the next tick retries it and reports the outcome once.
 test_killed_cleanup_is_retried_and_reported_once() {
@@ -1306,6 +1362,7 @@ fm_test_run \
   test_detached_land_returns_at_once_and_the_tick_reports_it \
   test_pending_land_recovers_after_watcher_restart \
   test_pending_land_retries_after_control_lock_refusal \
+  test_cleanup_deferred_for_a_working_worker_stays_pending_and_silent \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \
