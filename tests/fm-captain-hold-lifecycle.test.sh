@@ -698,70 +698,6 @@ EOF
   pass "an idea never takes a captain hold"
 }
 
-test_snooze_read_items_and_archive() {
-  local home show out
-  home=$(make_home snooze-read)
-  cat > "$home/data/backlog.md" <<'EOF'
-## In flight
-- [ ] kept-scout - A finished scout (repo: sample) (kind: scout) (since 2026-07-14)
-
-## Queued
-- [ ] layout-call - Pick the layout (repo: sample) (kind: captain) (since 2026-07-14)
-- [ ] origin-scout - The scout the call came from (repo: sample) (kind: scout) (since 2026-07-14)
-- [ ] legacy-dated - An old dated call (repo: sample) (kind: captain) (since 2026-07-10) (hold: pick it later) (hold-kind: captain) (hold-until: 2099-01-04)
-  Captain hold set: 2026-07-10T00:00:00Z
-
-## Done
-EOF
-  # A hold dated before the snoozed line existed is still put off: a re-hold
-  # with new words keeps its date.
-  run_captain "$home" hold legacy-dated --reason "Pick it later, with the new numbers" >/dev/null || fail "the legacy re-hold failed"
-  assert_contains "$(tasks_in "$home" show legacy-dated --full)" "hold_until: 2099-01-04" "a re-hold keeps a legacy hold's date"
-  FM_CAPTAIN_HOLD_NOW=2026-07-14T10:00:00Z run_captain "$home" hold layout-call --reason "Grid or list?" --origin origin-scout >/dev/null \
-    || fail "the hold failed"
-  run_captain "$home" snooze layout-call --at 2026-07-14T11:00:00.000Z >/dev/null || fail "an undated snooze failed"
-  run_captain "$home" snooze layout-call --at 2026-07-14T11:00:00.000Z >/dev/null || fail "a repeated snooze failed"
-  show=$(tasks_in "$home" show layout-call --full)
-  assert_contains "$show" "Captain hold snoozed: 2026-07-14T11:00:00Z" "the snooze is recorded"
-  assert_contains "$show" "Captain hold origin: origin-scout" "a snooze keeps the origin"
-  assert_contains "$show" "Captain hold set: 2026-07-14T10:00:00Z" "and the hold's own stamp"
-  assert_contains "$show" "hold_until: \"-\"" "a snooze with no date sets no backlog date"
-  # The backlog's date is the first local date on or after the instant; UTC
-  # here, so 13:30Z on the 20th gives the 21st.
-  TZ=UTC run_captain "$home" snooze layout-call --until 2026-07-20T23:30:00+10:00 >/dev/null || fail "a snooze to a time failed"
-  show=$(tasks_in "$home" show layout-call --full)
-  assert_contains "$show" "Captain hold returns: 2026-07-20T13:30:00Z" "the return time is kept in UTC"
-  assert_contains "$show" "hold_until: 2026-07-21" "the backlog's own date never lifts before it"
-  out=$(run_captain "$home" snooze layout-call --until tomorrow 2>&1) && fail "a malformed return time was accepted"
-  assert_contains "$out" "--until must be" "the refusal says what --until takes"
-  run_captain "$home" unsnooze layout-call >/dev/null || fail "unsnooze failed"
-  show=$(tasks_in "$home" show layout-call --full)
-  assert_not_contains "$show" "Captain hold snoozed:" "bringing it back drops the snooze"
-  assert_not_contains "$show" "Captain hold returns:" "and its return time"
-  assert_contains "$show" "hold_until: \"-\"" "and the backlog's date"
-
-  run_captain "$home" hold kept-scout --read --reason "The scout's summary" >/dev/null || fail "the read hold failed"
-  out=$(run_captain "$home" complete origin-scout kept-scout 2>&1) && fail "a To read item was inventoried as a captain call"
-  assert_contains "$out" "is a To read item, not a captain call" "the completion gate says why"
-  out=$(run_captain "$home" read-done layout-call 2>&1) && fail "read-done closed a decision"
-  assert_contains "$out" "is a decision, not a To read item" "read-done says why"
-  printf 'away\n%s\n' "$(date +%s)" > "$home/state/.afk"
-  run_captain "$home" read-done kept-scout >/dev/null || fail "read-done was gated by away mode"
-  rm -f "$home/state/.afk"
-  show=$(tasks_in "$home" show kept-scout --full)
-  assert_contains "$show" "held: no" "work in flight loses its read hold"
-  assert_contains "$show" "state: in_flight" "and goes on"
-  run_captain "$home" read-done kept-scout >/dev/null || fail "a repeated read-done failed"
-
-  run_captain "$home" archive layout-call --at 2026-07-15T23:59:00.000Z >/dev/null || fail "archive failed"
-  show=$(tasks_in "$home" show layout-call --full)
-  assert_contains "$show" "Archived in T3 on 2026-07-15: not pursued." "a decision archived in T3 is not pursued"
-  assert_contains "$show" "state: done" "and closed"
-  FM_CAPTAIN_HOLD_NOW=2026-07-16T09:00:00Z run_captain "$home" archive layout-call --at 2026-07-15T23:59:00.000Z >/dev/null \
-    || fail "a replay the next day failed"
-  pass "snooze, unsnooze, read items, and archive keep the hold's record and repeat as no change"
-}
-
 test_uninventoried_report_decision_refuses_completion() {
   local home id json rc
   home=$(make_home omitted-decision)
@@ -799,31 +735,6 @@ EOF
   assert_present "$home/state/$id.meta" "refused completion must preserve investigation metadata"
   assert_grep "REFUSED" "$home/teardown.err" "refusal must be explicit"
   pass "report-only unresolved captain call is reproduced and completion refuses before loss"
-}
-
-# A finished T3 scout kept for the captain (bin/fm-t3-review.sh) keeps its
-# review independent of its real calls: completing, answering, and releasing
-# a call raised for it never touch the review record, and the completion gate
-# that let it be kept keeps passing.
-test_kept_review_is_independent_of_its_calls() {
-  local home id=kept-scout
-  home=$(make_home kept-review)
-  mkdir -p "$home/data/$id"
-  printf '# Kept report\n' > "$home/data/$id/report.md"
-  tasks_in "$home" add "$id" "Explore the print view" --kind scout --repo sample --start >/dev/null \
-    || fail "could not create the scout row"
-  write_origin_meta "$home" "$id"
-  printf '%s\n' backend=t3code t3_thread_id=mcp:kept t3_review=waiting t3_review_target=mcp:kept \
-    t3_review_revision=1 t3_review_request=req-1 >> "$home/state/$id.meta"
-  complete_through_sibling "$home" "$id" >/dev/null || fail "the kept scout's inventory should complete"
-  assert_grep 't3_review=waiting' "$home/state/$id.meta" "completing the inventory keeps the review"
-  printf 'Grid.\n' > "$home/decision.txt"
-  run_captain "$home" answer "$id-call" --decision-file "$home/decision.txt" >/dev/null \
-    || fail "the answer should be recorded"
-  assert_grep 't3_review=waiting' "$home/state/$id.meta" "answering the call never closes the exploration"
-  assert_grep 't3_review_target=mcp:kept' "$home/state/$id.meta" "the review stays bound to its thread"
-  run_captain "$home" verify "$id" >/dev/null || fail "the completion gate still passes after the answer"
-  pass "fm-captain-hold: a kept review survives completing, answering, and verifying its real calls untouched"
 }
 
 # The completion gate on the collapsed primitive: an origin with open keyed
@@ -5278,7 +5189,6 @@ test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
-test_kept_review_is_independent_of_its_calls
 test_answer_records_and_closes
 test_release_frees_held_work
 test_release_is_attended_only
@@ -5336,6 +5246,5 @@ test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
 test_hold_creates_a_captain_row_when_beads_requires_due_without_custom_type
 test_hold_refuses_an_idea
-test_snooze_read_items_and_archive
 test_archived_answered_hold_still_satisfies_the_gate
 test_archived_answer_in_a_user_configured_archive_satisfies_the_gate

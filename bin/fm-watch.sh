@@ -293,10 +293,6 @@ WATCH_HOME_EXISTED=0
 # (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
-# A finished T3 scout kept for the captain is idle by design until he closes
-# its thread (bin/fm-t3-review-lib.sh reads that record).
-# shellcheck source=bin/fm-t3-review-lib.sh
-. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # The away-posture record (state/.afk-contract) is the posture in both the
 # attended and the afk session; bin/fm-afk-contract.sh owns its schema and its
 # away-or-quiet reading, which is all this watcher reads (away_record_present
@@ -4095,100 +4091,13 @@ t3_present_sync_detached() {
     T3_PRESENT_PID=
   fi
   touch "$STATE/.t3-present-sync"
-  local list_check=0
-  if [ "$(age_of "$STATE/.t3-captain-check")" -ge 600 ]; then
-    touch "$STATE/.t3-captain-check"
-    list_check=1
-  fi
   {
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-crew-status.sh" sync
-    # The captain's list follows the backlog in real time through its
-    # listener; this is its ten-minute safety net (bin/fm-t3-captain-sync.sh).
-    [ "$list_check" = 0 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-t3-captain-sync.sh" check
+    FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
+      "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
   } </dev/null >/dev/null 2>&1 &
   T3_PRESENT_PID=$!
-}
-
-# The captain archived a decision on the card of a worker that has not
-# finished (bin/fm-t3-captain-sync.sh apply leaves state/t3-captain-sync/<id>.wake):
-# one durable check wake per notice asks firstmate to wind the worker down
-# safely. A notice whose worker is already cleaned up is dropped.
-t3_captain_alert_tick() {
-  local alert id reason queued
-  for alert in "$STATE"/t3-captain-sync/*.wake; do
-    [ -f "$alert" ] || continue
-    id=$(basename "$alert" .wake)
-    if [ ! -f "$STATE/$id.meta" ]; then
-      rm -f -- "$alert"
-      continue
-    fi
-    reason=$(head -n 1 "$alert" 2>/dev/null || true)
-    case "$reason" in
-      "check: t3-captain $id: "*) ;;
-      *) rm -f -- "$alert"; continue ;;
-    esac
-    queued=$(fm_wake_queued_keys check)
-    if ! printf '%s\n' "$queued" | grep -Fx "t3-captain-$id" >/dev/null 2>&1; then
-      fm_wake_append check "t3-captain-$id" "$reason" || return 1
-      rm -f -- "$alert"
-      wake "$reason"
-      continue
-    fi
-    rm -f -- "$alert"
-  done
-}
-
-# The captain's T3 decisions failed to update three passes in a row
-# (bin/fm-t3-needs-me.sh owns when): its one-line reason becomes one durable
-# check wake, and the alert is consumed, so the same run of failures never
-# wakes twice.
-t3_decisions_alert_tick() {
-  local alert="$STATE/t3-needs-me/.alert" reason queued
-  [ -f "$alert" ] || return 0
-  reason=$(head -n 1 "$alert" 2>/dev/null || true)
-  case "$reason" in
-    'check: t3-decisions: '*) ;;
-    *) rm -f -- "$alert"; return 0 ;;
-  esac
-  queued=$(fm_wake_queued_keys check)
-  if printf '%s\n' "$queued" | grep -Fx t3-decisions >/dev/null 2>&1; then
-    rm -f -- "$alert"
-    return 0
-  fi
-  fm_wake_append check t3-decisions "$reason" || return 1
-  rm -f -- "$alert"
-  wake "$reason"
-}
-
-# The captain closed a kept review's thread (bin/fm-t3-review.sh reconcile
-# leaves state/t3-review/<id>.closed): one durable check wake per close asks
-# firstmate for the guarded cleanup. A notice whose task is already cleaned up
-# is dropped.
-t3_review_alert_tick() {
-  local alert id reason queued
-  for alert in "$STATE"/t3-review/*.closed; do
-    [ -f "$alert" ] || continue
-    id=$(basename "$alert" .closed)
-    if [ ! -f "$STATE/$id.meta" ]; then
-      rm -f -- "$alert"
-      continue
-    fi
-    reason=$(head -n 1 "$alert" 2>/dev/null || true)
-    case "$reason" in
-      "check: t3-review $id: "*) ;;
-      *) rm -f -- "$alert"; continue ;;
-    esac
-    queued=$(fm_wake_queued_keys check)
-    if printf '%s\n' "$queued" | grep -Fx "t3-review-$id" >/dev/null 2>&1; then
-      rm -f -- "$alert"
-      continue
-    fi
-    fm_wake_append check "t3-review-$id" "$reason" || return 1
-    rm -f -- "$alert"
-    wake "$reason"
-  done
 }
 
 [ -e "$STATE/.last-heartbeat" ] || touch "$STATE/.last-heartbeat"
@@ -4356,28 +4265,15 @@ while :; do
 
   detached_job_tick
 
-  # The T3 crew cards' status (bin/fm-t3-crew-status.sh) is brought in line
-  # here every minute as the backstop: a label that failed, a label T3 lost,
-  # or a run that started or ended converges on the next pass. The captain's
-  # list gets its ten-minute safety net in the same pass, and a list that
-  # keeps failing wakes firstmate. Only a home with the T3 credential takes
+  # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the Bridge's
+  # feeds (bin/fm-t3-needs-me.sh) are brought in line here every minute as the
+  # backstop: a label that failed, a label T3 lost, or a run that started or
+  # ended converges on the next pass. Only a home with the T3 credential takes
   # part.
   if { [ -e "$CONFIG/t3code-token" ] || [ -L "$CONFIG/t3code-token" ]; } \
     && [ "$(age_of "$STATE/.t3-present-sync")" -ge 60 ]; then
     t3_present_sync_detached
   fi
-  t3_decisions_alert_tick || {
-    echo 'watcher: T3 decisions alert could not be queued' >&2
-    exit 1
-  }
-  t3_review_alert_tick || {
-    echo 'watcher: T3 review close notice could not be queued' >&2
-    exit 1
-  }
-  t3_captain_alert_tick || {
-    echo 'watcher: T3 wind-down notice could not be queued' >&2
-    exit 1
-  }
 
   open_decision_reminder_tick || {
     echo 'watcher: open-decision reminder check failed' >&2
@@ -4833,14 +4729,6 @@ EOF
     # this guard: reaching it would require backlog reads for windows this gate
     # deliberately skips, putting that read on the ordinary poll hot path.
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
-      continue
-    fi
-    # A finished T3 scout kept for the captain idles by design until he closes
-    # its thread, and its pane changes whenever its handoff lands or he reads
-    # it, so it never enters the stale ladder: its own status lines, its
-    # steering inbox above, and the close notice (t3_review_alert_tick) carry
-    # everything firstmate must act on.
-    if [ "$kind" = scout ] && [ -n "$(fm_t3_review_state "$STATE/$task.meta")" ]; then
       continue
     fi
     watcher_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" || continue

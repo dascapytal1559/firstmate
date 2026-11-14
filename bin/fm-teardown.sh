@@ -88,15 +88,6 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
-# A T3 scout kept for the captain (bin/fm-t3-review.sh) refuses every cleanup,
-# --force included, until its review is recorded closed or T3 reads its thread
-# archived or deleted; an unreadable T3 refuses too. Once closed it passes the
-# same gates as any scout, its close is read again just before its thread is
-# stopped (a restored thread reopens nothing), and after the thread is
-# stopped and archived it must
-# also read back fenced on its recorded worktree (bin/fm-t3-mcp.mjs fence)
-# before the copy is returned; a fence that cannot be proven keeps the lease
-# and the records.
 # A scratch copy (kind=scout) and a --force run discard untracked content.
 # Treehouse's return resets with `git clean -fd`, which never deletes a nested
 # git repository, so the pool slot stays dirty and later checkouts skip it.
@@ -450,8 +441,6 @@ unset _teardown_source
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-secondmate-parent-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-parent-lib.sh"
-# shellcheck source=bin/fm-t3-review-lib.sh
-. "$SCRIPT_DIR/fm-t3-review-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # The bounded remote-ref refresh is shared with the done-claim gate.
@@ -1345,28 +1334,6 @@ if [ "$BACKEND" = t3code ]; then
   fm_backend_runtime_check t3code || exit 1
   [ "$TEARDOWN_META_KIND" != secondmate ] || t3code_secondmate_lsof_check "$ID" "$(fm_meta_get "$META" home)" || exit 1
 fi
-# A finished T3 scout kept for the captain (bin/fm-t3-review.sh) is his until
-# he archives its report or its thread in T3; nothing here may close it first.
-# The live read decides, so a close racing publication wins, and an
-# unreadable T3 is never taken for a close. --force does not lift this: it
-# discards unlanded work, never the captain's open conversation. A closed
-# review continues through every ordinary gate below and is fenced before its
-# copy is returned (the T3 kill block).
-T3_REVIEW=
-if [ "$BACKEND" = t3code ]; then
-  T3_REVIEW=$(fm_t3_review_state "$META")
-  if [ -n "$T3_REVIEW" ]; then
-    t3_review_rc=0
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || t3_review_rc=$?
-    if [ "$t3_review_rc" != 0 ]; then
-      echo "REFUSED: $ID is a finished review kept for the captain in T3 and cannot be cleaned up yet (the reason is above); nothing was changed." >&2
-      echo "It is cleaned up once he archives its report on the card, or archives or deletes its thread there, and T3 can fence it (the watcher then asks for this cleanup)." >&2
-      exit 1
-    fi
-    T3_REVIEW=closed
-  fi
-fi
 if [ "${FM_TEARDOWN_GUARD_DONE:-0}" != 1 ]; then
   "$FM_ROOT/bin/fm-guard.sh" || true
 fi
@@ -1963,11 +1930,7 @@ backlog_refresh_reminder() {
   else
     backlog_display="${DATA%/}/backlog.md"
   fi
-  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ] \
-    && FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      "$SCRIPT_DIR/fm-tasks-axi.sh" show "$ID" --full 2>/dev/null </dev/null | grep -q 'Captain hold flavor: read'; then
-    printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held To read for the captain with its deliverable recorded. It stays To read until he archives it in T3, or mark it with bin/fm-captain-hold.sh read-done once he says he read it."
-  elif [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
+  if [ "$BACKLOG_CLOSED" = 1 ] && [ "$BACKLOG_TRANSITION" = retain ]; then
     printf '%s\n' "Backlog: $ID stays open in $backlog_display, still held for the captain with its deliverable recorded. Relay the question and close it only with bin/fm-captain-hold.sh answer."
   elif [ "$BACKLOG_CLOSED" = 1 ]; then
     printf '%s\n' "Backlog: $ID is closed in $backlog_display. Run bin/fm-tasks-axi.sh ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
@@ -4138,26 +4101,10 @@ if [ "$BACKEND" = t3code ]; then
   # first: the archived thread stays in T3. Failing here never stops cleanup.
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
     "$SCRIPT_DIR/fm-t3-crew-status.sh" clear "$ID" >&2 || true
-  if [ "$T3_REVIEW" = closed ]; then
-    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
-      FM_T3_REVIEW_META_LOCK_HELD=1 "$SCRIPT_DIR/fm-t3-review.sh" check-close "$ID" || {
-      echo "error: $ID's kept review thread $T no longer reads closed in T3, so it is left running for the captain" >&2
-      endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
-    }
-  fi
   fm_backend_kill t3code "$T" || {
     echo "error: could not stop and archive T3 thread $T for $ID; start T3 Code (or archive the thread there) and re-run teardown" >&2
     endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
   }
-  # A kept review the captain archived can be reopened in T3 at any time, so
-  # its copy goes back only once T3 refuses to run the thread again there
-  # (bin/fm-t3-mcp.mjs fence owns that proof). A deleted thread needs none.
-  if [ "$T3_REVIEW" = closed ]; then
-    fm_backend_t3code_mcp fence --thread "$T" --worktree "$WT" --label "firstmate cleaned up $ID; its copy went back to the pool" >/dev/null || {
-      echo "error: could not retire T3 thread $T from running before its copy goes back; the copy stays leased until T3 can prove it" >&2
-      endpoint_close_refusal "$ID" t3code "$T" 0 || exit 1
-    }
-  fi
 fi
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then

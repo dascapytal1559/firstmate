@@ -77,21 +77,9 @@ The T3 Code fork's wait ends the moment a request appears, so FirstMate no longe
 In a home that also runs Herdr or Rex workers, that other backend keeps the wait, and each 15-second cycle reads the T3 Code workers' requests first, so one still wakes FirstMate within that time.
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
-## Everything waiting on the captain, in T3 Code's sidebar
-
-The backlog is the one record of what waits on the captain, and T3 Code's sidebar shows it in real time on cards under FirstMate's: Needs you for a decision, To read for a finished report, and a Snoozed section for what he put off.
-An item rides on its worker's card; one with no worker gets a thread of its own, titled with the question.
-This is an extra track beside chat, not a replacement: as upstream does, FirstMate's chat still lists every open decision as a short line.
-Upstream keeps decisions in chat alone; the fork shows them where the work is, so nothing can quietly go out of date.
-FirstMate pushes the whole list within about a second of any change to the backlog, whoever made it, and his Snooze (with T3 Code's own presets, so a return can be a time of day), Bring back, and Archive change the backlog at once.
-Archive acts on its own item only: it closes a decision as not pursued or marks a report read, and a thread's own archive or restore changes no item; a decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down safely; a snoozed item stays snoozed until it is brought back or its time comes.
-A ten-minute check covers crashes and restarts, and a list T3 keeps refusing wakes FirstMate on the third refusal in a row, with T3's exact error.
-A T3 Code without the list simply shows none.
-Details: [Captain's list](docs/t3code-backend.md#captains-list) and [`fm-t3-captain-sync.sh`](bin/fm-t3-captain-sync.sh).
-
 ## The model routing table on T3 Code's Bridge
 
-T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, read-only, after the decisions: each entry shows the model highlighted with every kind of task routed to it beneath it.
+T3 Code's Bridge tab shows which harness, model, and effort FirstMate picks for each kind of task, read-only, after the objectives: each entry shows the model highlighted with every kind of task routed to it beneath it.
 FirstMate builds it from the home's `config/crew-dispatch.json`, grouped by model family with the default first, reading "Default", and sends it again whenever the file changes.
 This is fork-only: upstream has no Bridge, and the dispatch file and how FirstMate chooses from it are unchanged.
 The table is only shown, never edited from T3 Code, and a T3 Code without it simply shows none.
@@ -108,16 +96,16 @@ Details: [Rules](docs/t3code-backend.md#rules) and [`fm-rules.sh`](bin/fm-rules.
 
 ## What the worker is waiting on, on its card
 
-![FirstMate's crew in the T3 Code sidebar, as it looked before the captain's list: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
+![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker sits in a no-mistakes run, waits on something, or is finished.
+T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
-While a worker's no-mistakes run is active, the card reads Testing.
+When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
+While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
 Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
-What waits on the captain is no longer one of these words: the card shows Needs you or To read from the [captain's list](#everything-waiting-on-the-captain-in-t3-codes-sidebar).
 While the worker works, the card shows T3 Code's own Working, except that Testing stays.
 The words change when the worker's state does and go when the worker is cleaned up.
-FirstMate keeps no list of its own for this: every update works the label out again from each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
+FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
 Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows none of these words and nothing else changes.
 Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
