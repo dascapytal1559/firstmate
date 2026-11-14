@@ -254,11 +254,24 @@ What T3 can rely on, for any live ship or scout card in a home with the T3 crede
 - A label is current within seconds of a hold, answer, steer, or turn end, and within about a minute of a no-mistakes run starting or ending.
 - A label T3 lost, as a restart could, is set again within about a minute, and cleanup clears the label before the thread is archived.
 
+### Replies from a worker's thread
+
+The T3 Code fork shows no message box that types into a worker; a box on a worker's thread forwards the captain's words to FirstMate's thread instead, as one user message, and the worker never sees them.
+The message names its worker on its second line, in one of two forms:
+
+- `kept-thread: <thread-id>` names the worker's T3 thread, after a first line `**Reply · <card title>**`; the task is the one whose record carries that `t3_thread_id`.
+- `needs-me-task: <task-id>` names the task itself, after a first line `**Decision · <title>**` and before the question quoted with `> `.
+
+A blank line and then his words follow either form.
+[`bin/fm-t3-worker-reply.sh`](../bin/fm-t3-worker-reply.sh) reads the task from such a message and refuses one that names no worker or more than one.
+FirstMate treats his words as captain input on that task: an answer to one of its open calls is recorded through the `captain-hold-lifecycle` skill, and anything else is acted on or passed to the worker with `bin/fm-send.sh`.
+The session-start supervision block of a session running as a T3 thread carries this instruction ([`supervision-protocols/t3-thread.md`](supervision-protocols/t3-thread.md)).
+
 ### Objectives
 
 T3's Bridge tab shows the captain's high level objectives at its top.
 Their source is the home's `data/high-level-objectives.md`: a heading, a short preamble, a `Last reviewed: YYYY-MM-DD` line, then one `- **Name:** text` bullet per objective.
-Each `bin/fm-t3-needs-me.sh sync` pass builds the Bridge's list from that file, as `bin/fm-objectives.sh` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
+Each [`bin/fm-t3-bridge.sh`](../bin/fm-t3-bridge.sh) `sync` pass, which the watcher runs about once a minute, builds the Bridge's list from that file, as `bin/fm-objectives.sh` reads it, and pushes it with `t3_objectives_set` only when it differs from the last list T3 accepted.
 The list keeps only the bullets, each with its name in bold and its text, without the heading, the preamble, or the review line, which stays in the file and is not sent to T3.
 A trailing sentence that only points at a local file, such as `Decisions so far: /path/to/decisions.md`, is left out to keep the Bridge compact.
 A list past T3's 8192-character limit keeps every objective and cuts each long text instead, and the pass says so.
@@ -270,7 +283,7 @@ A failed push is reported and retried on the next pass, and a T3 without `t3_obj
 
 The Bridge also shows the home's model routing table, read-only, after the objectives.
 Its source is the home's `config/crew-dispatch.json` ([Crew dispatch profiles](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson)), which this feature only reads.
-Each `bin/fm-t3-needs-me.sh sync` pass renders it as Markdown grouped under a small heading per model family (such as Opus, Fable, Sol, or Grok), with no provider headings, the default's family first and the rest in order of first appearance.
+Each `bin/fm-t3-bridge.sh sync` pass renders it as Markdown grouped under a small heading per model family (such as Opus, Fable, Sol, or Grok), with no provider headings, the default's family first and the rest in order of first appearance.
 The family is read from the model name for display only; it never affects which worker or credential is chosen.
 Each entry is one distinct model, highlighted as inline code (harness · model · effort, leaving out a missing model or effort), and, on the line beneath it, the When of every route to it joined by " · ", a rule the captain approves marked so and the default reading "Default".
 A rule's Why is not shown.
@@ -467,7 +480,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-needs-me.test.sh tests/fm-t3-restart-request.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-bridge.test.sh tests/fm-t3-restart-request.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 bin/fm-test-run.sh tests/fm-t3-clear-session.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh

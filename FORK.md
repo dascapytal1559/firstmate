@@ -110,7 +110,7 @@ They come from the home's private `data/priorities.md` and `data/high-level-obje
 A Bearings board stays as it was; the chat digest beside it carries them.
 Upstream's Bearings has exactly four sections and `/ahoy` reads only the session history.
 The fork keeps both: the two blocks sit above the four sections rather than becoming a fifth, an empty list prints nothing, and `/ahoy` runs one read-only reader for them and nothing else.
-With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab, above the decisions, and follow the file as it changes.
+With the T3 Code fork, the high level objectives also sit at the top of T3 Code's Bridge tab and follow the file as it changes.
 Details: [`fm-objectives.sh`](bin/fm-objectives.sh) and [Objectives](docs/t3code-backend.md#objectives).
 
 ## Ideas in the backlog

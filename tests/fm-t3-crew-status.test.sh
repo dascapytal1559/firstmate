@@ -385,8 +385,7 @@ test_only_t3_workers_are_labelled() {
   worker_meta w1 ship tmux
   : > "$T3_FAKE_LOG"
   captain hold w1 --reason "pick the layout" >/dev/null || fail "hold should succeed"
-  # The hold's decision sync (bin/fm-t3-needs-me.sh) may still open a
-  # session; no thread of a worker on another backend is read or changed.
+  # No thread of a worker on another backend is read or changed.
   assert_equals "" "$(t3_fake_calls t3_thread_read)$(t3_fake_mutations)" "another backend makes no T3 thread call"
   make_home secondmate
   worker_meta w1 secondmate

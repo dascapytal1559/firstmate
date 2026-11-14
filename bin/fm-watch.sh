@@ -4095,7 +4095,7 @@ t3_present_sync_detached() {
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
       "$SCRIPT_DIR/fm-t3-crew-status.sh" sync
     FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
-      "$SCRIPT_DIR/fm-t3-needs-me.sh" sync
+      "$SCRIPT_DIR/fm-t3-bridge.sh" sync
   } </dev/null >/dev/null 2>&1 &
   T3_PRESENT_PID=$!
 }
@@ -4266,7 +4266,7 @@ while :; do
   detached_job_tick
 
   # The T3 crew cards' status (bin/fm-t3-crew-status.sh) and the Bridge's
-  # feeds (bin/fm-t3-needs-me.sh) are brought in line here every minute as the
+  # feeds (bin/fm-t3-bridge.sh) are brought in line here every minute as the
   # backstop: a label that failed, a label T3 lost, or a run that started or
   # ended converges on the next pass. Only a home with the T3 credential takes
   # part.

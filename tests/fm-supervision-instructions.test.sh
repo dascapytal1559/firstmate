@@ -18,7 +18,9 @@ test_t3_thread_alert_protocol_only_in_a_locked_t3_session() {
   for harness in claude codex pi grok unknown; do
     plain=$("$RENDER" --harness "$harness")
     assert_not_contains "$plain" 'alert_when_done' "$harness: a session outside T3 rendered the T3 alert protocol"
+    assert_not_contains "$plain" 'fm-t3-worker-reply.sh' "$harness: a session outside T3 rendered the T3 worker-reply rule"
     out=$(T3CODE_THREAD_ID='mcp:test-thread' "$RENDER" --harness "$harness")
+    assert_contains "$out" 'bin/fm-t3-worker-reply.sh' "$harness: a T3 session did not name the worker-reply reader"
     assert_contains "$out" 't3_thread_update' "$harness: a T3 session did not name the alert tool"
     assert_contains "$out" 'action: "alert_when_done"' "$harness: a T3 session did not name the alert action"
     assert_contains "$out" 'Captain, shipshape.' "$harness: the T3 alert protocol did not exclude the no-op reply"

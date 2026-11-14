@@ -276,7 +276,7 @@
 //     error; one card's failure never stops the others. The label is checked
 //     here rather than in REQUIRED_TOOLS, so such a T3 costs only the label.
 //   fm-t3-mcp.mjs objectives-payload --file <json-file>
-//     Local, no T3 call: the Bridge payload bin/fm-t3-needs-me.sh pushes
+//     Local, no T3 call: the Bridge payload bin/fm-t3-bridge.sh pushes
 //     (docs/t3code-backend.md "Objectives"), from <json-file>, the output of
 //     bin/fm-objectives.sh. Each objective row becomes one bullet:
 //     `**Name:** text` becomes `- **Name** — text`, and a trailing sentence
@@ -2169,13 +2169,12 @@ async function crewStatus(flags) {
 const isArchived = (t) => t.archived === true || Boolean(t.archivedAt);
 
 // The FirstMate thread of the project rooted at <root>, whether or not it is
-// running a turn right now: the cached id while it is still a live,
-// worktree-less thread of that project; else the project's one pinned
-// coordinator while it is such a thread; else thread-for-root's live thread.
-// {threadId, projectId, source} with source cached, coordinator, or live; null
-// when there is none; several live threads and no usable pin refuse as
-// thread-for-root does (exit 6).
-async function firstmateThread(session, rootPath, cached) {
+// running a turn right now: the project's one pinned coordinator while it is
+// an unarchived, worktree-less, non-subagent thread of that project; else
+// thread-for-root's live thread. {threadId, projectId, source} with source
+// coordinator or live; null when there is none; several live threads and no
+// usable pin refuse as thread-for-root does (exit 6).
+async function firstmateThread(session, rootPath) {
   const project = await projectForRoot(session, rootPath);
   if (!project) return null;
   const usable = (t) => t.projectId === project.id && !isArchived(t) && (t.worktreePath ?? null) === null
@@ -2188,7 +2187,6 @@ async function firstmateThread(session, rootPath, cached) {
       throw err;
     }
   };
-  if (cached && await usableId(cached)) return { threadId: cached, projectId: project.id, source: "cached" };
   const pinned = [];
   let cursor;
   for (let page = 0; page < 1000; page++) {
@@ -2207,14 +2205,13 @@ async function firstmateThread(session, rootPath, cached) {
 }
 
 // firstmate-thread: the thread a worker spawned from the home rooted at
-// <root> names as its crew parent (bin/fm-spawn.sh), found as
-// firstmateThread finds it with no cached id, so a spawn made between the
-// FirstMate thread's turns still finds its pinned coordinator.
+// <root> names as its crew parent (bin/fm-spawn.sh), so a spawn made between
+// the FirstMate thread's turns still finds its pinned coordinator.
 async function firstmateThreadVerb(flags) {
   const rootPath = need(flags, "root");
   if (!path.isAbsolute(rootPath)) usage("--root must be an absolute path");
   const { session } = await verifiedSession(flags);
-  const found = await firstmateThread(session, rootPath, null);
+  const found = await firstmateThread(session, rootPath);
   return { ok: true, threadId: found?.threadId ?? null, source: found?.source ?? null };
 }
 

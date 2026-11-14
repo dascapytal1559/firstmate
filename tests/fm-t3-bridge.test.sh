@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# tests/fm-t3-needs-me.test.sh - T3's Bridge feeds follow their sources
-# (bin/fm-t3-needs-me.sh sync), and reply-task reads which task a captain
-# reply names, against the fake T3 server.
+# tests/fm-t3-bridge.test.sh - T3's Bridge follows the objectives file and the
+# model routing table (bin/fm-t3-bridge.sh sync), against the fake T3 server.
 set -u
 
 # A fleet pane already carries GIT_CONFIG core.hooksPath.
@@ -14,10 +13,9 @@ unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_PARAMETERS
 
 command -v node >/dev/null 2>&1 || { echo "skip: node absent"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq absent"; exit 0; }
-command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
-NEEDS_ME="$ROOT/bin/fm-t3-needs-me.sh"
-TMP_ROOT=$(fm_test_tmproot fm-t3-needs-me)
+BRIDGE="$ROOT/bin/fm-t3-bridge.sh"
+TMP_ROOT=$(fm_test_tmproot fm-t3-bridge)
 t3_fake_start "$TMP_ROOT/server"
 cleanup() {
   t3_fake_stop
@@ -25,30 +23,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-FM_THREAD='mcp:00000000-0000-4000-8000-00000000f1f1'
-
-# make_home <name> [world-js] -> HOME_DIR: a main home with the T3 credential,
-# a backlog with rows w1 and w2, and a fake T3 whose project is rooted at the
-# home and whose FirstMate thread is pinned as coordinator.
+# make_home <name> [world-js] -> HOME_DIR: a main home with the T3 credential
+# and a fake T3.
 make_home() {
-  local fakebin real
+  local fakebin
   HOME_DIR="$TMP_ROOT/$1"
   mkdir -p "$HOME_DIR/data" "$HOME_DIR/state" "$HOME_DIR/config"
-  real=$(cd "$HOME_DIR" && pwd -P)
-  fm_test_tasks_toml "$HOME_DIR/.tasks.toml"
-  printf '## In flight\n\n## Queued\n\n## Done\n' > "$HOME_DIR/data/backlog.md"
   fakebin=$(fm_fakebin "$HOME_DIR")
   fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
   t3_fake_case "$HOME_DIR/world"
-  FM_T3_ROOT=$real FM_T3_FM=$FM_THREAD t3_fake_set '
-    w.coordinatorRestartNote = true;
-    w.projects = [{ id: "proj-fm", title: "firstmate", workspaceRoot: process.env.FM_T3_ROOT, defaultModelSelection: null, deletedAt: null }];
-    w.threads = { [process.env.FM_T3_FM]: { threadId: process.env.FM_T3_FM, projectId: "proj-fm", title: "FirstMate",
-      status: "completed", activeRunId: null, archived: false, worktreePath: null, coordinator: true, items: [], runs: [] } };'
   [ -z "${2:-}" ] || t3_fake_set "$2"
   t3_fake_credential "$HOME_DIR/config/t3code-token"
-  (cd "$HOME_DIR" && tasks-axi add w1 "Pick the print layout" --repo sample && tasks-axi add w2 "Buy the camera" --repo sample) >/dev/null \
-    || fail "could not seed the backlog rows"
 }
 
 home_env() {
@@ -56,75 +41,12 @@ home_env() {
     FM_DATA_OVERRIDE="$HOME_DIR/data" FM_CONFIG_OVERRIDE="$HOME_DIR/config" "$@"
 }
 
-needs_me() {  # <args...>
-  home_env "$NEEDS_ME" "$@"
+bridge() {  # <args...>
+  home_env "$BRIDGE" "$@"
 }
 
 sync_now() {
-  needs_me sync
-}
-
-# --- reply marker ----------------------------------------------------------
-
-test_reply_marker() {
-  local f="$TMP_ROOT/reply.txt" out rc
-  printf '**Decision · Buy the camera**\nneeds-me-task: w2\n\n> Buy the camera?\n>\n> A or B?\n\nYes, buy it.\n' > "$f"
-  assert_equals "w2" "$(home_env "$NEEDS_ME" reply-task "$f")" "the marker names the task"
-  assert_equals "w2" "$(printf '> needs-me-task: w2\nyes\n' | "$NEEDS_ME" reply-task)" "a quoted marker reads from stdin"
-  printf 'Just chatting, no marker.\n' > "$f"
-  out=$("$NEEDS_ME" reply-task "$f" 2>&1)
-  rc=$?
-  expect_code 1 "$rc" "no marker is not a reply: $out"
-  printf 'needs-me-task: w1\nneeds-me-task: w2\n' > "$f"
-  out=$("$NEEDS_ME" reply-task "$f" 2>&1)
-  rc=$?
-  expect_code 2 "$rc" "two tasks are ambiguous: $out"
-  printf 'needs-me-task: ../w1\n' > "$f"
-  out=$("$NEEDS_ME" reply-task "$f" 2>&1)
-  rc=$?
-  expect_code 2 "$rc" "a malformed id is refused: $out"
-  pass "fm-t3-needs-me.sh reply-task: reads exactly one needs-me-task line"
-}
-
-# A reply typed on a kept card names the card's thread; its task is the one
-# record that keeps that thread.
-test_reply_on_a_kept_card() {
-  local state="$TMP_ROOT/kept-reply/state" f="$TMP_ROOT/kept-reply/reply.txt" out rc
-  local kept='mcp:7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d' other='mcp:00000000-0000-4000-8000-0000000000b2'
-  mkdir -p "$state"
-  fm_write_meta "$state/s1.meta" kind=scout backend=t3code "t3_thread_id=$kept"
-  fm_write_meta "$state/w9.meta" kind=ship backend=t3code "t3_thread_id=$other"
-  reply() {  # <message> -> OUT, RC
-    printf '%s' "$1" > "$f"
-    OUT=$(FM_STATE_OVERRIDE="$state" "$NEEDS_ME" reply-task "$f" 2>&1)
-    RC=$?
-  }
-  reply "**Reply · Camera options**
-kept-thread: $kept
-
-Looks good, but check the lens too.
-"
-  expect_code 0 "$RC" "a kept-card reply names its task: $OUT"
-  assert_equals s1 "$OUT" "the task is the one keeping that thread"
-  reply "**Reply · Camera options**
-kept-thread: mcp:00000000-0000-4000-8000-00000000dead
-
-Hello.
-"
-  expect_code 1 "$RC" "a thread no task records names no task: $OUT"
-  assert_contains "$OUT" "no task records" "the refusal says the thread is unknown"
-  reply "kept-thread: $kept
-needs-me-task: w2
-"
-  expect_code 2 "$RC" "a reply naming both a task and a thread is ambiguous: $OUT"
-  reply "kept-thread: mcp:../s1
-"
-  expect_code 2 "$RC" "a malformed thread id is refused: $OUT"
-  fm_write_meta "$state/s2.meta" kind=scout backend=t3code "t3_thread_id=$kept"
-  reply "kept-thread: $kept
-"
-  expect_code 2 "$RC" "a thread two records name is ambiguous: $OUT"
-  pass "fm-t3-needs-me.sh reply-task: a kept-card reply names the task that keeps its thread, and nothing ambiguous"
+  bridge sync
 }
 
 # --- objectives ------------------------------------------------------------
@@ -237,7 +159,7 @@ test_objectives_push_only_when_changed() {
   out=$(sync_now)
   expect_code 0 "$?" "a list past the limit is still pushed: $out"
   assert_contains "$out" "1 of 8 objectives were shortened" "and the pass says it was cut"
-  pass "fm-t3-needs-me.sh sync: objectives are pushed when they change, retried when a push fails"
+  pass "fm-t3-bridge.sh sync: objectives are pushed when they change, retried when a push fails"
 }
 
 test_objectives_clear_once_and_back_off() {
@@ -254,9 +176,9 @@ test_objectives_clear_once_and_back_off() {
   local now n out
   now=$(date +%s)
   : > "$T3_FAKE_LOG"
-  for n in 1 2 3 4; do FM_NEEDS_ME_NOW=$now needs_me sync >/dev/null; done
+  for n in 1 2 3 4; do FM_T3_BRIDGE_NOW=$now bridge sync >/dev/null; done
   assert_equals "3" "$(objectives_calls)" "three failures in a row, then it waits"
-  FM_NEEDS_ME_NOW=$((now + 900)) needs_me sync >/dev/null
+  FM_T3_BRIDGE_NOW=$((now + 900)) bridge sync >/dev/null
   assert_equals "4" "$(objectives_calls)" "and tries again 15 minutes later"
   make_home objectives-old-t3
   write_objectives "$HOME_DIR/data/high-level-objectives.md"
@@ -264,7 +186,7 @@ test_objectives_clear_once_and_back_off() {
   expect_code 0 "$?" "a T3 without objectives is not a failure: $out"
   assert_equals "" "$out" "and says nothing"
   for n in 1 2 3 4; do sync_now >/dev/null || fail "a T3 without objectives stays quiet once held back"; done
-  pass "fm-t3-needs-me.sh sync: a missing file clears them once; failures back off; an older T3 is quiet"
+  pass "fm-t3-bridge.sh sync: a missing file clears them once; failures back off; an older T3 is quiet"
 }
 
 # --- model routing -----------------------------------------------------------
@@ -403,7 +325,7 @@ test_routing_push_only_when_changed() {
   : > "$T3_FAKE_LOG"
   sync_now >/dev/null || fail "the pass should succeed"
   assert_equals "0" "$(routing_calls)" "only once"
-  pass "fm-t3-needs-me.sh sync: the routing table is pushed when it changes, retried, kept on a malformed file, cleared once"
+  pass "fm-t3-bridge.sh sync: the routing table is pushed when it changes, retried, kept on a malformed file, cleared once"
 }
 
 test_routing_absent_or_unsupported() {
@@ -419,11 +341,32 @@ test_routing_absent_or_unsupported() {
   assert_equals "" "$out" "and says nothing"
   for n in 1 2 3 4; do sync_now >/dev/null || fail "a T3 without the routing table stays quiet once held back"; done
   t3_fake_set 'w.routingTool = true'
-  FM_NEEDS_ME_NOW=$(( $(date +%s) + 900 )) needs_me sync >/dev/null || fail "the retry should succeed"
+  FM_T3_BRIDGE_NOW=$(( $(date +%s) + 900 )) bridge sync >/dev/null || fail "the retry should succeed"
   assert_contains "$(jq -r '.modelRouting.markdown' "$T3_FAKE_WORLD")" "claude-fable-9" "and a T3 that gains it gets the table"
-  pass "fm-t3-needs-me.sh sync: no dispatch file sends no routing table; an older T3 is quiet and retried"
+  pass "fm-t3-bridge.sh sync: no dispatch file sends no routing table; an older T3 is quiet and retried"
 }
 
+# Only a main home signed in to T3 takes part: without the credential, or in a
+# secondmate home, a pass makes no T3 call at all.
+test_only_a_signed_in_main_home_takes_part() {
+  make_home no-token 'w.objectivesTool = true; w.routingTool = true'
+  write_objectives "$HOME_DIR/data/high-level-objectives.md"
+  write_routing "$HOME_DIR/config/crew-dispatch.json"
+  rm -f "$HOME_DIR/config/t3code-token"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a home without the credential should exit 0"
+  assert_equals "" "$(t3_fake_mutations)" "a home without the credential never calls T3"
+  make_home mate 'w.objectivesTool = true; w.routingTool = true'
+  write_objectives "$HOME_DIR/data/high-level-objectives.md"
+  write_routing "$HOME_DIR/config/crew-dispatch.json"
+  printf 'mate-1\n' > "$HOME_DIR/.fm-secondmate-home"
+  : > "$T3_FAKE_LOG"
+  sync_now >/dev/null || fail "a secondmate home should exit 0"
+  assert_equals "" "$(t3_fake_mutations)" "a secondmate home pushes nothing"
+  bridge >/dev/null 2>&1
+  expect_code 2 "$?" "a call without sync is invalid use"
+  pass "fm-t3-bridge.sh sync: only a signed-in main home pushes, and only sync is a verb"
+}
 
 test_objectives_payload_shape
 test_objectives_payload_fits_the_limit
@@ -432,7 +375,6 @@ test_routing_push_only_when_changed
 test_routing_absent_or_unsupported
 test_objectives_push_only_when_changed
 test_objectives_clear_once_and_back_off
-test_reply_marker
-test_reply_on_a_kept_card
+test_only_a_signed_in_main_home_takes_part
 
-echo "ok: fm-t3-needs-me"
+echo "ok: fm-t3-bridge"
