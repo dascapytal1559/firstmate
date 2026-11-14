@@ -32,19 +32,11 @@
 # once, and only if one was sent; a malformed one is reported every pass and
 # leaves the Bridge's table as it was.
 #
-# The captain's rules follow the same way (docs/t3code-backend.md "Rules"):
-# the list bin/fm-t3-mcp.mjs rules-payload validates from
-# data/rules/inventory.json is pushed with t3_rules_set when it differs from
-# the last proven push, whose hash state/t3-needs-me/.rules keeps. An absent
-# or unreadable file clears the list once, and only if one was sent; a
-# malformed one is reported every pass and leaves the Bridge's rules as they
-# were.
-#
 # Only a main home with config/t3code-token takes part.
 #
-# Exit: 0, or 1 when the objectives, routing table or rules could not be
-# pushed (a line on stdout says which; the next pass retries); usage errors
-# exit 2. Bash 3.2 compatible.
+# Exit: 0, or 1 when the objectives or the routing table could not be pushed
+# (a line on stdout says which; the next pass retries); usage errors exit 2.
+# Bash 3.2 compatible.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,12 +44,9 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 SYNCS="$STATE/t3-needs-me"
 OBJECTIVES_SYNC="$SYNCS/.objectives"
 ROUTING_SYNC="$SYNCS/.routing"
-RULES_SYNC="$SYNCS/.rules"
-RULES_INVENTORY="$DATA/rules/inventory.json"
 NOW=${FM_NEEDS_ME_NOW:-$(date +%s)}
 BACKOFF_FAILURES=3
 BACKOFF_SECONDS=900
@@ -151,7 +140,7 @@ bridge_record() {
 }
 
 # push_bridge_feed <name> <verb> <sync-file> <payload-file> [<note>]: one
-# Bridge feed (the objectives, the model routing table, the rules) follows its
+# Bridge feed (the objectives, the model routing table) follows its
 # source: <payload-file> is hashed and sent with bin/fm-t3-mcp.mjs <verb>
 # only when that hash differs from the last proven push in <sync-file>. A
 # failed push keeps the old hash, so the next pass retries, three times in a
@@ -225,28 +214,6 @@ sync_routing() {
   push_bridge_feed routing routing "$ROUTING_SYNC" "$WORK/routing-payload.json" "$note"
 }
 
-# The Bridge's rules section follows data/rules/inventory.json, the same way
-# as the routing table: absent or unreadable clears it once one was sent, and
-# malformed is reported every pass and changes nothing on the Bridge.
-sync_rules() {
-  local helper=$SCRIPT_DIR/fm-t3-mcp.mjs file=$RULES_INVENTORY
-  command -v node >/dev/null 2>&1 || { echo "t3-needs-me: rules: node is required"; return 1; }
-  if [ -f "$file" ] && [ -r "$file" ]; then
-    node "$helper" rules-payload --file "$file" > "$WORK/rules.json" 2>"$WORK/rules.err" \
-      || { echo "t3-needs-me: rules: the list could not be built: $(head -n 1 "$WORK/rules.err" | sed 's/^fm-t3-mcp: //'); the next pass retries"; return 1; }
-  else
-    printf '{"rules":[]}\n' > "$WORK/rules.json"
-  fi
-  jq -c '{rules}' "$WORK/rules.json" > "$WORK/rules-payload.json" \
-    || { echo "t3-needs-me: rules: the list could not be built"; return 1; }
-  # Nothing to clear when no list was ever sent.
-  if jq -e '.rules == []' "$WORK/rules-payload.json" >/dev/null \
-    && ! bridge_record "$RULES_SYNC" | jq -e 'has("hash")' >/dev/null; then
-    return 0
-  fi
-  push_bridge_feed rules rules "$RULES_SYNC" "$WORK/rules-payload.json"
-}
-
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 fm_backend_source t3code >/dev/null 2>&1 || { echo "t3-needs-me: the T3 adapter could not load"; exit 1; }
@@ -254,7 +221,5 @@ objectives_rc=0
 sync_objectives || objectives_rc=$?
 routing_rc=0
 sync_routing || routing_rc=$?
-rules_rc=0
-sync_rules || rules_rc=$?
-[ "$objectives_rc" = 0 ] && [ "$routing_rc" = 0 ] && [ "$rules_rc" = 0 ] || exit 1
+[ "$objectives_rc" = 0 ] && [ "$routing_rc" = 0 ] || exit 1
 exit 0

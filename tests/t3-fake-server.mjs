@@ -85,12 +85,6 @@
 //   - a T3 with the Bridge's model routing table (world routingTool, the T3
 //     Code fork) offers t3_routing_set, which does the same with world
 //     modelRouting and answers {modelRouting} (world routingAnswer instead).
-//   - a T3 with the Bridge's rules section (world rulesTool, the T3 Code
-//     fork) offers t3_rules_set {rules}, which replaces world rules with the
-//     list within the contract's bounds (at most 400 rules with distinct ids,
-//     each exactly the contract's fields) and answers with counts {rules,
-//     pending, sent} like the fork (world rulesAnswer answers another value
-//     instead).
 //   - t3_thread_organize serves archive alone, the one action the helper
 //     sends, and refuses any other.
 //   - every prompt a launch or send makes is a user_message item carrying
@@ -156,7 +150,7 @@ const ALL_TOOLS = [
   "t3_thread_organize", "t3_thread_update", "t3_thread_list", "t3_thread_configure", "t3_project_list", "t3_project_create",
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
-const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [], w.rulesTool ? ["t3_rules_set"] : [],
+const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [],
   w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : []);
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
@@ -408,23 +402,6 @@ async function callTool(w, name, a) {
       const [field, answer] = name === "t3_routing_set" ? ["modelRouting", "routingAnswer"] : ["objectives", "objectivesAnswer"];
       w[field] = md === null ? null : { markdown: md };
       return [ok({ [field]: w[answer] ?? w[field] }), true];
-    }
-    case "t3_rules_set": {
-      if (Object.keys(a).some((k) => k !== "rules")) return [err("invalid_params", "unknown argument"), false];
-      if (!Array.isArray(a.rules) || a.rules.length > 400) return [err("invalid_params", "at most 400 rules"), false];
-      if (new Set(a.rules.map((r) => r?.id)).size !== a.rules.length) return [err("invalid_params", "Each rule needs its own id."), false];
-      const allowed = new Set(["id", "group", "source", "text", "status", "approvedOn", "recommendation"]);
-      for (const r of a.rules) {
-        if (Object.keys(r ?? {}).some((k) => !allowed.has(k))) return [err("invalid_params", "unknown rule field"), false];
-        if (r.status !== "approved" && r.status !== "pending") return [err("invalid_params", "status out of bounds"), false];
-        if ((r.status === "pending") !== (r.recommendation !== undefined)) return [err("invalid_params", "a pending rule needs a recommendation"), false];
-        if ([r.text, r.recommendation?.note, r.recommendation?.proposedText].some((s) => typeof s === "string" && s.length > 2000)) {
-          return [err("invalid_params", "text out of bounds"), false];
-        }
-      }
-      w.rules = a.rules;
-      const counts = { rules: w.rules.length, pending: w.rules.filter((r) => r.status === "pending").length, sent: [] };
-      return [ok(w.rulesAnswer ?? counts), true];
     }
     case "t3_environment_read":
       return [ok({ environmentId: w.environmentId ?? "env-fake-1", serverVersion: w.serverVersion ?? "0.0.46-nightly.fake" }), false];
