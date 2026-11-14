@@ -470,7 +470,7 @@ JOB_FOLLOW="FM_HOME=$(shell_quote "$FM_HOME") $(shell_quote "$FM_ROOT/bin/fm-job
 CREWMATE_PAUSE_INSTRUCTIONS+="   Run any command you expect to take more than a few minutes, such as a broad test sweep or a long build, as a detached job rather than in the foreground or a background shell: \`$JOB_START\` (the command runs with no shell, so wrap shell syntax in \`bash -c '...'\`; when it may outlast the default timeout that \`--help\` names, give it as \`start $(shell_quote "$ID") --timeout <secs> -- <command> [args...]\`, after the task and before \`--\`).
    It runs in your working copy outside your session's process tree, so an app restart does not stop it, and it prints the job number and log path.
    Then follow it in the foreground with \`$JOB_FOLLOW\`, which streams its output until it ends, prints its outcome, exit code, and log path, and exits with its exit code; no \`$PAUSED_VERB\` line is needed while you follow, and the foreground timeout of your shell tool does not matter because stopping the follow never stops the job.
-   If the follow is cut (a timeout or an app restart), the job keeps running: start the same follow again, or end your turn and its result arrives as a firstmate instruction that starts your next turn.
+   If the follow is cut (a timeout or an app restart), the job keeps running: re-attach with \`$JOB_FOLLOW --from-end\`, which picks up at the log's last lines instead of repeating it all, or end your turn and its result arrives as a firstmate instruction that starts your next turn.
    A no-mistakes run is not a detached job: run it exactly as the rest of this brief says.
 "
 

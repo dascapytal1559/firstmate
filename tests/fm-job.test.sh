@@ -17,8 +17,13 @@
 #      and jobs of tasks no longer recorded alone.
 #   5. `reap` stops a task's running jobs and removes their records.
 #   6. `follow` streams a job's log until it ends, exits with its code, leaves
-#      the job running when cut, and re-attaches to a running or ended job.
+#      the job running when cut, and re-attaches to a running or ended job;
+#      `follow --from-end` re-attaches at the log's last FM_JOB_TAIL_LINES
+#      lines instead of repeating it from the start.
 #   7. A start for a task this home does not record is refused.
+#   8. `deliver` holds a just-ended result for FM_JOB_DELIVER_GRACE seconds, so
+#      a follower that saw the end marks it first and no second copy is sent,
+#      while a result no follower took is still sent on a later cycle.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -60,10 +65,11 @@ new_home() {  # <name> -> home with task t1 recorded
   printf '%s\n' "$h"
 }
 
-job() {  # <home> <args...>
+job() {  # <home> <args...>: deliver's grace is 0 unless DELIVER_GRACE is set
   local h=$1
   shift
-  env PATH="$FAKEBIN:$PATH" FM_HOME="$h" FM_SEND_SETTLE=0 FM_JOB_KILL_GRACE=1 "$JOB" "$@"
+  env PATH="$FAKEBIN:$PATH" FM_HOME="$h" FM_SEND_SETTLE=0 FM_JOB_KILL_GRACE=1 \
+    FM_JOB_DELIVER_GRACE="${DELIVER_GRACE:-0}" "$JOB" "$@"
 }
 
 rec() { printf '%s\n' "$1/state/t1.jobs/$2/record"; }  # <home> <job>
@@ -333,6 +339,59 @@ test_follow_streams_survives_a_cut_and_reattaches() {
   pass "follow streams a job, survives being cut, re-attaches, and returns the job's exit code"
 }
 
+test_follow_from_end_reattaches_at_the_last_lines() {
+  local h r out rc i
+  h=$(new_home from-end)
+  job "$h" start t1 -- bash -c 'for i in 01 02 03 04 05 06 07 08 09 10; do echo "row-$i"; done; sleep 2; echo after; exit 0' >/dev/null \
+    || fail "start failed"
+  r=$(rec "$h" 1)
+  remember_runner "$r"
+  for ((i = 0; i < 50; i++)); do
+    grep -q row-10 "$h/state/t1.jobs/1/log" 2>/dev/null && break
+    sleep 0.1
+  done
+  rc=0
+  out=$(env FM_JOB_TAIL_LINES=3 FM_JOB_FOLLOW_POLL=0.2 PATH="$FAKEBIN:$PATH" FM_HOME="$h" "$JOB" follow t1 1 --from-end) || rc=$?
+  expect_code 0 "$rc" "a re-attach exits with the job's exit code"
+  assert_not_contains "$out" "row-01" "a re-attach does not repeat the log from its start"
+  assert_not_contains "$out" "row-07" "a re-attach starts at the last FM_JOB_TAIL_LINES lines"
+  assert_contains "$out" "row-08"$'\n'"row-09"$'\n'"row-10" "a re-attach shows the last FM_JOB_TAIL_LINES lines"
+  assert_contains "$out" "earlier output is in $h/state/t1.jobs/1/log" "a re-attach names where the earlier output is"
+  assert_contains "$out" "after" "a re-attach streams lines written while it waits"
+  assert_contains "$out" "job 1 ended: passed (exit 0)" "a re-attach prints the result"
+  rc=0
+  job "$h" follow t1 1 --tail >/dev/null 2>&1 || rc=$?
+  expect_code 2 "$rc" "an unknown follow option is refused"
+  pass "follow --from-end re-attaches at the log's last lines"
+}
+
+test_deliver_waits_for_a_follower_to_take_the_result() {
+  local h out rc j
+  h=$(new_home grace)
+  # Job 1 has just ended and a follower is watching it; job 2 just ended with
+  # nobody watching.
+  for j in 1 2; do
+    mkdir -p "$h/state/t1.jobs/$j"
+    printf 'done %s\n' "$j" > "$h/state/t1.jobs/$j/log"
+    printf 'task=t1\njob=%s\ncommand=make test\ncwd=%s\nlog=%s\nstarted=%s\nexit=0\nfinished=%s\noutcome=passed\n' \
+      "$j" "$h/wt" "$h/state/t1.jobs/$j/log" "$(($(date +%s) - 60))" "$(date +%s)" > "$h/state/t1.jobs/$j/record"
+  done
+  DELIVER_GRACE=2 job "$h" deliver || fail "deliver failed"
+  [ ! -e "$h/state/t1.inbox" ] || fail "a result that ended moments ago must wait for a follower: $(ls "$h/state/t1.inbox")"
+  rc=0
+  out=$(job "$h" follow t1 1) || rc=$?
+  expect_code 0 "$rc" "the follower exits with the job's code"
+  assert_contains "$out" "job 1 ended: passed (exit 0)" "the follower shows the result"
+  sleep 3
+  DELIVER_GRACE=2 job "$h" deliver || fail "deliver after the grace failed"
+  [ "$(find "$h/state/t1.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "exactly the result no follower took should be sent"
+  out=$(bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$(find "$h/state/t1.inbox" -maxdepth 1 -name '*.msg')")
+  assert_contains "$out" "Your detached job 2 ended: passed" "the unwatched job's result is delivered after the grace"
+  [ -n "$(field "$(rec "$h" 2)" notified)" ] || fail "the unwatched job should be marked delivered"
+  pass "deliver leaves a just-ended result to its follower and sends one nobody took"
+}
+
 test_unknown_task_refused() {
   local h rc
   h=$(new_home refuse)
@@ -355,4 +414,6 @@ test_live_deliver_and_lost
 test_watcher_tick_delivers
 test_reap_stops_and_removes
 test_follow_streams_survives_a_cut_and_reattaches
+test_follow_from_end_reattaches_at_the_last_lines
+test_deliver_waits_for_a_follower_to_take_the_result
 test_unknown_task_refused

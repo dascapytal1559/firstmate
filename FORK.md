@@ -161,10 +161,11 @@ Details: [clean restart](docs/t3code-backend.md#clean-restart).
 ## Long commands a restart cannot cut
 
 A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker follows its output in the foreground, so T3 shows the command and its output as upstream does and the worker reads as working.
-If a restart cuts the follow, the job keeps running, the restart recovery tells the worker to re-attach, and a result no follow saw comes back to the worker as an instruction that starts its next turn.
+If a restart cuts the follow, the job keeps running, the restart recovery tells the worker to re-attach from the log's last lines, and a result no follow saw comes back to the worker as an instruction that starts its next turn.
 Upstream has a worker run such a command in its own turn or a background shell and declare the wait.
-The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build, and an install waiting for a quiet moment waited on every worker with a test running.
-A job is not counted as a busy worker, cleanup stops any still running, and a worker's instructions tell it to use one for anything longer than a few minutes.
+The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
+The job itself is left out of the busy count, but a worker following it is a running turn, so a clean restart still waits for the follow to end.
+A plain cleanup waits for a running job and only an explicit discard stops it, and a worker's instructions tell it to use one for anything longer than a few minutes.
 Details: [`fm-job.sh`](bin/fm-job.sh) and [server restart](docs/t3code-backend.md#server-restart).
 
 ## A fresh FirstMate session takes over cleanly

@@ -1105,6 +1105,8 @@ test_ship_and_scout_teach_detached_jobs() {
       "$kind brief does not show the full form of a detached job with a timeout"
     assert_grep "Then follow it in the foreground with \`FM_HOME='$home' '$ROOT/bin/fm-job.sh' follow '$id' <n>\`" "$brief" \
       "$kind brief does not tell the worker to follow the job in the foreground"
+    assert_grep "re-attach with \`FM_HOME='$home' '$ROOT/bin/fm-job.sh' follow '$id' <n> --from-end\`" "$brief" \
+      "$kind brief does not re-attach a cut follow from the log's last lines"
     assert_grep "A no-mistakes run is not a detached job" "$brief" \
       "$kind brief does not keep no-mistakes runs out of the detached-job rule"
   done

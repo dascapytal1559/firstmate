@@ -3126,6 +3126,7 @@ test_t3_restart_recovery() {
   [ -n "$(find "$RS_STATE/$wp.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null)" ] || fail "the recovery steer is a durable inbox record"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "the T3 server restarted at" "the steer tells the worker what happened"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "fm-job.sh status" "the steer sends a worker to check its detached job, not rerun it"
+  assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "follow <your task id> <job> --from-end" "the steer re-attaches a worker from the log's last lines"
   assert_not_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "any command that was still running" "the steer no longer claims a detached job ended with the session"
 
   # The rung workers end their turns without answering, the case the marker

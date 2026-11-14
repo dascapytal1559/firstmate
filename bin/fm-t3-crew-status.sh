@@ -64,7 +64,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 usage() {
-  sed -n '32,43p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '/^# Usage:/,/^#     comes off/p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 

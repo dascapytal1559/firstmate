@@ -326,8 +326,8 @@ T3 owns the restart event, and the [T3 Code fork](https://github.com/dascapytal1
 
 A worker's long command started with [`bin/fm-job.sh`](../bin/fm-job.sh), such as a broad test sweep, is outside all of this: it runs in its own session reparented to init, so a restart does not stop it.
 Its result reaches the worker as a steering-inbox record that the watcher sends once the job ends, so a result that lands while T3 is down waits in the record and its doorbell starts the worker's next turn.
-`bin/fm-fleet-idle.sh` does not count a worker whose only running work is such a job, so a restart staged to wait for an idle fleet does not wait for the job.
-Generated briefs tell workers to run any command longer than a few minutes this way and then follow its output in the foreground with `fm-job.sh follow`, so T3 shows the command and its output and the worker reads as working; a restart cuts only the follow, and the recovery steer below tells the worker to re-attach while the job still runs.
+Generated briefs tell workers to run any command longer than a few minutes this way and then follow its output in the foreground with `fm-job.sh follow`, so T3 shows the command and its output and the worker reads as working; a restart cuts only the follow, and the recovery steer below tells the worker to re-attach with `--from-end` while the job still runs.
+That follow is a running turn, so a restart staged to wait for an idle fleet, and T3's clean restart, wait for it to end; `bin/fm-fleet-idle.sh` leaves out only the job's own processes, so a worker waiting on a job reads idle only once no follow of it runs.
 
 What T3 cannot see is Firstmate's durable record: a worker's last `working:` or `paused:` line still reads as current after the session behind it ended.
 [`bin/fm-t3-restart.sh`](../bin/fm-t3-restart.sh) `recover`, run by the locked session start in a home with `config/t3code-token`, reconciles exactly that.
