@@ -591,7 +591,7 @@ test_unreadable_turn_leaves_the_card() {
     _ "$ROOT" "$HOME_DIR/cards.json") || fail "the pass should succeed: $out"
   assert_equals '"left"' "$(printf '%s' "$out" | jq '.cards[0].outcome')" "the card is left"
   assert_equals "Unchanged" "$(card_of)" "a turn that cannot be read changes no card"
-  jq -n --arg t "$THREAD" '{cards: [{thread: $t, between: "Waiting", working: "Waiting"}]}' > "$HOME_DIR/cards.json"
+  jq -n --arg t "$THREAD" --arg w "$WAITING" '{cards: [{thread: $t, between: $w, working: $w}]}' > "$HOME_DIR/cards.json"
   # shellcheck disable=SC2016 # Positional parameters expand in the child shell.
   home_env bash -c '. "$1/bin/fm-backend.sh" && fm_backend_source t3code && fm_backend_t3code_mcp crew-status --file "$2"' \
     _ "$ROOT" "$HOME_DIR/cards.json" >/dev/null || fail "the second pass should succeed"
