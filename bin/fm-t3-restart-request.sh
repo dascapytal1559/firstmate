@@ -68,8 +68,8 @@ REASON='' WITHIN=1800 INTERVAL=5
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --reason) [ "$#" -ge 2 ] || usage; REASON=$2; shift 2 ;;
-    --within) [ "$VERB" = drain ] && [ "$#" -ge 2 ] && positive_int "$2" || usage; WITHIN=$2; shift 2 ;;
-    --interval) [ "$VERB" = drain ] && [ "$#" -ge 2 ] && positive_int "$2" || usage; INTERVAL=$2; shift 2 ;;
+    --within) { [ "$VERB" = drain ] && [ "$#" -ge 2 ] && positive_int "$2"; } || usage; WITHIN=$2; shift 2 ;;
+    --interval) { [ "$VERB" = drain ] && [ "$#" -ge 2 ] && positive_int "$2"; } || usage; INTERVAL=$2; shift 2 ;;
     *) usage ;;
   esac
 done
