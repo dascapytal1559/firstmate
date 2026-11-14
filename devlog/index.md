@@ -1357,7 +1357,7 @@ This is FirstMate's half; the sidebar's labels, Snooze button, and Archive are t
   A snoozed item "stays snoozed unless we bring it back"; FirstMate's own updates never wake it.
 - **Archive is "not pursued", for its own item only.**
   Park now means snooze, so an archived decision is recorded as "Archived in T3 on <date>: not pursued." and a report as read; nothing else on the card changes.
-  Only his Archive on an item counts: a thread's own archive or restore, FirstMate's cleanup archive included, closes nothing, and the check never infers one.
+  Only his Archive on an item counts: a thread's own archive or restore, FirstMate's cleanup archive included, closes no item, and the check never infers one.
   A decision's Archive on the card of a worker that has not finished also asks FirstMate to wind that worker down through its normal safe cleanup.
 - **No more "Waiting for captain".**
   The card's Needs you or To read comes from the list, so FirstMate's own label for it is gone.
