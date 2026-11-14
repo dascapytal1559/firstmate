@@ -14,6 +14,11 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Bridge routing table](FORK.md#the-model-routing-table-on-t3-codes-bridge): T3's Bridge tab shows which model FirstMate picks for each kind of task.
 - [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access, and cleanup stops everything they started.
+- [Clean restarts](FORK.md#clean-t3-restarts): a new T3 build installs only once every running turn has finished.
+- [Long commands](FORK.md#long-commands-a-restart-cannot-cut): a worker's long test run or build survives a T3 restart.
+- [Fresh sessions](FORK.md#a-fresh-firstmate-session-takes-over-cleanly): after `/clear`, the new FirstMate session takes over the same thread.
+- [Alerts](FORK.md#a-wake-turn-alerts-only-when-it-needs-the-captain): a turn nobody typed into sounds only when it needs the captain.
+- [Work causes](FORK.md#work-records-the-prompt-that-caused-it): each worker records the prompt that started it, for T3's usage by origin.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
 - [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.
 - [Current T3 releases](FORK.md#current-t3-code-releases): uses T3 Code 0.1.3's tool names, which the T3 Code fork serves, and nothing older.
@@ -25,6 +30,8 @@ Outside T3 Code:
 - [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
 - [When no worker is running](FORK.md#do-it-when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
 - [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
+- [Codex efforts](FORK.md#codex-efforts-come-from-codexs-own-catalog): a Codex model's efforts come from Codex's own catalog, not a model name.
+- [Local dates](FORK.md#a-put-off-decision-returns-at-local-midnight): a decision put off to a date returns at the start of that day where the captain is.
 - [Live review boards](FORK.md#review-boards-that-keep-listening): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
 - [Rebased landings](FORK.md#rebased-local-only-work-still-lands): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes.
 - [Trusted review wakes](FORK.md#only-trusted-reviewers-wake-a-parked-worker): a worker parked on review restarts only for review activity from trusted people; anything else is reported to FirstMate.

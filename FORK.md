@@ -101,6 +101,14 @@ Only T3 Code workers show this, and it needs a T3 Code with the crew card status
 Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
+## A reply on a worker's thread reaches FirstMate
+
+The T3 Code fork has no message box that types into a worker; a box on a worker's thread forwards the captain's words to FirstMate's chat instead, so he can reply while reading a worker's exploration.
+FirstMate reads which worker's task the message belongs to and treats his words as his input on that task.
+Upstream T3 Code sends anything typed in a thread to that thread's agent, which is right for threads he talks to directly.
+The fork departs for FirstMate's workers because a message typed into one cuts across FirstMate's steering, and FirstMate is the one who records his answers.
+Details: [replies from a worker's thread](docs/t3code-backend.md#replies-from-a-workers-thread) and [`fm-t3-worker-reply.sh`](bin/fm-t3-worker-reply.sh).
+
 ## Priorities and high level objectives in every check-in
 
 ![A Bearings digest with made-up lists: Priorities and High level objectives blocks sit above Captain's Call and the other three sections, with Ideas after Charted Next](docs/media/fork/focus-and-ideas-in-bearings.svg)
@@ -149,6 +157,45 @@ T3 shows the captain the coming restart, holds new messages, and lets every runn
 A wait past its limit, or a stopped install, cancels the request so no message stays held.
 Upstream T3 Code has no such registry.
 Details: [clean restart](docs/t3code-backend.md#clean-restart).
+
+## Long commands a restart cannot cut
+
+A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and its result comes back to the worker as an instruction that starts its next turn.
+Upstream has a worker run such a command in its own turn or a background shell and declare the wait.
+The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build, and an install waiting for a quiet moment waited on every worker with a test running.
+A job is not counted as a busy worker, cleanup stops any still running, and a worker's instructions tell it to use one for anything longer than a few minutes.
+Details: [`fm-job.sh`](bin/fm-job.sh) and [server restart](docs/t3code-backend.md#server-restart).
+
+## A fresh FirstMate session takes over cleanly
+
+`/clear` in T3 Code starts FirstMate's next message in a fresh session on the same thread.
+The new session takes the helm through the ordinary session start: it reclaims the ended session's lock instead of coming up read-only, and keeps the same thread on record.
+Upstream has no equivalent, because its FirstMate does not yet run as a T3 Code thread.
+If the old process is somehow still running, the new session says so and names the remedy instead of taking over beside it.
+Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-clear).
+
+## A wake turn alerts only when it needs the captain
+
+The T3 Code fork ends a turn that a notification started without the alert sound, since most of FirstMate's turns are supervision.
+So when such a turn ends with something that must reach the captain at once, FirstMate flags that turn to alert as usual.
+Upstream has no equivalent, for the same reason as above.
+A session outside T3 Code, a read-only session, and a second mate are told nothing about it.
+Details: [`t3-thread.md`](docs/supervision-protocols/t3-thread.md).
+
+## Work records the prompt that caused it
+
+T3 Code's Usage page counts a worker's tokens to the phone or computer prompt that started it.
+FirstMate names that prompt when it launches a worker, steers one, or files a note from inside a T3 Code turn, and T3 Code checks it before recording it.
+Upstream records no cause; this is an addition that only a T3 Code with the field uses.
+Details: [work causes](docs/t3code-backend.md#work-causes).
+
+## Codex efforts come from Codex's own catalog
+
+Which reasoning efforts a Codex model offers is read from the catalog the Codex CLI keeps, so `max` is forwarded for every model that lists it and refused for one that does not.
+Upstream forwards `max` for one named model.
+The fork departs because new models that offer `max` were refused until their name was added by hand.
+An effort the catalog cannot vouch for is refused, never swapped for the nearest one.
+Details: [`fm-harness.sh`](bin/fm-harness.sh) `codex-effort-check`.
 
 ## The live FirstMate's thread on record
 
@@ -199,6 +246,13 @@ The fork departs because that made the board feel unresponsive: anything sent mi
 It needs a Lavish that posts replies on their own (0.1.80 and later); on an older one the board keeps upstream's one-batch behavior.
 Because the listener stays armed, a worker that ends its own board would be told to conclude a review it just concluded, so an empty session the worker ended itself is filed quietly, as upstream behaves with nothing listening, while one the captain ends still reaches the worker.
 Details: [crew-hosted review boards](docs/configuration.md#crew-hosted-lavish-review-boards).
+
+## A put-off decision returns at local midnight
+
+A decision put off to a date comes back in Captain's Call at the start of that date where the captain is.
+Upstream compares the date with the UTC date, so east of UTC the decision came back hours into the day.
+The backlog tool itself treats a hold as over from the date's local midnight, so the fork makes the fleet snapshot agree with it.
+Details: [`fm-fleet-snapshot.sh`](bin/fm-fleet-snapshot.sh).
 
 ## Rebased local-only work still lands
 

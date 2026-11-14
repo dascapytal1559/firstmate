@@ -11,7 +11,8 @@
 # command becomes the host; on a home that does not run it the output is
 # unchanged. A session holding the lock inside a T3 Code thread (T3 sets
 # T3CODE_THREAD_ID, on any harness) also gets docs/supervision-protocols/t3-thread.md,
-# which says when a wake turn flags its end to alert the captain; a secondmate
+# which says when a wake turn flags its end to alert the captain and how to
+# treat a reply T3 forwarded from a worker's thread; a secondmate
 # home never does, since a secondmate reaches the captain only through its
 # parent channel.
 set -eu
