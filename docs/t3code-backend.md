@@ -480,7 +480,7 @@ If a task's thread no longer reads back, release the task by hand:
 ## Regression entry points
 
 ```sh
-bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-bridge.test.sh tests/fm-t3-restart-request.test.sh
+bin/fm-test-run.sh tests/fm-t3-mcp.test.sh tests/fm-backend-t3code.test.sh tests/fm-t3-crew-status.test.sh tests/fm-t3-bridge.test.sh tests/fm-t3-worker-reply.test.sh tests/fm-t3-restart-request.test.sh
 bin/fm-test-run.sh tests/fm-backend.test.sh tests/fm-daemon.test.sh tests/fm-control.test.sh
 bin/fm-test-run.sh tests/fm-t3-clear-session.test.sh
 FM_CONFIG_OVERRIDE=<home>/config bin/fm-test-run.sh tests/fm-backend-t3code-live-e2e.test.sh
