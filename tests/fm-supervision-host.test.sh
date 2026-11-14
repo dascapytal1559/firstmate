@@ -936,6 +936,47 @@ test_incomplete_engine_result_hands_the_wake_to_main() {
   pass "host: an engine turn whose result is incomplete hands its wake to main"
 }
 
+# A T3 worker's stale rows are keyed by its thread id (t3_thread_id=), so the
+# host's offer must resolve that key to the task: a working worker's alarm is
+# the engine's, a routine row beside it stays the engine's, while a held task,
+# a recovery trigger, or a thread id two records claim still reach main.
+t3_offer() {  # <state> <trigger>
+  printf '%s\n' "$2" | FM_STATE_OVERRIDE="$1" node "$ROOT/bin/fm-branch-dispatch.mjs" offer | tr '\n' ' '
+}
+
+test_t3_thread_keyed_stale_row_is_offered_by_its_task_state() {
+  local state thread stale out
+  state="$TMP_ROOT/t3-offer/state"
+  thread='mcp:0b6f3c1e-7a2d-4c55-9e10-3f4a5b6c7d8e'
+  stale=$(printf '1\t6\tstale\t%s\tstale: %s (no progress)' "$thread" "$thread")
+  mkdir -p "$state"
+  printf 'project=demo\nwindow=fm-t3\nbackend=t3code\nt3_thread_id=%s\n' "$thread" > "$state/t3.meta"
+  printf 'working [at=1]: implementing\n' > "$state/t3.status"
+  printf 'project=demo\nwindow=fm-demo\n' > "$state/demo.meta"
+  printf 'working [at=1]: step one\n' > "$state/demo.status"
+
+  printf '%s\n' "$stale" > "$state/.wake-queue"
+  out=$(t3_offer "$state" "stale: $thread (no progress)")
+  assert_contains "$out" "eligible=1 status=safe corrupted=0 rows=6 tasks=t3 " "a working T3 worker's alarm must be the engine's"
+  out=$(t3_offer "$state" 'check: rearm-resurface')
+  assert_contains "$out" "eligible=0 status=safe corrupted=0 rows=6 " "a recovery trigger must stay main's while the T3 row stays claimable"
+
+  printf '1\t5\tsignal\tdemo.status\tsignal: %s/demo.status\n%s\n' "$state" "$stale" > "$state/.wake-queue"
+  out=$(t3_offer "$state" "signal: $state/demo.status")
+  assert_contains "$out" "eligible=1 status=safe corrupted=0 rows=5 6 " "a routine signal beside a T3 alarm must stay the engine's"
+
+  printf '%s\n' "$stale" > "$state/.wake-queue"
+  printf 'captain-held [at=1] [key=route]: awaiting the captain\n' > "$state/t3.status"
+  out=$(t3_offer "$state" "stale: $thread (no progress)")
+  assert_contains "$out" "eligible=0 " "a captain-held T3 task's alarm must stay main's"
+  printf 'working [at=1]: implementing\n' > "$state/t3.status"
+
+  printf 'project=demo\nwindow=fm-demo\nt3_thread_id=%s\n' "$thread" > "$state/demo.meta"
+  out=$(t3_offer "$state" "stale: $thread (no progress)")
+  assert_contains "$out" "eligible=0 status=unsafe corrupted=1 " "a thread id two records claim must leave the wake to main"
+  pass "host: a T3 worker's thread-keyed alarm follows its task's state, and never drags a routine row to main"
+}
+
 fm_test_run \
   test_park_exit_probe_uses_half_second_child_sleeps \
   test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main \
@@ -966,4 +1007,5 @@ fm_test_run \
   test_report_without_acknowledgement_hands_the_wake_to_main \
   test_return_during_a_failed_turn_still_hands_its_outcomes_to_main \
   test_incomplete_engine_result_hands_the_wake_to_main \
-  test_attended_terminal_close_passes_straight_to_main
+  test_attended_terminal_close_passes_straight_to_main \
+  test_t3_thread_keyed_stale_row_is_offered_by_its_task_state
