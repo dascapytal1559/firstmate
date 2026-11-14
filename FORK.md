@@ -165,7 +165,8 @@ If a restart cuts the follow, the job keeps running, the restart recovery tells 
 Upstream has a worker run such a command in its own turn or a background shell and declare the wait.
 The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
 The job itself is left out of the busy count, but a worker following it is a running turn, so a clean restart still waits for the follow to end.
-A plain cleanup waits for a running job and only an explicit discard stops it, and a worker's instructions tell it to use one for anything longer than a few minutes.
+A plain cleanup refuses while a job runs and only an explicit discard stops it.
+A worker's instructions tell it to run anything longer than a few minutes as a job.
 Details: [`fm-job.sh`](bin/fm-job.sh) and [server restart](docs/t3code-backend.md#server-restart).
 
 ## A fresh FirstMate session takes over cleanly
