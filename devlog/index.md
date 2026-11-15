@@ -1585,7 +1585,7 @@ What was built:
 - **A script with no model call.**
   `bin/fm-clear-watch.sh` reads FirstMate's own Claude transcripts, picks out the main sessions (the supervision host's are skipped), and treats each one that follows another as a clear.
 - **Each clear's cause and saving.**
-  A session that began with the cold-reroute message is a cold start from a notification; one that began with T3's restart note is a T3 restart; one whose predecessor sat idle over an hour above 100k is a cold start from his message; anything else is his `/clear`.
+  A session that began with an operational-input doorbell, the form the cold reroute rings in, is a cold start from a notification; one that began with T3's restart note is a T3 restart; one whose predecessor sat idle over an hour above 100k is a cold start from his message; anything else is his `/clear`.
   The saving is the old context minus a fresh session's 71k.
 - **Signs of harm, from the new session's first hour.**
   A bare short first message, a recall phrase, a quote of a reply the new session never wrote, a decision held again after the old session answered it, a task dispatched again, a notification shown and never acknowledged across the clear, and, after an automatic clear, no lock taken within five minutes.
