@@ -193,6 +193,20 @@ Upstream has no equivalent, because its FirstMate does not yet run as a T3 Code 
 If the old process is somehow still running, the new session says so and names the remedy instead of taking over beside it.
 Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-clear).
 
+## A notification never reloads a cold session
+
+Upstream wakes the main session in place when a worker needs it and treats that session as long-lived.
+For the cost of an idle one it offers warm-cache compaction, because where upstream runs FirstMate there is no way to restart the main session from a script ([#7755](https://github.com/kunchenguid/firstmate/issues/7755)).
+In a T3 Code thread there is: a fresh session on the same thread, which this fork already hands over cleanly.
+So when a notification would wake a session that has sat idle past the cache lifetime, the fork rings it through T3 Code instead, and T3 Code starts a fresh session.
+Any failure falls back to upstream's wake, and outside a T3 Code thread nothing changes.
+Approved by the captain on 2026-11-15.
+Only a session over 100k tokens is rung this way, since a small one reloads for about the price of a fresh start.
+The message carries no notification itself: the notification stays queued, and the fresh session's start digest presents it.
+Upstream's Stop hook is unchanged; the fork wraps it, and its StopFailure registration still runs it directly.
+It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; without that rule the message only reaches the old session.
+Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).
+
 ## A wake turn alerts only when it needs the captain
 
 The T3 Code fork ends a turn with the alert sound only when the captain's own message started it or was sent into it, so a turn that a notification, a background wake, or another agent's message started ends quietly, since most of FirstMate's turns are supervision.

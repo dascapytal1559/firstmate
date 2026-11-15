@@ -1520,3 +1520,45 @@ What was built:
 What is left alone: the idle check, the restart request and restart scripts, T3 Code, and the paused install-side branch, which is discarded.
 The bound sits in the follow itself, not only in the instructions, so whatever the worker's tool does at its own limit, no watch outlives nine minutes.
 The evidence is the `fm-job` and `fm-brief` suites: a follow of a still-running job ends at the bound with exit 75, leaves the result undelivered, and the watcher's delivery still sends it when the job ends; a short job and an ended job behave as before; and the generated instructions carry the new wording.
+
+## 57. A notification never reloads a cold session (15 November 2026)
+
+![Where each input enters, and the one place it can be stopped: T3's server starts every turn it delivers, while a worker notification wakes the session from inside its own Stop hook, so each fork guards its own entry](media/cold-clear-two-doors.svg)
+
+The requirement:
+
+> We need to run clear when the cache has gone cold. That's for sure. That's like at least or minimum condition.
+
+A design review found that one guard cannot do it.
+His messages, from any client including the stock phone app, reach FirstMate through T3 Code's server, so the T3 Code fork can start a cold FirstMate thread fresh.
+A worker notification is different: FirstMate's own Stop hook wakes the session from inside its process, and T3 Code only sees that turn once the cold context has already been re-sent.
+Last week's seven cold reloads split four to three between the two.
+On the review's six calls he answered:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+This entry is the FirstMate half, the backstop for notifications.
+What was built:
+
+- **A wrapper around upstream's Stop hook.**
+  `bin/fm-claude-stop-cold-reroute.sh` is now the Stop hook in `.claude/settings.json`.
+  It runs upstream's hook unchanged on the same payload and passes every outcome through byte for byte, except one.
+- **The one outcome it changes.**
+  When upstream's hook is about to wake the session for a supervision event, the session runs in a T3 Code thread and holds the session lock, its last request is more than an hour old, and its context is over 100k tokens, the wrapper sends one plain message to FirstMate's own thread instead.
+  The T3 Code fork's rule then starts that turn in a fresh session.
+- **The message carries nothing.**
+  The notification stays in the durable queue, which a fresh session's start digest presents, and the send asks for no fresh context, so if his message and the notification race, the first starts the fresh session and the second continues it.
+- **Upstream decides what a wake is.**
+  The wrapper reads upstream's own ledger entry for that run: only an exit 2 that upstream recorded as a wake, under its own process, is rerouted.
+  A failure notice, an alarm, or an interruption always passes through.
+- **Any failure is today's behaviour.**
+  No credential, T3 Code unreachable, a refused or expired credential, or a delivery T3 Code cannot confirm, and the wrapper delivers upstream's wake exactly as before.
+
+What is left alone: upstream's hook itself, its StopFailure registration, and every session outside a T3 Code thread.
+The size floor follows his call to clear only a session that has grown, since a small one reloads for about the price of a fresh start.
+This half ships after the T3 Code fork's rule is installed; before it, the message would only reach the old session.
+
+The evidence is a new suite, `tests/fm-claude-stop-cold-reroute.test.sh`, on made-up transcripts and a fake T3 Code server: a cold, large wake is one plain message and no wake; a warm session, a session of exactly 100k, a session outside T3 Code, a session without the lock, a failure notice, and another process's ledger entry each pass through unchanged; six kinds of failed send fall back to the wake; a signalled wrapper waits for upstream's outcome and never reroutes; and the real upstream hook's recorded wake is rerouted when cold and passed through when warm.
+The neighbouring suites, upstream's Stop hook, the turn-end guard, the stow guard, the host mirror, and the `/clear` swap, still pass.

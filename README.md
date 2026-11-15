@@ -18,6 +18,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Usage limits](FORK.md#a-usage-limit-never-stops-the-work): a worker stopped by an account's usage limit reaches FirstMate by name and moves to another account at once.
 - [Long commands](FORK.md#long-commands-a-restart-cannot-cut): a worker's long test run or build survives a T3 restart.
 - [Fresh sessions](FORK.md#a-fresh-firstmate-session-takes-over-cleanly): after `/clear`, the new FirstMate session takes over the same thread.
+- [Cold sessions](FORK.md#a-notification-never-reloads-a-cold-session): a worker notification rings FirstMate through T3 Code instead of reloading a session idle past its cache lifetime.
 - [Alerts](FORK.md#a-wake-turn-alerts-only-when-it-needs-the-captain): a turn nobody typed into sounds only when it needs the captain.
 - [Work causes](FORK.md#work-records-the-prompt-that-caused-it): each worker records the prompt that started it, for T3's usage by origin.
 - [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
