@@ -17,7 +17,7 @@
 # .wedge-escalations-, .wedge-permanent-, .wedge-terminal-queued-,
 # .wedge-rollback-failed-, .paused-, .paused-rechecked-, .paused-resurfaced-,
 # .waiting-resurfaced-, .writing-since-, .writing-resurfaced-, .validating-since-,
-# .validating-resurfaced-, and .guard-deferrals-. Preserve every current filename
+# .validating-resurfaced-, .usage-limit-seen-, and .guard-deferrals-. Preserve every current filename
 # containing -v3.; only legacy/v2 suffixes in those families are obsolete.
 # Do not bulk-clear STATE: task records, wake queues, and task-keyed .subsuper-*
 # markers are outside this cleanup. Leaving obsolete files in place is safe.

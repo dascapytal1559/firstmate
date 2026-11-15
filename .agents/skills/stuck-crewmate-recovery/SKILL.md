@@ -1,7 +1,7 @@
 ---
 name: stuck-crewmate-recovery
 description: >-
-  Load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer, after observing a defeated Claude or Codex bypass, and when a live crewmate reports its no-mistakes pipeline dead, unreachable, or timed out.
+  Load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, after a stale or usage-limit wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer, after observing a defeated Claude or Codex bypass, and when a live crewmate reports its no-mistakes pipeline dead, unreachable, or timed out.
 user-invocable: false
 metadata:
   internal: true
@@ -42,6 +42,11 @@ The decision is firstmate's own; never ask the captain to act in a worker's wind
 
 Each answer is recorded in `data/<id>/t3-approvals.jsonl` ([`bin/fm-t3-approve.sh`](../../../bin/fm-t3-approve.sh) owns the record).
 When the T3 server does not advertise approval responses, the helper refuses and the wake says so: interrupt the worker and steer it around the command, which ends its wait without anyone clicking in T3 Code.
+
+## A worker stopped by a usage limit
+
+A worker stopped by a provider usage limit (a `check: usage-limit:` wake, or a failed T3 run titled "Usage limit reached") is never routine: work does not stop for an account limit.
+Move it at once to an account that passes the captain's account rules with `bin/fm-usage-limit.sh move <id> --instance <instance>`, and when no account qualifies, escalate it to the captain with the account and reset time; `bin/fm-usage-limit.sh resume <instance>` rings every worker still stopped on an account once the captain says it was reset.
 
 ## Session-start reconciliation for a dead ordinary direct report
 

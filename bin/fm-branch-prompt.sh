@@ -88,6 +88,7 @@ Set silent true only when that review changed nothing, took no action, and found
 Never report verdict captain merely to say the fleet is quiet; a no-op heartbeat pass stays silent.
 
 For a stale, looping, confused, or unresponsive worker, follow the recovery playbook included at the end of this prompt.
+A worker stopped by a provider usage limit is acted on (moved to another account under that playbook's usage-limit section) or reported with verdict captain, never filed as routine.
 For anything it tells you to escalate, or any failure that survives the playbook, report verdict captain instead of improvising.
 
 A worker whose pull request has landed is finished, not stuck, and closing it is your job in both postures.

@@ -22,7 +22,7 @@
 #          stops every process it started) or closing the worker's pane does
 #          not stop it. The job is stopped after --timeout seconds (default
 #          FM_JOB_TIMEOUT, 7200). Prints the job number and log path; the
-#          worker then runs `follow` in the foreground.
+#          worker then runs `follow`, which watches it for a bounded time.
 #          The timeout timer checks every FM_JOB_TIMER_POLL seconds (default
 #          5) that its runner still exists and exits when it does not.
 # status   Print one line per job of <task-id> (or just <job>): its number,
@@ -37,11 +37,21 @@
 #          result delivered, and exit with the job's exit code (1 when it has
 #          none). It only reads: killing it leaves the job running, and it can
 #          be started again on the same job at any time, including after the
-#          job ended (it prints the whole log and the result at once). A job
-#          whose follower was cut keeps its result for `deliver`. A re-attach
-#          passes --from-end, which starts at the log's last FM_JOB_TAIL_LINES
-#          lines (default 20) instead of its start, so following the same job
-#          again does not repeat the output already shown.
+#          job ended (it prints the whole log and the result at once).
+#          A follow never outlives FM_JOB_FOLLOW_MAX seconds (default 540,
+#          under the ten-minute limit of a worker's command tool): if the job
+#          is still running by then it prints that the job is still running and
+#          that the worker should declare the wait and end its turn, and exits
+#          75 (EX_TEMPFAIL; a job may exit 75 too, but then the output reads
+#          "ended" instead of "still running"). It does not mark the result
+#          delivered, so `deliver` sends the result when the job ends. The bound sits in the follow, not only in
+#          the worker's instructions, so a watching worker's turn, which T3
+#          counts as running, never holds a restart or install longer than
+#          that. A job whose follower was cut keeps its result for `deliver`. A
+#          re-attach passes --from-end, which starts at the log's last
+#          FM_JOB_TAIL_LINES lines (default 20) instead of its start, so
+#          following the same job again does not repeat the output already
+#          shown.
 # deliver  Firstmate's watcher runs this on every cycle while any job record
 #          exists. Each ended job whose result has not been delivered is sent
 #          to its task with bin/fm-send.sh (a durable steering-inbox record
@@ -100,6 +110,8 @@ KILL_GRACE=${FM_JOB_KILL_GRACE:-10}
 TIMER_POLL=${FM_JOB_TIMER_POLL:-5}
 TAIL_LINES=${FM_JOB_TAIL_LINES:-20}
 FOLLOW_POLL=${FM_JOB_FOLLOW_POLL:-1}
+FOLLOW_MAX=${FM_JOB_FOLLOW_MAX:-540}
+FOLLOW_BOUND_EXIT=75
 DELIVER_GRACE=${FM_JOB_DELIVER_GRACE:-5}
 
 # shellcheck source=bin/fm-pr-lib.sh
@@ -366,10 +378,12 @@ cmd_stop() {
 }
 
 cmd_follow() {
-  local id=${1-} dir rec log off=0 size code outcome started finished secs
+  local id=${1-} dir rec log off=0 size code outcome started finished secs began
   valid_task "$id"
   dir=$(job_dir "$id" "${2-}")
   case "$#:${3-}" in 2:|3:--from-end) ;; *) usage >&2; exit 2 ;; esac
+  positive_int "$FOLLOW_MAX" || die "FM_JOB_FOLLOW_MAX must be a positive number of seconds, got: $FOLLOW_MAX" 2
+  began=$(now)
   rec="$dir/record"
   log=$(job_get "$rec" log)
   if [ "$#" = 3 ]; then
@@ -387,6 +401,11 @@ cmd_follow() {
       off=$size
     fi
     [ -z "$outcome" ] || break
+    if [ "$(($(now) - began))" -ge "$FOLLOW_MAX" ]; then
+      printf '\nfm-job: job %s is still running after %ss of following; this follow ends here and the job keeps running.\n' "$(job_get "$rec" job)" "$FOLLOW_MAX"
+      printf 'Declare the wait and end your turn: its result arrives as an instruction when it ends. log: %s\n' "$log"
+      return "$FOLLOW_BOUND_EXIT"
+    fi
     sleep "$FOLLOW_POLL"
   done
   code=$(job_get "$rec" exit)

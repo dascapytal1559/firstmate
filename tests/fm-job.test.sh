@@ -20,6 +20,9 @@
 #      the job running when cut, and re-attaches to a running or ended job;
 #      `follow --from-end` re-attaches at the log's last FM_JOB_TAIL_LINES
 #      lines instead of repeating it from the start.
+#      A follow of a job still running after FM_JOB_FOLLOW_MAX seconds ends by
+#      itself, says the job is still running and the worker should declare the
+#      wait, exits 75, and leaves the result undelivered for `deliver`.
 #   7. A start for a task this home does not record is refused.
 #   8. `deliver` holds a just-ended result for FM_JOB_DELIVER_GRACE seconds, so
 #      a follower that saw the end marks it first and no second copy is sent,
@@ -393,6 +396,43 @@ test_deliver_waits_for_a_follower_to_take_the_result() {
   pass "deliver leaves a just-ended result to its follower and sends one nobody took"
 }
 
+test_follow_ends_at_its_bound_and_leaves_the_result_for_deliver() {
+  local h r out rc
+  h=$(new_home bound)
+  job "$h" start t1 -- bash -c 'echo working; sleep 5; echo finished; exit 3' >/dev/null || fail "start failed"
+  r=$(rec "$h" 1)
+  remember_runner "$r"
+  rc=0
+  out=$(FM_JOB_FOLLOW_MAX=2 FM_JOB_FOLLOW_POLL=0.2 job "$h" follow t1 1) || rc=$?
+  expect_code 75 "$rc" "a follow that reaches its bound exits 75"
+  assert_contains "$out" "working" "a bounded follow still streams the log"
+  assert_contains "$out" "job 1 is still running after 2s of following" "a bounded follow says the job is still running"
+  assert_contains "$out" "Declare the wait and end your turn" "a bounded follow tells the worker to declare the wait"
+  assert_contains "$out" "log: $h/state/t1.jobs/1/log" "a bounded follow names the log"
+  assert_not_contains "$out" "ended:" "a bounded follow does not report an outcome"
+  [ -z "$(field "$r" outcome)" ] || fail "the job should keep running after its follow reached the bound"
+  [ -z "$(field "$r" notified)" ] || fail "a follow that reached its bound must not mark the result delivered"
+  wait_outcome "$r" 20 || fail "the job should end on its own"
+  job "$h" deliver || fail "deliver failed"
+  [ "$(find "$h/state/t1.inbox" -maxdepth 1 -name '*.msg' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "deliver should send the result of a job whose follow reached its bound"
+  out=$(bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$(find "$h/state/t1.inbox" -maxdepth 1 -name '*.msg')")
+  assert_contains "$out" "Your detached job 1 ended: failed (exit 3)" "the result arrives as an instruction"
+  # A job that ends inside the bound is reported as before, with its own code.
+  job "$h" start t1 -- bash -c 'echo quick; exit 4' >/dev/null || fail "second start failed"
+  r=$(rec "$h" 2)
+  remember_runner "$r"
+  rc=0
+  out=$(FM_JOB_FOLLOW_MAX=30 FM_JOB_FOLLOW_POLL=0.2 job "$h" follow t1 2) || rc=$?
+  expect_code 4 "$rc" "a job that ends inside the bound keeps its own exit code"
+  assert_contains "$out" "job 2 ended: failed (exit 4)" "a job that ends inside the bound prints its result"
+  [ -n "$(field "$r" notified)" ] || fail "a follow that saw the end marks the result delivered"
+  rc=0
+  FM_JOB_FOLLOW_MAX=soon job "$h" follow t1 2 >/dev/null 2>&1 || rc=$?
+  expect_code 2 "$rc" "an unusable FM_JOB_FOLLOW_MAX is refused"
+  pass "follow ends by itself at its bound, exits 75, and leaves the result for deliver"
+}
+
 test_unknown_task_refused() {
   local h rc
   h=$(new_home refuse)
@@ -417,4 +457,5 @@ test_reap_stops_and_removes
 test_follow_streams_survives_a_cut_and_reattaches
 test_follow_from_end_reattaches_at_the_last_lines
 test_deliver_waits_for_a_follower_to_take_the_result
+test_follow_ends_at_its_bound_and_leaves_the_result_for_deliver
 test_unknown_task_refused

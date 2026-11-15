@@ -326,8 +326,10 @@ T3 owns the restart event, and the [T3 Code fork](https://github.com/dascapytal1
 
 A worker's long command started with [`bin/fm-job.sh`](../bin/fm-job.sh), such as a broad test sweep, is outside all of this: it runs in its own session reparented to init, so a restart does not stop it.
 Its result reaches the worker as a steering-inbox record that the watcher sends once the job ends, so a result that lands while T3 is down waits in the record and its doorbell starts the worker's next turn.
-Generated briefs tell workers to run any command longer than a few minutes this way and then follow its output in the foreground with `fm-job.sh follow`, so T3 shows the command and its output and the worker reads as working; a restart cuts only the follow, and the recovery steer below tells the worker to re-attach with `--from-end` while the job still runs.
-That follow is a running turn, so a restart staged to wait for an idle fleet, and T3's clean restart, wait for it to end; `bin/fm-fleet-idle.sh` leaves out only the job's own processes, so a worker waiting on a job reads idle only once no follow of it runs.
+Generated briefs tell workers to run any command longer than a few minutes this way and then watch it with `fm-job.sh follow`, so T3 shows the command and its output and the worker reads as working for a short test.
+A follow ends by itself after `FM_JOB_FOLLOW_MAX` seconds (default 540) when the job is still running: it says so and exits 75 without marking the result delivered, the worker declares the wait with a `paused:` line and ends its turn, and the watcher's result record starts its next turn when the job ends.
+A restart cuts only a follow, and the recovery steer below tells the worker to re-attach with `--from-end` while the job still runs.
+A follow is a running turn, so a restart staged to wait for an idle fleet, and T3's clean restart, wait for it to end, which the bound caps at about nine minutes; `bin/fm-fleet-idle.sh` leaves out only the job's own processes, so a worker waiting on a job with its turn ended reads idle at once.
 
 What T3 cannot see is Firstmate's durable record: a worker's last `working:` or `paused:` line still reads as current after the session behind it ended.
 [`bin/fm-t3-restart.sh`](../bin/fm-t3-restart.sh) `recover`, run by the locked session start in a home with `config/t3code-token`, reconciles exactly that.
@@ -369,7 +371,7 @@ The script's header owns its exit codes and the reason and adoption rules; `bin/
 
 ### Fresh session with /clear
 
-T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context.
+T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context except the previous session's last exchange, which its start digest carries from the [dialog mirror](supervision-host.md#the-dialog-mirror).
 The thread id does not change, so records keyed by it stay valid.
 Run `/stow` first when the session holds anything worth keeping; `/clear` itself saves nothing.
 
@@ -396,6 +398,26 @@ Automatic secondmate recovery treats a failed run the same way: the thread is st
 That turn tells the secondmate to re-read its `AGENTS.md` and config first, and startup still delivers its queued config re-read retries, because a resumed conversation does not re-read on its own the way a fresh launch does.
 A secondmate thread that reads missing is closed again through the idempotent archive before a replacement thread is launched, and when that close cannot be proven the thread and its record stay as recorded and nothing is spawned; other backends keep their existing best-effort close ([`bin/fm-secondmate-liveness-lib.sh`](../bin/fm-secondmate-liveness-lib.sh)).
 Teardown still requires a proven archive before returning the worktree.
+
+<a id="usage-limit-stops"></a>
+
+### Usage-limit stops
+
+A worker whose run fails on a provider usage limit reads failed like any other failure, so the watcher classifies the run once, on the first sight of the stopped thread's quiet screen ([`bin/fm-t3-mcp.mjs`](../bin/fm-t3-mcp.mjs) `limit` owns the evidence order).
+T3's typed failure fields decide when the thread read carries them; the MCP thread detail omits them today, so the run's error item titled "Usage limit reached" decides, and Claude's usage-limit notice id adds the limit window and reset time.
+A usage-limit stop is written to the task's record `state/<task>.usage-limit` ([`bin/fm-usage-limit-lib.sh`](../bin/fm-usage-limit-lib.sh) owns its fields) and raised as one `check: usage-limit:` wake per failed run, naming the account, the window, and the reset time, in place of the stale wake; any other failure keeps the ordinary stale path.
+A check wake is never the supervision session's while the captain is present, so it reaches firstmate.
+
+[`bin/fm-usage-limit.sh`](../bin/fm-usage-limit.sh) acts on it, and its header owns the commands and exit codes:
+
+- `move <task> --instance <instance>` rebinds the stopped thread to another provider instance at once, through `t3_thread_configure` with the thread's own model and options, refused unless T3's catalog shows the target runs the same driver and offers that model and every option value, effort included.
+  It reads the binding back before it records the move in the task's record, then sends the continuation through the ordinary steer.
+  Choosing the instance stays firstmate's, under the captain's account rules; a moved worker stays on its new instance.
+- `resume <instance>` rings every worker recorded as stopped on that instance and not moved since, for an account the captain says was reset early; no reset is detected automatically.
+
+Configure first and message second matters: a message to the old binding restarts the run on the exhausted account.
+Between Claude instances with separate logins, T3 starts a new provider session and hands the conversation over as a trimmed selection, without the old session's reasoning.
+T3's own "Resume after usage limits" setting (Settings, Threads) resumes a stop at its recorded reset time and is the backstop when no instance has room; any new message cancels its pending continuation.
 
 ## Push events and polling fallback
 

@@ -139,6 +139,21 @@ A worker that has reported since the restart is left alone, and every other work
 Until such a worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
+## A usage limit never stops the work
+
+When a T3 Code worker's run ends on a provider usage limit, the worker used to sit stopped until someone noticed.
+FirstMate heard only that a worker had gone quiet, the supervision session filed it as routine, and FirstMate's own steer refused the stopped thread as if its agent had exited.
+Now a stopped thread takes a steer like any other, since T3 Code continues the same conversation on a new message.
+The watcher reads why the run failed, using T3's typed failure fields when it has them and otherwise the run's "Usage limit reached" error and Claude's limit notice, and raises one notification per stopped run naming the account, the limit, and its reset time.
+That notification goes to FirstMate itself, never only to the supervision session, and the stuck-worker playbook and the supervision session's instructions both say a usage-limit stop is acted on or escalated, never filed as routine.
+FirstMate moves the worker at once with `bin/fm-usage-limit.sh move`, which checks the other account offers the same model and effort, rebinds the thread there, reads the binding back, records the move, and sends the continuation through the ordinary steer.
+Which account to move to stays FirstMate's choice under the captain's account rules, and a moved worker finishes where it is; only new work goes back.
+When the captain says an account was reset early, `bin/fm-usage-limit.sh resume <account>` rings every worker still stopped on it; nothing detects such a reset on its own.
+T3 Code's own "Resume after usage limits" setting stays the backstop for the natural reset, when no account has room or FirstMate itself was down.
+Moving across accounts hands the conversation over trimmed, so a worker deep in an investigation can lose some of its thread; its brief, status, and files are untouched.
+Approved by the captain on 2026-11-15.
+Details: [usage-limit stops](docs/t3code-backend.md#usage-limit-stops).
+
 ## Do it when no worker is running
 
 ![Before, the idle hook waited for two quiet 30 second polls; after, the watcher rings it on the turn-end itself and it fires about a second and a half later](devlog/media/fleet-idle-doorbell.svg)
@@ -160,11 +175,12 @@ Details: [clean restart](docs/t3code-backend.md#clean-restart).
 
 ## Long commands a restart cannot cut
 
-A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker follows its output in the foreground, so T3 shows the command and its output as upstream does and the worker reads as working.
-If a restart cuts the follow, the job keeps running, the restart recovery tells the worker to re-attach from the log's last lines, and a result no follow saw comes back to the worker as an instruction that starts its next turn.
+A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker watches its output for up to nine minutes, so T3 shows the command and its output as upstream does and the worker reads as working.
+If the job is still running when the watch ends by itself, the worker declares a wait and ends its turn, and the result comes back to it as an instruction that starts its next turn when the job finishes.
+If a restart cuts the watch, the job keeps running and the restart recovery tells the worker to re-attach from the log's last lines.
 Upstream has a worker run such a command in its own turn or a background shell and declare the wait.
 The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
-The job itself is left out of the busy count, but a worker following it is a running turn, so a clean restart still waits for the follow to end.
+The job itself is left out of the busy count, but a worker watching it is a running turn, so a clean restart waits for the watch to end, which is never more than about nine minutes.
 A plain cleanup refuses while a job runs and only an explicit discard stops it.
 A worker's instructions tell it to run anything longer than a few minutes as a job.
 Details: [`fm-job.sh`](bin/fm-job.sh) and [server restart](docs/t3code-backend.md#server-restart).
@@ -177,10 +193,44 @@ Upstream has no equivalent, because its FirstMate does not yet run as a T3 Code 
 If the old process is somehow still running, the new session says so and names the remedy instead of taking over beside it.
 Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-clear).
 
+## A notification never reloads a cold session
+
+Upstream wakes the main session in place when a worker needs it and treats that session as long-lived.
+For the cost of an idle one it offers warm-cache compaction, because where upstream runs FirstMate there is no way to restart the main session from a script ([#7755](https://github.com/kunchenguid/firstmate/issues/7755)).
+In a T3 Code thread there is: a fresh session on the same thread, which this fork already hands over cleanly.
+So when a notification would wake a session that has sat idle past the cache lifetime, the fork rings it through T3 Code instead, and T3 Code starts a fresh session.
+Any failure falls back to upstream's wake, and outside a T3 Code thread nothing changes.
+Approved by the captain on 2026-11-15.
+Only a session over 100k tokens is rung this way, since a small one reloads for about the price of a fresh start.
+The message carries no notification itself: the notification stays queued, and the fresh session's start digest presents it.
+It travels as Firstmate operational input, a doorbell naming a record in this home's inbox, so the away-mode return rule, the dialog mirror, and the nightly clear check never take it for the captain's words.
+Upstream's Stop hook is unchanged; the fork wraps it, and its StopFailure registration still runs it directly.
+It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; without that rule the message only reaches the old session.
+Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).
+
+## A nightly check watches every clear
+
+Clearing FirstMate's main session saves most of what its long context costs, but a fresh session can lose the thread of a conversation.
+So a nightly script reads FirstMate's own session transcripts, with no model call, and lists every clear of the day: its cause (the captain's `/clear`, a cold start from a message, a cold start from a notification, or a T3 restart), the context it dropped, and any sign of harm in the new session's first hour.
+The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
+It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
+Upstream has no equivalent, because upstream does not clear FirstMate's session on its own.
+It reads Claude transcripts only; run it once a night from the host's scheduler.
+Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
+
+## A fresh session starts with the last exchange
+
+A fresh FirstMate session, after an automatic clear or the captain's own `/clear`, starts with no earlier context, so a bare "yes" would arrive without the question it answers.
+Upstream already records the captain's prompts and FirstMate's final replies for its supervision host, and treats a restart as a non-event.
+So the fork's session start prints the previous session's last few entries from that record, at most six and about 1,500 tokens, in a `LAST EXCHANGE` section of its digest.
+It never carries worker or tool output, and it prints nothing when no earlier session was recorded, so it needs a primary whose dialog upstream records, Claude or Cursor, with the supervision host on.
+Approved by the captain on 2026-11-15, with the automatic clearing above.
+Details: [the dialog mirror](docs/supervision-host.md#the-dialog-mirror) and [`fm-host-mirror.sh`](bin/fm-host-mirror.sh).
+
 ## A wake turn alerts only when it needs the captain
 
-The T3 Code fork ends a turn that a notification started without the alert sound, since most of FirstMate's turns are supervision.
-So when such a turn ends with something that must reach the captain at once, FirstMate flags that turn to alert as usual.
+The T3 Code fork ends a turn with the alert sound only when the captain's own message started it or was sent into it, so a turn that a notification, a background wake, or another agent's message started ends quietly, since most of FirstMate's turns are supervision.
+So when such a quiet turn ends with something that must reach the captain at once, FirstMate flags that turn to alert as usual.
 Upstream has no equivalent, for the same reason as above.
 A session outside T3 Code, a read-only session, and a second mate are told nothing about it.
 Details: [`t3-thread.md`](docs/supervision-protocols/t3-thread.md).

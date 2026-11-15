@@ -290,7 +290,7 @@ start_primary() {  # <lab>
   wait_until 300 watcher_live "$lab" || fail "$(basename "$lab"): the host never started a watcher"$'\n'"$(diagnose "$lab")"
   wait_until "$TURN_POLLS" turn_idle "$lab" "$started" || fail "$(basename "$lab"): the setup turn never ended"$'\n'"$(diagnose "$lab")"
   wait_until 300 listener_live "$lab" || fail "$(basename "$lab"): the stand-in remote listener is not owned"$'\n'"$(diagnose "$lab")"
-  jq -e '[.hooks.Stop[]?.hooks[]? | select(.type == "command" and .asyncRewake == true and (.command | endswith("/bin/fm-claude-stop-autoarm.sh") or endswith("/bin/fm-claude-stop-autoarm.sh\"")))] | length == 1' \
+  jq -e '[.hooks.Stop[]?.hooks[]? | select(.type == "command" and .asyncRewake == true and (.command | endswith("/bin/fm-claude-stop-cold-reroute.sh") or endswith("/bin/fm-claude-stop-cold-reroute.sh\"")))] | length == 1' \
     "$lab/fm/.claude/settings.json" >/dev/null \
     || fail "$(basename "$lab"): the lab lacks the tracked Stop hook registration"
   jq -e '[.hooks.StopFailure[]?.hooks[]? | select(.type == "command" and .asyncRewake == true and .timeout == 28800 and (.command | endswith("/bin/fm-claude-stop-autoarm.sh") or endswith("/bin/fm-claude-stop-autoarm.sh\"")))] | length == 1' \

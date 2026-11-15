@@ -4321,7 +4321,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" \
   "$STATE/$ID.claude-settings.json" "$STATE/$ID.devin-config.json" \
-  "$STATE/$ID.polytoken-busy.sh" "$STATE/$ID.t3-restart" \
+  "$STATE/$ID.polytoken-busy.sh" "$STATE/$ID.t3-restart" "$STATE/$ID.usage-limit" \
   "$STATE/$ID.pr-register-refused" \
   "$STATE/$ID.review-park" "$STATE/.review-park-closed-$ID" \
   "$STATE/.review-park-untrusted-$ID" "$STATE/.review-park-untrusted-$ID.next" \

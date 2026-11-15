@@ -182,6 +182,29 @@ test_operational_foreign_and_unowned_input_is_dropped() {
   pass "mirror: operational input, a harness-started turn, a foreign host's payload, other events, and a session without the lock are never mirrored"
 }
 
+# A record-backed operational doorbell (bin/fm-operational-input.sh record),
+# which a harness that strips the typed marker receives instead of the envelope,
+# is fleet machinery when its record sits in this home's own inbox; the doorbell
+# shape alone proves nothing, so one naming another home's record is dialog.
+test_this_homes_operational_doorbell_is_dropped() {
+  local home other ours theirs
+  home=$(make_home doorbell)
+  other=$(make_home doorbell-other)
+  ours=$(printf 'A supervision wake is waiting.' | FM_HOME="$home" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+    || fail "this home's doorbell could not be written"
+  theirs=$(printf 'A supervision wake is waiting.' | FM_HOME="$other" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+    || fail "the other home's doorbell could not be written"
+  OURS=$ours THEIRS=$theirs as_session "$home" "$SAY"'
+    say captain "$OURS" p1
+    say captain "$THEIRS" p2
+    say captain "kept" p3
+  ' || fail "a writer failed"
+  assert_equals "captain|$theirs
+captain|kept" "$(entries "$home")" \
+    "only a doorbell whose record sits in this home's inbox may be dropped as operational input"
+  pass "mirror: this home's operational doorbell is never mirrored as the captain's words"
+}
+
 # Dialog is recorded as said: a line ending in spaces, blank lines, and
 # indentation inside a message survive, and only the whitespace at the very
 # end of the message is trimmed.
@@ -499,6 +522,139 @@ test_recreated_mirror_continues_past_both_cursors() {
   pass "mirror: a recreated mirror continues past the committed and staged cursors, so a resumed conversation still gets new dialog"
 }
 
+# A fresh main session carries the session before it's newest exchange, and
+# only until it has dialog of its own.
+test_last_carries_the_previous_sessions_exchange() {
+  local home out
+  home=$(make_home last)
+  as_session "$home" "$SAY"'"$MIRROR" last > "$FM_HOME/last.first"; say captain "an ask from long ago"' \
+    || fail "the first session failed"
+  as_session "$home" "$SAY"'
+    say captain "shall I merge the fix?" p1
+    say main "Captain, the fix is ready. Merge it?" p1
+  ' || fail "the second session failed"
+  as_session "$home" "$SAY"'
+    "$MIRROR" last > "$FM_HOME/last.fresh"; printf "%s\n" "$?" > "$FM_HOME/last.rc"
+    say captain "yes" p2
+    "$MIRROR" last > "$FM_HOME/last.after"
+  ' || fail "the third session failed"
+  assert_equals "" "$(cat "$home/last.first")" "a session with no earlier session must carry nothing"
+  assert_equals "0" "$(cat "$home/last.rc")" "last must exit 0"
+  out=$(cat "$home/last.fresh")
+  assert_contains "$(head -n 1 "$home/last.fresh")" "the last 2 entries of the session before this one." \
+    "the opening line must count what it carries"
+  assert_contains "$(head -n 1 "$home/last.fresh")" "Recorded up to 20" "the opening line must name when the newest entry was recorded"
+  assert_equals "[captain] shall I merge the fix?
+[main] Captain, the fix is ready. Merge it?" "$(sed '1d' "$home/last.fresh")" \
+    "a fresh session must carry the previous session's newest exchange, oldest first"
+  assert_not_contains "$out" "an ask from long ago" "only the session just before this one may be carried"
+  assert_equals "" "$(cat "$home/last.after")" "a session with dialog of its own must carry nothing"
+  pass "mirror: last carries the previous session's newest exchange into a fresh session, and nothing once it has its own dialog"
+}
+
+test_last_is_bounded() {
+  local home out
+  home=$(make_home last-bound)
+  as_session "$home" "$SAY"'
+    for n in 1 2 3 4 5 6 7 8; do say captain "short ask $n"; done
+  ' || fail "the counted session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.count"' || fail "the counting session failed"
+  assert_contains "$(head -n 1 "$home/last.count")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
+    "the carry must stop at six entries and count the rest"
+  assert_contains "$(sed -n 2p "$home/last.count")" "[captain] short ask 3" "the carry must keep the newest six"
+  assert_contains "$(tail -n 1 "$home/last.count")" "[captain] short ask 8" "the carry must end with the newest entry"
+
+  as_session "$home" "$SAY"'
+    big=$(awk "BEGIN { for (i = 0; i < 3900; i++) printf \"y\" }")
+    say captain "the oldest ask"
+    say captain "HEAD-of-the-question $big TAIL-of-the-question"
+    say main "the answer $big"
+  ' || fail "the bounded session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.big"' || fail "the bounding session failed"
+  out=$(cat "$home/last.big")
+  [ "$(wc -c < "$home/last.big")" -le 6000 ] || fail "the carry must fit 6000 characters, got $(wc -c < "$home/last.big")"
+  assert_contains "$(head -n 1 "$home/last.big")" "the last 2 entries of the session before this one; 1 entry before them not shown." \
+    "a carry that cuts an entry must still count what it left out"
+  assert_contains "$out" "[main] the answer yyy" "the newest entry must be carried whole"
+  assert_contains "$out" "[captain] HEAD-of-the-question" "a cut entry must keep its head"
+  assert_contains "$out" "TAIL-of-the-question" "a cut entry must keep its tail"
+  assert_contains "$out" "characters omitted]" "a cut entry must say it was cut"
+  assert_not_contains "$out" "the oldest ask" "an entry with no room left must not be carried"
+  pass "mirror: last carries at most six entries in 6000 characters, newest kept, cutting one entry head and tail when only part fits"
+}
+
+# No-op replies take no slot, and the captain's newest message with MAIN's reply
+# to it is carried even when later entries would have pushed it out.
+test_last_skips_no_op_replies_and_keeps_the_last_exchange() {
+  local home out
+  home=$(make_home last-noop)
+  as_session "$home" "$SAY"'
+    say captain "which colour for the badge?"
+    say main "Captain, the badge can be teal or amber. Which one?"
+    say captain "ping 1"
+    say main "Captain, shipshape."
+    say captain "ping 2"
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+  ' || fail "the noisy session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.noop"' || fail "the fresh session failed"
+  out=$(cat "$home/last.noop")
+  assert_not_contains "$out" "shipshape" "a no-op reply must never be carried"
+  assert_contains "$(head -n 1 "$home/last.noop")" "the last 4 entries of the session before this one." \
+    "the opening line must count only real entries, and name none as left out"
+  assert_contains "$out" "[main] Captain, the badge can be teal or amber. Which one?" "the real reply must survive the no-op replies"
+  assert_equals "[captain] which colour for the badge?
+[main] Captain, the badge can be teal or amber. Which one?
+[captain] ping 1
+[captain] ping 2" "$(sed '1d' "$home/last.noop")" "the carry must be oldest first with no no-op reply in it"
+
+  # The newest captain message and its reply are kept even when six newer
+  # entries would otherwise push them out.
+  as_session "$home" "$SAY"'
+    say captain "the question that matters"
+    say main "Captain, here is the answer that matters."
+    for n in 1 2 3 4 5 6; do say main "later note $n"; done
+  ' || fail "the crowded session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.crowded"' || fail "the second fresh session failed"
+  out=$(cat "$home/last.crowded")
+  assert_contains "$(head -n 1 "$home/last.crowded")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
+    "the carry must stay at six entries"
+  assert_equals "[captain] the question that matters
+[main] Captain, here is the answer that matters.
+[main] later note 3
+[main] later note 4
+[main] later note 5
+[main] later note 6" "$(sed '1d' "$home/last.crowded")" "the newest captain message and its reply must be carried, then the newest others"
+
+  # A session of nothing but no-op replies carries nothing.
+  as_session "$home" "$SAY"'say main "Captain, shipshape."' || fail "the quiet session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.quiet"' || fail "the third fresh session failed"
+  assert_equals "" "$(cat "$home/last.quiet")" "a session with only no-op replies must carry nothing"
+  pass "mirror: last skips no-op replies and always carries the captain's newest message and the reply to it"
+}
+
+test_last_carries_nothing_without_sound_records() {
+  local home
+  home=$(make_home last-nothing)
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.missing"' || fail "last failed without a mirror"
+  assert_equals "" "$(cat "$home/last.missing")" "a missing mirror must carry nothing"
+  as_session "$home" "$SAY"'say captain "an earlier ask"' || fail "the earlier session failed"
+  printf '%s\n' "$(cat "$home/state/.host-mirror.jsonl")" '{"seq":0}' > "$home/state/.host-mirror.jsonl"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.invalid"' || fail "last failed on an invalid mirror"
+  assert_equals "" "$(cat "$home/last.invalid")" "an invalid mirror must carry nothing"
+  sed -i.bak '$d' "$home/state/.host-mirror.jsonl"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  expect_code 0 "$(FM_HOME="$home" "$MIRROR" last > "$home/last.unowned"; echo $?)" "last must exit 0 without the lock"
+  assert_equals "" "$(cat "$home/last.unowned")" "a session that does not hold the fleet lock must carry nothing"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.sound"' || fail "last failed on a sound mirror"
+  assert_contains "$(cat "$home/last.sound")" "[captain] an earlier ask" "the repaired mirror must carry the earlier exchange"
+  pass "mirror: last carries nothing from a missing or invalid mirror, or into a session without the fleet lock"
+}
+
 # The host runs the attended posture only beside a primary whose writers were
 # proven to record the session's dialog from its first captain prompt.
 test_only_proven_writers_are_verified() {
@@ -521,6 +677,7 @@ test_only_proven_writers_are_verified
 test_home_that_opted_out_is_untouched
 test_home_without_the_file_mirrors_only_claude
 test_operational_foreign_and_unowned_input_is_dropped
+test_this_homes_operational_doorbell_is_dropped
 test_internal_whitespace_is_recorded_verbatim
 test_entries_are_deduplicated_and_capped
 test_a_different_reply_under_the_same_id_is_recorded
@@ -534,3 +691,7 @@ test_feed_bound_includes_its_omitted_note
 test_recycled_lock_pid_is_a_new_main_session
 test_feed_refuses_unfeedable_sequences_and_unterminated_records
 test_recreated_mirror_continues_past_both_cursors
+test_last_carries_the_previous_sessions_exchange
+test_last_is_bounded
+test_last_skips_no_op_replies_and_keeps_the_last_exchange
+test_last_carries_nothing_without_sound_records

@@ -1449,3 +1449,197 @@ The evidence is the suites for every script the change touches.
 The cleanup cases cover a running turn, a turn that already failed, a turn state that cannot be read, a detached job, the explicit discard, and a runtime with no liveness check.
 The tmux case cannot run on this Mac, so it was run in a Linux container, where the whole file passed with nothing skipped.
 
+## 55. A usage limit never stops the work (15 November 2026)
+
+![Before, a worker stopped by a usage limit was reported only as quiet, filed as routine, and could not be steered; after, the watcher names the limit, the account and the reset to FirstMate itself, the thread is moved to another account with the same model and effort, and the ordinary steer continues it](media/usage-limit-moves-at-once.svg)
+
+What happened: two scouts hit an account's 5-hour limit just after midnight.
+FirstMate heard only that two workers had gone quiet, the background session filed both as routine, and the steer that should have resumed them refused, as though their agents had exited.
+An investigation found three layers that each did nothing, and proposed five pieces.
+
+His answers to the investigation's calls:
+
+> 1 yes 2 yes 3 move at once 4 no 5 i tell u 6 no 7 how would u even test this
+>
+> — 15 November 2026
+
+That is: fix it, the steer as a daytime fix and the rest at bedtime; switch on T3 Code's own resume at reset; move a stopped worker to another account at once, however close the reset; a moved worker stays where it is and only new work goes back; an early reset is announced by him, not detected; nothing offered upstream.
+The daytime fix, a steer that rings a stopped thread, landed the same evening, and the rest started with:
+
+> ok im going to bed
+
+What was built:
+
+- **The watcher says why a worker stopped.**
+  When a T3 Code worker's run ends failed, the watcher reads the run once: T3's typed failure fields when it has them, otherwise the run's "Usage limit reached" error and Claude's limit notice, which carries the window and the reset time.
+  A usage-limit stop becomes one notification per stopped run, naming the account, the limit and its reset, in place of the bare "went quiet" one.
+  It goes to FirstMate itself, never only to the background session; any other failure keeps the ordinary path.
+- **A small record per stopped worker.**
+  The account, the window, the reset time and the run that failed, later noting where the worker was moved or that it was resumed.
+- **Never routine.**
+  The stuck-worker playbook and the background session's instructions each gained a line: a usage-limit stop is acted on or escalated.
+- **Moving at once.**
+  `bin/fm-usage-limit.sh move` checks in T3 Code's own catalog that the other account offers the same model and effort, rebinds the thread there, reads the binding back, records the move, and only then sends the continuation through the ordinary steer.
+  Configuring first matters: a message sent first restarts the run on the exhausted account.
+  Which account to move to stays FirstMate's choice under his account rules; the command never chooses and never waits.
+- **Resuming an account he reset.**
+  `bin/fm-usage-limit.sh resume <account>` rings every worker still stopped on that account, skipping any that already moved.
+
+What this costs: moving between Claude accounts hands the conversation over trimmed, without the old session's reasoning, so a worker deep in an investigation can lose some of its thread; its instructions, status and files are untouched.
+
+On call 7, a live proof of the move: FirstMate answered in chat that a worker had already been moved mid-task to another account that same night, which exercised the same T3 Code call, so no scratch thread was spent.
+The evidence here is the suites for every file the change touches, with new cases against the fake T3 Code server built from the three real items the stopped run left: classification by title, notice and typed fields; one notification per run and none for an ordinary failure; the move's refusals, its order of configure before message, and its read-back; and resume ringing exactly the workers still stopped on the reset account.
+
+
+## 56. A long test never holds an install for more than nine minutes (15 November 2026)
+
+![Before, a worker watched its test to the end and held a clean install for the test's whole length; after, the watch ends by itself at nine minutes and the worker waits for the result](media/long-test-watch-ends-at-nine-minutes.svg)
+
+What happened: on 14 November workers started watching their long tests live instead of ending their turn.
+A clean T3 Code install waits for every running turn, so a worker watching a long test held an install for the whole test.
+A first fix, an install that works out which workers are only watching and stops their turns, was paused, and a design review measured the problem before anything more was built.
+It found the cost was small so far, about 7 minutes of watching in 20 hours, that most workers filtered the output so little of it showed live anyway, and that the install-side check could not tell a watching worker from a thinking one.
+It recommended one small change on the worker's side instead, and he answered:
+
+> Yeah, okay, let's do the nine minute change.
+>
+> — 15 November 2026
+
+What was built:
+
+- **The watch ends by itself.**
+  `fm-job.sh follow` stops after 540 seconds (`FM_JOB_FOLLOW_MAX`, under the ten-minute limit of a worker's command tool) when the job is still running.
+  It says the job is still running and that the worker should declare the wait and end its turn, and exits 75.
+  It does not mark the result delivered, so the existing result delivery sends it when the job ends.
+- **The worker's instructions.**
+  The sentence about re-attaching a cut follow is replaced: when the follow says the job is still running, append the `paused` line naming the job and end the turn.
+- **What he sees.**
+  A short test looks exactly as before.
+  A long test reads Working for up to nine minutes, then Waiting until the result arrives, and an install waits for a watcher at most about nine minutes.
+
+What is left alone: the idle check, the restart request and restart scripts, T3 Code, and the paused install-side branch, which is discarded.
+The bound sits in the follow itself, not only in the instructions, so whatever the worker's tool does at its own limit, no watch outlives nine minutes.
+The evidence is the `fm-job` and `fm-brief` suites: a follow of a still-running job ends at the bound with exit 75, leaves the result undelivered, and the watcher's delivery still sends it when the job ends; a short job and an ended job behave as before; and the generated instructions carry the new wording.
+
+## 57. A notification never reloads a cold session (15 November 2026)
+
+![Where each input enters, and the one place it can be stopped: T3's server starts every turn it delivers, while a worker notification wakes the session from inside its own Stop hook, so each fork guards its own entry](media/cold-clear-two-doors.svg)
+
+The requirement:
+
+> We need to run clear when the cache has gone cold. That's for sure. That's like at least or minimum condition.
+
+A design review found that one guard cannot do it.
+His messages, from any client including the stock phone app, reach FirstMate through T3 Code's server, so the T3 Code fork can start a cold FirstMate thread fresh.
+A worker notification is different: FirstMate's own Stop hook wakes the session from inside its process, and T3 Code only sees that turn once the cold context has already been re-sent.
+Last week's seven cold reloads split four to three between the two.
+On the review's six calls he answered:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+This entry is the FirstMate half, the backstop for notifications.
+What was built:
+
+- **A wrapper around upstream's Stop hook.**
+  `bin/fm-claude-stop-cold-reroute.sh` is now the Stop hook in `.claude/settings.json`.
+  It runs upstream's hook unchanged on the same payload and passes every outcome through byte for byte, except one.
+- **The one outcome it changes.**
+  When upstream's hook is about to wake the session for a supervision event, the session runs in a T3 Code thread and holds the session lock, its last request is more than an hour old, and its context is over 100k tokens, the wrapper sends one message to FirstMate's own thread instead, as an operational-input doorbell naming a record in this home's inbox, so nothing takes it for the captain's words.
+  The T3 Code fork's rule then starts that turn in a fresh session.
+- **The message carries nothing.**
+  The notification stays in the durable queue, which a fresh session's start digest presents, and the send asks for no fresh context, so if his message and the notification race, the first starts the fresh session and the second continues it.
+- **Upstream decides what a wake is.**
+  The wrapper reads upstream's own ledger entry for that run: only an exit 2 that upstream recorded as a wake, under its own process, is rerouted.
+  A failure notice, an alarm, or an interruption always passes through.
+- **Any failure is today's behaviour.**
+  No credential, T3 Code unreachable, a refused or expired credential, or a delivery T3 Code cannot confirm, and the wrapper delivers upstream's wake exactly as before.
+
+What is left alone: upstream's hook itself, its StopFailure registration, and every session outside a T3 Code thread.
+The size floor follows his call to clear only a session that has grown, since a small one reloads for about the price of a fresh start.
+This half ships after the T3 Code fork's rule is installed; before it, the message would only reach the old session.
+
+The evidence is a new suite, `tests/fm-claude-stop-cold-reroute.test.sh`, on made-up transcripts and a fake T3 Code server: a cold, large wake is one operational doorbell and no wake; a warm session, a session of exactly 100k, a session outside T3 Code, a session without the lock, a failure notice, and another process's ledger entry each pass through unchanged; six kinds of failed send, and a record that cannot be written, fall back to the wake; a signalled wrapper waits for upstream's outcome and never reroutes; and the real upstream hook's recorded wake is rerouted when cold and passed through when warm.
+The neighbouring suites, upstream's Stop hook, the turn-end guard, the stow guard, the host mirror, and the `/clear` swap, still pass.
+
+## 58. A nightly check watches every clear (15 November 2026)
+
+The design review behind the cold clears recommended measuring them before clearing any more often, and on its six calls he answered:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+This entry is that measurement.
+What a morning briefing gets when a clear may have hurt, from a test week of made-up sessions:
+
+```
+## Clear check
+
+- **Clear check:** 4 of 5 clears in the last day showed a sign of harm: after the cold start from a notification at Mon 06:00, a decision you had answered was asked again (dec-a) and a task was dispatched twice (task-x) and a notification was left unacknowledged across the clear and FirstMate was not back at the helm for 10 minutes; after your /clear at Mon 09:30, your first message was short and quoted nothing and you used a recall phrase ("earlier", "we discussed"); after the cold start from your message at Mon 14:00, you quoted the previous session; and 1 more. Details: data/clear-watch/2026-11-17.md
+```
+
+What was built:
+
+- **A script with no model call.**
+  `bin/fm-clear-watch.sh` reads FirstMate's own Claude transcripts, picks out the main sessions (the supervision host's are skipped), and treats each one that follows another as a clear.
+- **Each clear's cause and saving.**
+  A session that began with an operational-input doorbell, the form the cold reroute rings in, is a cold start from a notification; one that began with T3's restart note is a T3 restart; one whose predecessor sat idle over an hour above 100k is a cold start from his message; anything else is his `/clear`.
+  The saving is the old context minus a fresh session's 71k.
+- **Signs of harm, from the new session's first hour.**
+  A bare short first message, a recall phrase, a quote of a reply the new session never wrote, a decision held again after the old session answered it, a task dispatched again, a notification shown and never acknowledged across the clear, and, after an automatic clear, no lock taken within five minutes.
+  Only successful commands count, and no message text is ever written out.
+- **Quiet unless something shows.**
+  The full listing goes to a dated file in the home; the morning briefing gets one line only when a sign shows, plus a weekly total on Mondays.
+
+Choices made along the way:
+
+- The day ends an hour before the run, so every clear is judged once, with its whole first hour.
+- A quote is matched by the quoted reply's message id, which T3 Code puts in every quote, so a quote of the new session's own reply never counts.
+- "You said" was left off the recall phrases: in a fresh session it usually means the reply just given.
+- A `/clear` he arms on a cold, large session reads as a cold start; either way the context was dropped.
+
+Run read-only over the real past week, it found 16 clears; the signs were mostly his quotes of the previous session after his own `/clear`, which is the gap the next stage, carrying the last exchange into a fresh session, closes.
+Real fresh sessions took the lock in 4 to 62 seconds, with one at 23 minutes, so five minutes separates a slow start from a stuck one.
+
+The evidence is a new suite, `tests/fm-clear-watch.test.sh`, on a made-up week with one clear of each cause and each sign planted once: every clear is listed with its cause and saving, each sign is found and nothing else, the supervision host is ignored, a clear in the last hour waits for the next run, an existing briefing is kept, a rerun adds nothing, a quiet day leaves the briefing alone, and a Monday adds the weekly total.
+
+## 59. A fresh session starts with the last exchange (15 November 2026)
+
+The second of the small follow-ups the cold-clearing review recommended, approved with the rest:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+A clear, automatic or his own `/clear`, starts FirstMate with no earlier context.
+One of last week's four cold returns was a short message after five hours, and a bare "yes" in a fresh session has no question beside it.
+
+Upstream already records his prompts and FirstMate's final replies on disk for its supervision host.
+A fresh session's start digest now prints the newest of them from the session before, in a section of its own (made-up text):
+
+```
+================================================================================
+LAST EXCHANGE
+================================================================================
+The dialog from the session before this one, as the dialog mirror recorded it:
+the captain's prompts and FirstMate's final replies, never worker or tool output.
+These turns were already handled. They are context for reading the captain's
+next message, which may answer the last question below, and never a new request.
+
+Recorded up to 2026-11-15T09:12:00Z: the last 2 entries of the session before this one.
+[captain] is the calendar fix ready?
+[main] Captain, the calendar fix is ready. Merge it?
+```
+
+The choices:
+
+- **Bounded.** At most six entries and 6,000 characters, about 1,500 tokens, newest kept; when only part of the oldest one fits, its head and tail are kept and the cut is marked.
+- **Only into a fresh session.** A compaction carries nothing, since its own summary keeps the conversation, and neither does a session that already has dialog of its own, so nothing older is mixed in.
+- **Only the session just before.** An older session's dialog is never carried, and the opening line says when the newest entry was recorded, so a five-hour gap is visible.
+- **Nothing when there is nothing.** No record, an unreadable or invalid record, no earlier session, or a session that does not hold the fleet lock, and the section is left out.
+- **One owner.** The mirror script owns the reading and its bound; session start only prints what it returns, after the network checks and before curated memory.
+
+The evidence is the touched suites on made-up records: the mirror suite gains cases for carrying the previous session's exchange and nothing older, the six-entry and 6,000-character bound with a cut entry, and missing, invalid, and unowned records; the session-start suite gains a case for the section's presence, placement, and absence.
+Both suites pass.

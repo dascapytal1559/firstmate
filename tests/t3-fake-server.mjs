@@ -85,6 +85,10 @@
 //   - a T3 with the Bridge's model routing table (world routingTool, the T3
 //     Code fork) offers t3_routing_set, which does the same with world
 //     modelRouting and answers {modelRouting} (world routingAnswer instead).
+//   - t3_thread_configure with modelSelection records it as the thread's
+//     binding (provider instance, model, and options) and answers
+//     {sequence}, as T3's model change does; world moveBinds overrides what
+//     it records.
 //   - t3_thread_organize serves archive alone, the one action the helper
 //     sends, and refuses any other.
 //   - every prompt a launch or send makes is a user_message item carrying
@@ -521,8 +525,16 @@ async function callTool(w, name, a) {
         t.coordinator = a.coordinator;
         return [ok({ threadId: t.threadId, coordinator: t.coordinator }), true];
       }
-      if (a.modelSelection !== undefined) return [err("unsupported", "the fake serves only the configuration read"), false];
       if (!t) return [notFound(a.threadId), false];
+      if (a.modelSelection !== undefined) {
+        // T3's model change: the thread's next turn runs on this selection.
+        // World moveBinds overrides what it records.
+        const sel = { ...a.modelSelection, ...(w.moveBinds ?? {}) };
+        t.modelSelection = sel;
+        t.providerInstanceId = sel.instanceId;
+        t.model = sel.model;
+        return [ok({ sequence: 1 }), true];
+      }
       const modelSelection = t.modelSelection ?? { instanceId: t.providerInstanceId, model: t.model };
       const facts = w.threadFacts
         ? { environment: t.environment ?? {}, instructions: t.instructions ?? null, effectiveRuntimeMode: w.bindEffectiveRuntimeMode ?? t.runtimeMode }
