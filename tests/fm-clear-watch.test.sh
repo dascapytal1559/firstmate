@@ -59,7 +59,10 @@ quote() {  # <session> <minute> <quoted-message-id>
 [{\"id\":\"assistant-quote-1\",\"citation\":{\"messageId\":\"message:provider:claudeAgent:native-item:$3%3Atext%3A0\",\"text\":\"An earlier reply.\",\"comment\":\"do this\"}}]
 </assistant_citations>"
 }
-REROUTE='A firstmate supervision wake is waiting in the durable wake queue. It was rung through T3 Code instead of waking the session in place, because the session sat idle past its prompt-cache lifetime.'
+# The cold reroute rings its wake as the operational-input owner's doorbell.
+mkdir -p "$TMP_ROOT/home/state"
+REROUTE=$(printf 'A supervision wake is waiting.' | FM_HOME="$TMP_ROOT/home" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+  || fail "the operational-input owner could not write a doorbell"
 ACK_REQUIRED() { printf 'queue presented\nWAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through %s --recovery-generation 1.2.x\n' "$1"; }
 
 # s0, Monday 00:00 (before the day): answers dec-a, dispatches task-x, is shown

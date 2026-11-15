@@ -134,8 +134,13 @@ assert_passed_through() {  # <home> <expected-rc> <expected-stderr-file> <why>
   cmp -s "$1/err" "$3" || fail "$4: stderr was not passed through byte for byte: $(cat "$1/err")"
 }
 
+# The record path an operational doorbell names, per bin/fm-operational-input.sh.
+doorbell_record() {  # <message>
+  printf '%s' "$1" | sed -n "s/^: Firstmate operational input waiting: read '\\(.*\\)' and handle its contents as Firstmate operational input\\.\$/\\1/p"
+}
+
 test_cold_large_wake_is_rung_through_t3() {
-  local args
+  local args message record body
   make_case cold-large wake 4000 250000
   run_wrapper "$HOME_DIR" "$WRAPPER"
   expect_code 0 "$RC" "a cold, large wake must not wake the session in place"
@@ -146,9 +151,25 @@ test_cold_large_wake_is_rung_through_t3() {
   [ "$(printf '%s' "$args" | jq -r .threadId)" = "$THREAD" ] || fail "the send must go to FirstMate's own thread: $args"
   [ "$(printf '%s' "$args" | jq -r .mode)" = auto ] || fail "the send must start the thread's next turn: $args"
   [ "$(printf '%s' "$args" | jq -r 'has("freshContext")')" = false ] || fail "the send must not ask for fresh context: $args"
-  assert_contains "$(printf '%s' "$args" | jq -r .message)" "bin/fm-wake-drain.sh" "the message must point at the durable queue"
-  assert_not_contains "$(printf '%s' "$args" | jq -r .message)" "signal: fixture" "the message must carry no notification"
-  pass "cold-reroute: a wake of a cold session over 100k is one plain T3 message and no wake"
+  message=$(printf '%s' "$args" | jq -r .message)
+  [ "$(printf '%s' "$message" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = watcher ] \
+    || fail "the message must be an operational-input doorbell of the watcher kind: $message"
+  record=$(doorbell_record "$message")
+  [ -n "$record" ] || fail "the doorbell names no record: $message"
+  body=$(FM_HOME="$HOME_DIR" "$ROOT/bin/fm-operational-input.sh" open "$record") \
+    || fail "the doorbell's record must sit in this home's own operational inbox: $record"
+  assert_contains "$body" "bin/fm-wake-drain.sh" "the message must point at the durable queue"
+  assert_not_contains "$body" "signal: fixture" "the message must carry no notification"
+  pass "cold-reroute: a wake of a cold session over 100k is one T3 operational doorbell and no wake"
+}
+
+test_unwritable_record_falls_back_to_the_wake() {
+  make_case no-inbox wake 4000 250000
+  : > "$HOME_DIR/state/operational-inbox"
+  run_wrapper "$HOME_DIR" "$WRAPPER"
+  assert_passed_through "$HOME_DIR" 2 "$WAKE_ERR" "a record that cannot be written"
+  [ "$(send_count)" = 0 ] || fail "a doorbell without its record must never be sent"
+  pass "cold-reroute: a record that cannot be written falls back to upstream's wake"
 }
 
 test_warm_session_passes_through() {
@@ -358,6 +379,7 @@ fm_test_run \
   test_failure_exit_passes_through \
   test_ledger_of_another_process_passes_through \
   test_send_failures_fall_back_to_the_wake \
+  test_unwritable_record_falls_back_to_the_wake \
   test_signalled_wrapper_waits_and_passes_through \
   test_arguments_go_to_upstream_and_help_is_its_own \
   test_real_upstream_wake_is_rerouted

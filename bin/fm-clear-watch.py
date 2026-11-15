@@ -20,7 +20,7 @@ What it reads
   line saying so. A transcript is a main FirstMate session when its first
   prompt is not the supervision host's (MAIN DIALOG MIRROR, FIRSTMATE
   SUPERVISION WAKE) and it printed the session-start digest, or it began with
-  the cold-reroute message, or it never got a model reply (a fresh session that
+  an operational-input doorbell, or it never got a model reply (a fresh session that
   failed to start). Main sessions are ordered by their first entry; each one
   that follows another is one clear.
 
@@ -30,8 +30,9 @@ The day
   hour, so each clear is judged once, by the run after its hour ends.
 
 Each clear's cause
-  - a cold start from a notification: the new session began with the message
-    bin/fm-claude-stop-cold-reroute.sh sends;
+  - a cold start from a notification: the new session began with an
+    operational-input doorbell (bin/fm-operational-input.sh), the form in
+    which bin/fm-claude-stop-cold-reroute.sh rings a wake;
   - a fresh start after a T3 restart: it began with T3's restart note;
   - a cold start from a message: the old session's last request was more than
     an hour (the prompt-cache lifetime) before the new session, and its context
@@ -91,15 +92,15 @@ SHORT_CHARS = 60
 LOAD_MARGIN_SECONDS = 3 * 86400
 
 HOST_PREFIXES = ("MAIN DIALOG MIRROR", "FIRSTMATE SUPERVISION WAKE")
-# The opening of the message bin/fm-claude-stop-cold-reroute.sh sends.
-REROUTE_PREFIX = "A firstmate supervision wake is waiting in the durable wake queue."
+# The opening of bin/fm-operational-input.sh's record-backed doorbell, which
+# bin/fm-claude-stop-cold-reroute.sh sends.
+DOORBELL_PREFIX = ": Firstmate operational input waiting: read '"
 RESTART_PREFIX = "The T3 server restarted"
 # Prompts that are not his words.
 NOT_CAPTAIN_PREFIXES = HOST_PREFIXES + (
-    REROUTE_PREFIX,
+    DOORBELL_PREFIX,
     RESTART_PREFIX,
     "<task-notification",
-    ": Firstmate operational",
     "<command-",
     "<local-command",
     "Continue where you left",
@@ -207,7 +208,7 @@ class Session:
         first = self.first_prompt
         if first.startswith(HOST_PREFIXES):
             return False
-        return self.digest or first.startswith(REROUTE_PREFIX) or (not self.calls and bool(self.prompts))
+        return self.digest or first.startswith(DOORBELL_PREFIX) or (not self.calls and bool(self.prompts))
 
 
 def load_session(path):
@@ -312,7 +313,7 @@ def judge(old, new):
     before = [c for c in old.calls if c[0] < start]
     last_t, old_ctx = before[-1] if before else (None, 0)
     first = new.first_prompt
-    if first.startswith(REROUTE_PREFIX):
+    if first.startswith(DOORBELL_PREFIX):
         cause = "notification"
     elif first.startswith(RESTART_PREFIX):
         cause = "restart"

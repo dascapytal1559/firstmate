@@ -9,10 +9,19 @@
 # Every outcome passes through byte for byte - the upstream hook's exit status
 # and its stderr - except one: the upstream hook is about to wake this session
 # for a supervision event, and waking it would re-send a context whose prompt
-# cache has expired. Then this wrapper sends one plain message to FirstMate's
-# own T3 Code thread instead and exits 0, so the session is not woken in place.
-# The T3 Code fork starts that message's turn in a fresh session when the
-# thread is cold (FORK.md "A notification never reloads a cold session").
+# cache has expired. Then this wrapper sends one message to FirstMate's own T3
+# Code thread instead and exits 0, so the session is not woken in place. The
+# T3 Code fork starts that message's turn in a fresh session when the thread is
+# cold (FORK.md "A notification never reloads a cold session").
+#
+# The message is Firstmate operational input of the watcher kind, carried as
+# the record-backed doorbell of bin/fm-operational-input.sh (Claude strips the
+# typed envelope's invisible marker): the record in this home's
+# state/operational-inbox holds the envelope, and T3 Code delivers only the
+# doorbell naming it. So everything that tells the captain's words from fleet
+# machinery reads it as machinery: the away-mode return rule
+# (.agents/skills/afk/SKILL.md), the dialog mirror's writer
+# (bin/fm-host-mirror.sh), and the nightly clear check (bin/fm-clear-watch.py).
 #
 # The reroute happens only when all of these hold:
 #   - the upstream hook exited 2, and its own ledger entry
@@ -35,8 +44,9 @@
 # fresh. If his message and this one race, the first starts the fresh session
 # and the second continues it.
 #
-# Any failure of the send - no credential, T3 unreachable, a refused or
-# expired credential, an unconfirmed delivery - falls back to the upstream
+# Any failure of the send - no credential, a record that cannot be written, T3
+# unreachable, a refused or expired credential, an unconfirmed delivery - falls
+# back to the upstream
 # outcome: its stderr and exit 2, exactly as without this wrapper. A doubled
 # delivery after an unconfirmed send is harmless, because handling a wake is
 # repeatable.
@@ -59,8 +69,9 @@ Usage: fm-claude-stop-cold-reroute.sh
 Claude Stop hook registered in .claude/settings.json; not for manual use.
 It runs bin/fm-claude-stop-autoarm.sh on the same payload and passes its
 outcome through, except that a wake of a T3 Code session idle past its
-prompt-cache lifetime is sent as one message to FirstMate's own T3 Code
-thread instead (exit 0). Any failure of that send falls back to the wake.
+prompt-cache lifetime is sent as one operational-input doorbell to
+FirstMate's own T3 Code thread instead (exit 0). Any failure of that send
+falls back to the wake.
 EOF
 }
 
@@ -116,6 +127,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 # shellcheck source=bin/fm-warm-compact-lib.sh
 . "$SCRIPT_DIR/fm-warm-compact-lib.sh"
+# shellcheck source=bin/fm-operational-input.sh
+. "$SCRIPT_DIR/fm-operational-input.sh"
 
 fm_autoarm_ledger_read "$STATE" || pass_through
 [ "$FM_AUTOARM_OUTCOME" = rewake ] && [ "$FM_AUTOARM_OWNER" = "$CHILD" ] || pass_through
@@ -142,8 +155,10 @@ case "$TOKENS" in ''|*[!0-9]*) pass_through ;; esac
 . "$SCRIPT_DIR/fm-backend.sh"
 fm_backend_source t3code >/dev/null 2>&1 || pass_through
 unset FM_T3CODE_CAUSED_BY FM_T3CODE_CLIENT_REQUEST_ID
-MESSAGE='A firstmate supervision wake is waiting in the durable wake queue. It was rung through T3 Code instead of waking the session in place, because the session sat idle past its prompt-cache lifetime.
+BODY='A firstmate supervision wake is waiting in the durable wake queue. It was rung through T3 Code instead of waking the session in place, because the session sat idle past its prompt-cache lifetime.
 In a session that has just started, the session-start digest already presents the queue. Otherwise run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command.
 The Stop hook owns watcher continuity: the next turn end arms supervision, so do NOT run bin/fm-watch-arm.sh.'
-fm_backend_t3code_turn_start "$THREAD" "$MESSAGE" >/dev/null 2>&1 || pass_through
+DOORBELL=
+fm_operational_record_write "$STATE" watcher "$BODY" DOORBELL || pass_through
+fm_backend_t3code_turn_start "$THREAD" "$DOORBELL" >/dev/null 2>&1 || pass_through
 exit 0

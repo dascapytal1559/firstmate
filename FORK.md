@@ -203,6 +203,7 @@ Any failure falls back to upstream's wake, and outside a T3 Code thread nothing 
 Approved by the captain on 2026-11-15.
 Only a session over 100k tokens is rung this way, since a small one reloads for about the price of a fresh start.
 The message carries no notification itself: the notification stays queued, and the fresh session's start digest presents it.
+It travels as Firstmate operational input, a doorbell naming a record in this home's inbox, so the away-mode return rule, the dialog mirror, and the nightly clear check never take it for the captain's words.
 Upstream's Stop hook is unchanged; the fork wraps it, and its StopFailure registration still runs it directly.
 It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; without that rule the message only reaches the old session.
 Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).

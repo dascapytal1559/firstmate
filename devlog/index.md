@@ -1546,7 +1546,7 @@ What was built:
   `bin/fm-claude-stop-cold-reroute.sh` is now the Stop hook in `.claude/settings.json`.
   It runs upstream's hook unchanged on the same payload and passes every outcome through byte for byte, except one.
 - **The one outcome it changes.**
-  When upstream's hook is about to wake the session for a supervision event, the session runs in a T3 Code thread and holds the session lock, its last request is more than an hour old, and its context is over 100k tokens, the wrapper sends one plain message to FirstMate's own thread instead.
+  When upstream's hook is about to wake the session for a supervision event, the session runs in a T3 Code thread and holds the session lock, its last request is more than an hour old, and its context is over 100k tokens, the wrapper sends one message to FirstMate's own thread instead, as an operational-input doorbell naming a record in this home's inbox, so nothing takes it for the captain's words.
   The T3 Code fork's rule then starts that turn in a fresh session.
 - **The message carries nothing.**
   The notification stays in the durable queue, which a fresh session's start digest presents, and the send asks for no fresh context, so if his message and the notification race, the first starts the fresh session and the second continues it.
@@ -1560,7 +1560,7 @@ What is left alone: upstream's hook itself, its StopFailure registration, and ev
 The size floor follows his call to clear only a session that has grown, since a small one reloads for about the price of a fresh start.
 This half ships after the T3 Code fork's rule is installed; before it, the message would only reach the old session.
 
-The evidence is a new suite, `tests/fm-claude-stop-cold-reroute.test.sh`, on made-up transcripts and a fake T3 Code server: a cold, large wake is one plain message and no wake; a warm session, a session of exactly 100k, a session outside T3 Code, a session without the lock, a failure notice, and another process's ledger entry each pass through unchanged; six kinds of failed send fall back to the wake; a signalled wrapper waits for upstream's outcome and never reroutes; and the real upstream hook's recorded wake is rerouted when cold and passed through when warm.
+The evidence is a new suite, `tests/fm-claude-stop-cold-reroute.test.sh`, on made-up transcripts and a fake T3 Code server: a cold, large wake is one operational doorbell and no wake; a warm session, a session of exactly 100k, a session outside T3 Code, a session without the lock, a failure notice, and another process's ledger entry each pass through unchanged; six kinds of failed send, and a record that cannot be written, fall back to the wake; a signalled wrapper waits for upstream's outcome and never reroutes; and the real upstream hook's recorded wake is rerouted when cold and passed through when warm.
 The neighbouring suites, upstream's Stop hook, the turn-end guard, the stow guard, the host mirror, and the `/clear` swap, still pass.
 
 ## 58. A nightly check watches every clear (15 November 2026)

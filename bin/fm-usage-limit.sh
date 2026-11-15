@@ -3,7 +3,6 @@
 # Usage:
 #   fm-usage-limit.sh move <task-id> --instance <instance-id>
 #   fm-usage-limit.sh resume <instance-id>
-#   fm-usage-limit.sh list
 #
 # move: carry out firstmate's move of a stopped worker to another account, at
 #   once. It rebinds the task's T3 thread to provider instance <instance-id>
@@ -19,8 +18,6 @@
 #   ring every worker whose record says it is stopped on that account (not
 #   moved since) and whose thread still reads failed, through the ordinary
 #   steer, and note resumed_at. Nothing detects a reset on its own.
-# list: one line per usage-limit record in this home: task, account, window,
-#   reset (UTC), and where it was moved, or that it was resumed.
 #
 # Needs an explicit FM_HOME, as bin/fm-send.sh does. Exit 0 when everything
 # asked was done; 1 when a move, record, or steer failed (each says which);
@@ -31,12 +28,12 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
 [ "$#" -ge 1 ] || usage
-case "$1" in -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; esac
+case "$1" in -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; esac
 if [ -z "${FM_HOME:-}" ]; then
   echo "error: FM_HOME is not set; fm-usage-limit refuses to act without an explicit firstmate home" >&2
   exit 2
@@ -131,30 +128,10 @@ cmd_resume() {
   return "$failed"
 }
 
-cmd_list() {
-  local rec id moved state
-  [ "$#" -eq 0 ] || usage
-  for rec in "$STATE"/*.usage-limit; do
-    [ -f "$rec" ] || continue
-    id=$(basename "$rec" .usage-limit)
-    moved=$(fm_usage_limit_get "$rec" moved_to)
-    if [ -n "$moved" ]; then
-      state="moved_to=$moved"
-    elif [ -n "$(fm_usage_limit_get "$rec" resumed_at)" ]; then
-      state=resumed
-    else
-      state=stopped
-    fi
-    printf '%s\taccount=%s\twindow=%s\tresets=%s\t%s\n' "$id" "$(fm_usage_limit_get "$rec" instance)" \
-      "$(fm_usage_limit_get "$rec" window)" "$(fm_usage_limit_reset_text "$(fm_usage_limit_get "$rec" reset)")" "$state"
-  done
-}
-
 sub=$1
 shift
 case "$sub" in
   move) cmd_move "$@" ;;
   resume) cmd_resume "$@" ;;
-  list) cmd_list "$@" ;;
   *) usage ;;
 esac

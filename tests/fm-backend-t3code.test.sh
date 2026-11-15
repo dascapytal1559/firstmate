@@ -1875,7 +1875,6 @@ test_usage_limit_move() {
   [ "$configure" -gt 0 ] && [ "$send" -gt "$configure" ] || fail "configure must come before the message (configure line $configure, send line $send)"
   assert_contains "$(t3_fake_calls t3_thread_send)" "Firstmate instruction waiting" "the continuation goes through the ordinary steer"
   assert_contains "$(cat "$CTRL_STATE/$id.usage-limit")" "moved_to=claudeAgent_2" "the move is recorded"
-  assert_contains "$(run_usage_limit list)" "moved_to=claudeAgent_2" "list shows the move"
   pass "fm-usage-limit.sh move: catalog-checked, configured before the message, read back, recorded, then steered; refusals move and send nothing"
 }
 

@@ -182,6 +182,29 @@ test_operational_foreign_and_unowned_input_is_dropped() {
   pass "mirror: operational input, a harness-started turn, a foreign host's payload, other events, and a session without the lock are never mirrored"
 }
 
+# A record-backed operational doorbell (bin/fm-operational-input.sh record),
+# which a harness that strips the typed marker receives instead of the envelope,
+# is fleet machinery when its record sits in this home's own inbox; the doorbell
+# shape alone proves nothing, so one naming another home's record is dialog.
+test_this_homes_operational_doorbell_is_dropped() {
+  local home other ours theirs
+  home=$(make_home doorbell)
+  other=$(make_home doorbell-other)
+  ours=$(printf 'A supervision wake is waiting.' | FM_HOME="$home" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+    || fail "this home's doorbell could not be written"
+  theirs=$(printf 'A supervision wake is waiting.' | FM_HOME="$other" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+    || fail "the other home's doorbell could not be written"
+  OURS=$ours THEIRS=$theirs as_session "$home" "$SAY"'
+    say captain "$OURS" p1
+    say captain "$THEIRS" p2
+    say captain "kept" p3
+  ' || fail "a writer failed"
+  assert_equals "captain|$theirs
+captain|kept" "$(entries "$home")" \
+    "only a doorbell whose record sits in this home's inbox may be dropped as operational input"
+  pass "mirror: this home's operational doorbell is never mirrored as the captain's words"
+}
+
 # Dialog is recorded as said: a line ending in spaces, blank lines, and
 # indentation inside a message survive, and only the whitespace at the very
 # end of the message is trimmed.
@@ -654,6 +677,7 @@ test_only_proven_writers_are_verified
 test_home_that_opted_out_is_untouched
 test_home_without_the_file_mirrors_only_claude
 test_operational_foreign_and_unowned_input_is_dropped
+test_this_homes_operational_doorbell_is_dropped
 test_internal_whitespace_is_recorded_verbatim
 test_entries_are_deduplicated_and_capped
 test_a_different_reply_under_the_same_id_is_recorded

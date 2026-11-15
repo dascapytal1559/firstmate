@@ -414,7 +414,6 @@ A check wake is never the supervision session's while the captain is present, so
   It reads the binding back before it records the move in the task's record, then sends the continuation through the ordinary steer.
   Choosing the instance stays firstmate's, under the captain's account rules; a moved worker stays on its new instance.
 - `resume <instance>` rings every worker recorded as stopped on that instance and not moved since, for an account the captain says was reset early; no reset is detected automatically.
-- `list` shows every record.
 
 Configure first and message second matters: a message to the old binding restarts the run on the exhausted account.
 Between Claude instances with separate logins, T3 starts a new provider session and hands the conversation over as a trimmed selection, without the old session's reasoning.
