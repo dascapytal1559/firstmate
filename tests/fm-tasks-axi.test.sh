@@ -273,10 +273,28 @@ test_wrapper_single_home() {
   pass "fm-tasks-axi.sh keeps the single-home layout addressing its own code-root backlog"
 }
 
+test_wrapper_records_the_queueing_cause() {
+  local dir cause='{"threadId":"fm","runId":"run-1","messageId":"msg-1"}' out
+  dir=$(make_split queued-cause)
+  out=$(FM_T3CODE_CAUSED_BY="$cause" wrapper_from_code "$dir" add cause-1 "queued from a turn") || fail "add with a cause failed"
+  assert_contains "$out" "ok: added cause-1" "the add's own output is passed through"
+  assert_equals "$cause" "$(cat "$dir/home/state/cause-1.queued-cause")" "the item keeps the prompt that queued it"
+  FM_T3CODE_CAUSED_BY="$cause" wrapper_from_code "$dir" add "minted item" --mint --json >/dev/null || fail "a minted JSON add failed"
+  [ -n "$(find "$dir/home/state" -name 'minted-item-*.queued-cause' -print -quit)" ] || fail "a minted id read from JSON output keeps its cause"
+  wrapper_from_code "$dir" add cause-2 "queued with no cause" >/dev/null || fail "add without a cause failed"
+  [ ! -e "$dir/home/state/cause-2.queued-cause" ] || fail "an add outside any T3 turn records nothing"
+  FM_T3CODE_CAUSED_BY='{"bad":1}' wrapper_from_code "$dir" add cause-3 "malformed cause" >/dev/null || fail "a malformed cause must never fail the add"
+  [ ! -e "$dir/home/state/cause-3.queued-cause" ] || fail "a malformed cause records nothing"
+  wrapper_from_code "$dir" rm cause-1 >/dev/null || fail "rm failed"
+  [ ! -e "$dir/home/state/cause-1.queued-cause" ] || fail "rm drops the item's cause"
+  pass "fm-tasks-axi.sh add keeps the prompt that queued an item, and rm drops it"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
 if [ "$HAVE_TASKS_AXI" = 1 ]; then
+  test_wrapper_records_the_queueing_cause
   test_bare_tasks_axi_fork_is_detected
   test_wrapper_writes_through_to_home
   test_wrapper_overrides_ambient_file

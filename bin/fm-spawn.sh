@@ -760,7 +760,9 @@
 # (FM_T3CODE_CAUSED_BY overrides; a malformed value refuses before anything is
 # leased), is recorded as caused_by=<cause-json> and, on the t3code backend,
 # sent as causedBy on the worker's launch and its brief. A relaunch keeps the
-# recorded cause unless FM_T3CODE_CAUSED_BY is set. No cause writes no line.
+# recorded cause unless FM_T3CODE_CAUSED_BY is set; a first launch of a
+# backlog item queued with a cause (state/<id>.queued-cause) sends that one,
+# and a successful spawn drops that record. No cause writes no line.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -2227,6 +2229,9 @@ fm_task_id_creation_valid "$ID" || {
 # the prompt of whatever turn relaunches it.
 if [ "$RELAUNCH" -eq 1 ] && [ -z "${FM_T3CODE_CAUSED_BY:-}" ]; then
   SPAWN_CAUSE=$(fm_meta_get "$STATE/$ID.meta" caused_by)
+elif [ -z "${FM_T3CODE_CAUSED_BY:-}" ] && SPAWN_CAUSE=$(fm_t3_cause_queued "$STATE" "$ID") && [ -n "$SPAWN_CAUSE" ]; then
+  # The request that queued this backlog item, whatever turn launches it.
+  :
 else
   SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
 fi
@@ -8349,6 +8354,8 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+# The task record now holds the cause, so the queued item's record is done.
+fm_t3_cause_queue_forget "$STATE" "$ID"
 
 if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
   echo "error: the launch brief for $ID may already have been delivered to T3 thread $T: its outcome is unproven (a lost reply or a T3 error that can follow a commit). The task record is kept; inspect the thread in T3 Code, and if the brief is absent resend only the identical brief text, which reuses its request id within the hour" >&2

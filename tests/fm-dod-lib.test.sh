@@ -631,6 +631,24 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+# In a home that runs on T3 Code, a no-mistakes worker is told to claim each
+# run's usage for its task; elsewhere, and in every other mode, it is not.
+test_no_mistakes_dod_claims_pipeline_usage_on_t3() {
+  local home="$TMP_ROOT/claim-home" out
+  mkdir -p "$home/config"
+  out=$(FM_HOME="$home" CONFIG="$home/config" fm_dod_block no-mistakes claim-task)
+  assert_not_contains "$out" "fm-t3-usage-claim.sh" "a home without a T3 credential gets no claim step"
+  : > "$home/config/t3code-token"
+  out=$(FM_HOME="$home" CONFIG="$home/config" fm_dod_block no-mistakes claim-task)
+  assert_contains "$out" "FM_HOME='$home' '$ROOT/bin/fm-t3-usage-claim.sh' pipeline --task 'claim-task'" \
+    "a T3 home's no-mistakes worker claims each run for its task"
+  out=$(FM_HOME="$home" CONFIG="$home/config" fm_dod_block no-mistakes claim-task fm/claim-task none '' '' manual)
+  assert_contains "$out" "pipeline --task 'claim-task'" "the hand-written PR shape claims too"
+  out=$(FM_HOME="$home" CONFIG="$home/config" fm_dod_block direct-PR claim-task)
+  assert_not_contains "$out" "fm-t3-usage-claim.sh" "a mode without a pipeline has nothing to claim"
+  pass "a no-mistakes worker in a T3 home claims each pipeline run's usage for its task"
+}
+
 # A scout spawned on a named base keeps that base through promotion: the ship
 # instructions start from it and the PR targets it; local-only cannot carry it.
 test_promotion_keeps_the_recorded_base_branch() {
@@ -831,5 +849,7 @@ test_external_review_done_without_backup_is_accepted_on_the_url
 test_external_review_done_with_backup_needs_the_copy
 
 test_worker_role_names_skill_and_fallback_file
+
+test_no_mistakes_dod_claims_pipeline_usage_on_t3
 
 echo "all fm-dod-lib tests passed"

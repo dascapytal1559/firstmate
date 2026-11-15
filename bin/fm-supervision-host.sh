@@ -1016,6 +1016,25 @@ health_record() {  # <engine-error 0|1> <reports>
   health_save
 }
 
+# claim_engine_usage <tasks>: the engine's session runs outside T3, so T3's
+# Usage counts it to the woken task's cause (the first of <tasks>, space
+# separated) or, for a wake about no task, the computer, through
+# bin/fm-t3-usage-claim.sh session. Detached and best effort: the claim never
+# holds up or fails the turn. Claiming again replaces, so a resumed
+# conversation counts to its latest wake's task.
+claim_engine_usage() {  # <tasks>
+  local task
+  local -a args=(session "$ENGINE_SESSION")
+  [ "$FM_SUPERVISION_ENGINE" = claude ] && [ -n "$ENGINE_SESSION" ] || return 0
+  for task in $1; do args+=(--task "$task"); done
+  ( "$SCRIPT_DIR/fm-t3-usage-claim.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & )
+}
+
+# The tasks one turn recorded captain outcomes for, space separated.
+turn_captain_tasks() {  # <turn>
+  awk -F '\t' -v turn="$1" '$1 == turn && $3 == "captain" && !seen[$4]++ { printf "%s%s", sep, $4; sep = " " }' "$RECEIPTS" 2>/dev/null
+}
+
 # Handle one close on the engine, in the posture the record gives when the
 # turn starts (TURN_POSTURE). Returns 0 when the wake is handled (or held
 # nothing the branch may claim), 2 with ATTENDED_WHY set when the turn starts
@@ -1132,6 +1151,7 @@ handle_wake() {  # <reason-lines>
     "$SCRIPT_DIR/fm-wake-grant.sh" release "$GEN" >/dev/null 2>&1 || true
     boundary_exit
   fi
+  claim_engine_usage "$tasks"
   result=$(mktemp "$STATE/.supervision-host-result.XXXXXX") || result=/dev/null
   errors=$(mktemp "$STATE/.supervision-host-errors.XXXXXX") || errors=/dev/null
   TURN_RESULT=$result
@@ -1370,7 +1390,7 @@ while :; do
     CAPTAIN_SEQS=$(turn_captain_seqs "$LAST_TURN")
     if [ -n "$CAPTAIN_SEQS" ]; then
       ARM_TEXT=
-      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
+      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS, for $(turn_captain_tasks "$LAST_TURN")); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
         "$HEALTH_NOTE"
     fi
   fi

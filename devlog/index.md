@@ -1643,3 +1643,32 @@ The choices:
 
 The evidence is the touched suites on made-up records: the mirror suite gains cases for carrying the previous session's exchange and nothing older, the six-entry and 6,000-character bound with a cut entry, and missing, invalid, and unowned records; the session-start suite gains a case for the section's presence, placement, and absence.
 Both suites pass.
+
+## 60. Usage that had no recorded parent now names one (16 November 2026)
+
+T3's Usage page splits tokens between the phone and the computer by following each prompt's recorded cause.
+A day's investigation found a quarter of the last 24 hours with no recorded parent, almost all of it with a person behind it: FirstMate's own wake turns, workers launched from them, no-mistakes reviews run outside any T3 turn, and the supervision host's engine.
+T3 gained a way for an agent to claim such work; this change is FirstMate's side.
+
+The ask:
+
+> My intention is to arrive at nothing unknown in the past 24 hours. Only unknown would be prior to phone distinction which is I think November 12th or something
+>
+> (15 November 2026)
+
+On upkeep, such as recovering after a T3 restart: "Okay, both of these are desktop".
+On voice journals: "I would like jobs that originate from journal get labelled as phone".
+
+What was built:
+
+- **Wake turns.** The wake drain claims its turn for the worker the first wake is about, so the turn counts to the prompt behind that worker; a wake about no worker is upkeep and counts to the computer.
+  Turns no drain described, such as a background command finishing, are claimed for the computer afterwards.
+- **Launches from a wake.** A launch or steer from a wake turn names the wake itself as its cause, so the worker inherits whatever that turn was claimed for.
+- **Several prompts in one turn.** A launch names the latest prompt that arrived before it, instead of naming none.
+- **Pipelines and the engine.** A ship worker claims each no-mistakes run for its task, and the supervision host claims each engine conversation for the task it woke on.
+- **Restarts, recovery launches, journals.** A T3 restart names the latest landed task; a backlog item keeps the prompt that queued it, so a launch after a restart still names the request; the turn that files a voice journal claims the phone, and every worker it launches follows.
+
+Every claim is best effort: a claim that cannot be made is skipped or logged once, and nothing ever waits on its accounting.
+What stays Unknown by design: work before causes were recorded, a task launched without a cause until it ends, and work outside T3 that no claim covers.
+
+The evidence is the touched suites against the fake T3 server, never the live one: the T3 client gains cases for wake causes, the latest prompt, claims, and restart causes; a new claim suite covers each claim, the drain end to end, and failures; the restart, backlog, landing, and brief suites gain a case each.

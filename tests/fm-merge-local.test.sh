@@ -58,12 +58,16 @@ test_branch_advance_does_not_change_approval() {
   assert_refused
   # Re-reading the old done report must not silently approve Y.
   record_done >/dev/null 2>&1 && fail 'stale done report was rebound to Y'
+  [ ! -e "$HOME_DIR/state/t3-landed-cause" ] || fail 'a refused landing recorded a landed cause'
   git -C "$WT" reset -q --hard "$X"
+  printf 'caused_by={"threadId":"fm","messageId":"msg-1"}\n' >> "$META"
   land >/dev/null || fail 'approved X did not land'
   [ "$(git -C "$PROJ" rev-parse HEAD)" = "$X" ] || fail 'landing did not use X'
   [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'landing did not update the checkout'
   [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'landing left a dirty checkout'
-  pass 'branch advance refuses, and restoring the reported X lands exactly X'
+  assert_equals "$(printf 'local-task\t{"threadId":"fm","messageId":"msg-1"}')" "$(cut -f2- "$HOME_DIR/state/t3-landed-cause")" \
+    'the landing keeps its task cause as the latest landed cause, for a T3 restart to name'
+  pass 'branch advance refuses, and restoring the reported X lands exactly X and records its cause'
 }
 
 # Another task lands on main after X was approved, and the worker rebases X

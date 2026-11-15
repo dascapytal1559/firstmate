@@ -6,7 +6,8 @@
 # newer branch outcome, OPEN DECISIONS, captain-call record divergence, unread
 # review-board feedback (BOARD FEEDBACK), and on
 # a supervision-host home the supervision session's new and unprocessed
-# outcomes (BRANCH OUTCOMES), then assert liveness.
+# outcomes (BRANCH OUTCOMES), then, in a T3 turn, claim that turn's usage for
+# what it was about (claim_wake_usage), then assert liveness.
 #
 # Keep sequence-bound row consumption independent from generation-bound episode
 # retirement; docs/watcher-continuity.md owns the recovery contract.
@@ -51,6 +52,8 @@ ACK_FINGERPRINTS=
 ACK_NOTICE_FINGERPRINTS=
 PRESENTATION_LOCK_TIMEOUT=${FM_STATUS_PRESENTATION_LOCK_TIMEOUT:-10}
 BRANCH_OUTCOMES_RC=0
+# The tasks BRANCH OUTCOMES presented, oldest first, for claim_wake_usage.
+BRANCH_OUTCOME_TASKS=
 case "$PRESENTATION_LOCK_TIMEOUT" in ''|*[!0-9]*|0) PRESENTATION_LOCK_TIMEOUT=10 ;; esac
 
 # --- per-actor consume (docs/watcher-continuity.md "Per-actor acknowledgement") --
@@ -721,6 +724,7 @@ print_branch_outcomes_section() {
       continue
     fi
     captain_tasks[i]=$task
+    case " $BRANCH_OUTCOME_TASKS " in *" $task "*) ;; *) BRANCH_OUTCOME_TASKS="${BRANCH_OUTCOME_TASKS:+$BRANCH_OUTCOME_TASKS }$task" ;; esac
     captain_lines[i]=$OUTCOME_LINE
     captain_line_bytes[i]=$OUTCOME_LINE_BYTES
     [ "$i" -lt "$shown" ] || shown=$((shown + 1))
@@ -867,6 +871,48 @@ print_status_presentation() {  # [<deduped-raw-rows>]
   if [ "$rc" -eq 0 ] && [ -n "$snapshot" ]; then print_status_sections "$snapshot" "$fully_presented" || rc=1; fi
   fm_lock_release "$lock"
   return "$rc"
+}
+
+# claim_wake_usage [<deduped-raw-rows>]: tell T3's Usage what the wake turn
+# running this drain was about (bin/fm-t3-usage-claim.sh wake owns the claim
+# and its best-effort contract). The candidates, in presentation order, are
+# the task each row names - a status line's or stale worker's task, an
+# inactive outcome's child, a merge's, an open decision's, a usage limit's,
+# a relayed supervision outcome's - or the cause an inbox note recorded,
+# then the tasks BRANCH OUTCOMES presented. A row naming none of these is
+# upkeep. Only main in a T3 turn claims; the call is bounded and its outcome
+# never changes the drain's.
+claim_wake_usage() {
+  local rows=${1:-} kind key payload task cause note
+  local -a args=()
+  [ "$ACTOR" = main ] && [ -n "${T3CODE_THREAD_ID:-}" ] || return 0
+  while IFS=$'\t' read -r _ _ kind key payload; do
+    task=
+    cause=
+    case "$kind" in
+      signal) task=${key%.status} ;;
+      stale) task=$(window_to_task "$key" "$STATE" 2>/dev/null) || task= ;;
+      check)
+        case "$key" in
+          inactive-*) task=$(printf '%s\n' "$payload" | sed -n 's/.* child=\([^ ]*\).*/\1/p' | head -n 1) ;;
+          merged-*) task=$(printf '%s\n' "$payload" | sed -n 's/^check: merge landed: \([^ ]*\) .*/\1/p') ;;
+          open-decision:*|usage-limit:*) task=${key#*:}; task=${task%%:*} ;;
+          supervision-host-return:*) task=$(printf '%s\n' "$payload" | sed -n 's/^check: supervision-host outcome [0-9]* for \([^ ]*\) \[.*/\1/p') ;;
+          inbox:*)
+            note="$STATE/inbox/${key#inbox:}.note"
+            [ -f "$note" ] || note="$STATE/inbox/handled/${key#inbox:}.note"
+            [ ! -f "$note" ] || cause=$(sed -n '/^--$/q;s/^caused-by=//p' "$note" 2>/dev/null | head -n 1)
+            ;;
+        esac
+        ;;
+    esac
+    [ -z "$task" ] || args+=(--task "$task")
+    [ -z "$cause" ] || args+=(--caused-by "$cause")
+  done <<ROWS
+$rows
+ROWS
+  for task in $BRANCH_OUTCOME_TASKS; do args+=(--task "$task"); done
+  "$SCRIPT_DIR/fm-t3-usage-claim.sh" wake "${args[@]+"${args[@]}"}" </dev/null >/dev/null 2>&1 || true
 }
 
 # shellcheck disable=SC2317,SC2329 # Invoked by trap handlers below.
@@ -1063,6 +1109,7 @@ if [ ! -s "$FM_WAKE_QUEUE" ]; then
   if [ "$RECOVERY_ACK_REQUIRED" = true ]; then
     printf 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 0 --recovery-generation %s\n' "${RECOVERY_MARKER_TOKEN##*:}" >&2
   fi
+  claim_wake_usage
   assert_watcher_liveness
   exit "$BRANCH_OUTCOMES_RC"
 fi
@@ -1082,6 +1129,7 @@ if [ "$ACTOR" = main ]; then
     DRAIN_LOCK_HELD=false
     (print_status_presentation) || true
     print_branch_outcomes_section || BRANCH_OUTCOMES_RC=1
+    claim_wake_usage
     assert_watcher_liveness
     exit "$BRANCH_OUTCOMES_RC"
   fi
@@ -1145,5 +1193,6 @@ printf 'WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --a
 
 (print_status_presentation "$RAW_ROWS") || true
 print_branch_outcomes_section || BRANCH_OUTCOMES_RC=1
+claim_wake_usage "$RAW_ROWS"
 assert_watcher_liveness
 exit "$BRANCH_OUTCOMES_RC"

@@ -102,6 +102,15 @@
 //     stores the cause on a launched thread (world bindCause overrides what
 //     it stores) and on the prompt's item, and t3_thread_read reports both.
 //     Without it the argument is dropped.
+//   - every run names the message that started it as userMessageId, and a
+//     prompt item carries updatedAt (when it arrived); a world thread may
+//     hold a "notification" item, which T3 accepts as a cause like a prompt
+//     (a wake turn's starting message).
+//   - a T3 with usage claims (world usageClaims, the T3 Code fork) offers
+//     t3_usage_claim, checked as the fork's handler does and stored in world
+//     usageClaims (true or a map) keyed session:<id>, directory:<path>, or
+//     run:<thread>:<run>; world restartCause declares t3_restart_request's
+//     causedBy, checked like a launch's and stored on world restartRequest.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -155,7 +164,8 @@ const ALL_TOOLS = [
   "t3_pending_request", "orchestrator_capabilities", "t3_environment_read",
 ];
 const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [],
-  w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : []);
+  w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : [],
+  w.usageClaims ? ["t3_usage_claim"] : []);
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -172,6 +182,10 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "message", "mode", "freshContext", "clientRequestId",
       ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
+  }),
+  t3_restart_request: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "reason", ...(w.restartCause ? ["causedBy"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -302,13 +316,13 @@ function refreshThread(t) {
 // A prompt's timeline item: its message and run ids, and its cause when it
 // has one.
 const promptItem = (text, runId, messageId, causedBy) =>
-  ({ type: "user_message", status: "completed", text, runId, messageId, ...(causedBy ? { causedBy } : {}) });
+  ({ type: "user_message", status: "completed", text, runId, messageId, updatedAt: now(), ...(causedBy ? { causedBy } : {}) });
 
 function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefined) {
   const runId = `run:${randomUUID()}`;
   t.runs = t.runs ?? [];
   const ordinal = Math.max(0, ...byOrdinal(t).map((r, i, all) => r.ordinal ?? all.length - i)) + 1;
-  t.runs.unshift({ runId, ordinal, status: "running", requestedAt: now(), startedAt: now(), completedAt: null });
+  t.runs.unshift({ runId, userMessageId: messageId, ordinal, status: "running", requestedAt: now(), startedAt: now(), completedAt: null });
   t.activeRunId = runId;
   t.status = "running";
   t.latestRunId = runId;
@@ -321,7 +335,7 @@ function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefin
 function causeProblem(threads, c) {
   const t = threads[c.threadId];
   if (!t || t.deleted) return err("invalid_request", `causedBy: thread ${c.threadId} was not found.`);
-  const m = (t.items ?? []).find((it) => it.type === "user_message" && it.messageId === c.messageId);
+  const m = (t.items ?? []).find((it) => (it.type === "user_message" || it.type === "notification") && it.messageId === c.messageId);
   if (!m) return err("invalid_request", `causedBy: message ${c.messageId} is not a prompt in thread ${c.threadId}.`);
   if (c.runId !== undefined && m.runId !== c.runId) return err("invalid_request", `causedBy: message ${c.messageId} is not part of run ${c.runId}.`);
   return null;
@@ -412,8 +426,37 @@ async function callTool(w, name, a) {
     case "t3_restart_request": {
       const reason = typeof a.reason === "string" ? a.reason.trim() : "";
       if (!reason || reason.length > 500) return [err("invalid_params", "reason must be 1 to 500 characters"), false];
+      const cause = w.restartCause ? a.causedBy : undefined;
+      if (cause !== undefined) {
+        const problem = causeProblem(threads, cause);
+        if (problem) return [problem, false];
+      }
       w.restartRequest = w.restartRequest ? { ...w.restartRequest, reason } : { reason, requestedAt: new Date().toISOString() };
+      if (cause !== undefined) w.restartRequest.causedBy = cause;
       return [ok(w.restartAnswer ?? restartStatus(w, threads)), true];
+    }
+    case "t3_usage_claim": {
+      // The fork's handler: exactly one target, threadId only with runId, an
+      // absolute directory, and exactly one of causedBy (null removes) or
+      // device; claiming again replaces. Claims live in world usageClaims,
+      // keyed by target, and world usageClaimAnswer answers another value.
+      const targets = ["sessionId", "directory", "runId"].filter((k) => a[k] !== undefined);
+      if (targets.length !== 1) return [err("invalid_request", "Give exactly one of sessionId, directory or runId."), false];
+      if ((targets[0] === "runId") !== (a.threadId !== undefined)) return [err("invalid_request", "threadId goes with runId, and only with runId."), false];
+      if (a.directory !== undefined && !a.directory.startsWith("/")) return [err("invalid_request", "directory must be an absolute path."), false];
+      if ((a.causedBy === undefined) === (a.device === undefined) || (a.causedBy === null && a.device)) return [err("invalid_request", "Give exactly one of causedBy or device."), false];
+      if (a.device !== undefined && !["phone", "computer"].includes(a.device)) return [err("invalid_params", "device"), false];
+      if (a.runId !== undefined && !(t?.runs ?? []).some((r) => r.runId === a.runId)) return [err("invalid_request", `run ${a.runId} is not a run of thread ${a.threadId}.`), false];
+      if (a.causedBy) {
+        const problem = causeProblem(threads, a.causedBy);
+        if (problem) return [problem, false];
+      }
+      const key = a.sessionId !== undefined ? `session:${a.sessionId}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${a.runId}`;
+      w.usageClaims = typeof w.usageClaims === "object" && w.usageClaims !== null ? w.usageClaims : {};
+      if (a.causedBy === null) delete w.usageClaims[key];
+      else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : { causedBy: a.causedBy };
+      const target = a.sessionId !== undefined ? { sessionId: a.sessionId } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
+      return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null }), true];
     }
     case "t3_restart_cancel":
       w.restartRequest = null;
