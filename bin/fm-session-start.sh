@@ -64,6 +64,12 @@
 #                       can itself reach the digest's runtime bound.
 #   7. network checks - the result of the deferred network stage started back at
 #                       step 1, harvested WITHOUT waiting for it.
+#   7b. last exchange - the session before this one's newest dialog entries,
+#                       as bin/fm-host-mirror.sh `last` prints them (that
+#                       command owns when there are any and their bound), so
+#                       the captain's first message after a clear lands next
+#                       to what it answers. Absent when it prints nothing
+#                       and after a compaction, whose summary carries its own.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
 #                       data/captain-shared.md, data/learnings.md: read-only,
 #                       always safe, always runs.
@@ -71,7 +77,7 @@
 #                       script points back to the emitted harness supervision
 #                       block and deliberately never arms the watcher itself.
 #
-# Those ten names are also the runtime-bound stage list below, so a truncated
+# Those eleven names are also the runtime-bound stage list below, so a truncated
 # startup can name exactly which of them never ran - and the parent banners
 # EVERY nonzero child exit, not only the bound: a child that dies or is killed
 # mid-stage must never truncate the digest silently.
@@ -284,7 +290,7 @@ done
 # The ordered stage list is the contract behind the truncation banner: the child
 # names the stage it is entering, and the parent reports every stage at or after
 # that one as never emitted. Keep it in the exact order the digest prints.
-SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
+SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks last-exchange context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
@@ -942,8 +948,9 @@ section "READ-ONCE CONTRACT"
 cat <<'EOF'
 Everything below is printed in full for this session start: every state/*.meta,
 a compact data/backlog.md listing, a bounded tail of every state/*.status,
-data/projects.md, data/secondmates.md, data/captain.md, data/captain-shared.md,
-and data/learnings.md.
+the previous session's last exchange when one was recorded, data/projects.md,
+data/secondmates.md, data/captain.md, data/captain-shared.md, and
+data/learnings.md.
 Do NOT re-read any of them after reading this digest, and do NOT bulk-read
 data/backlog.md or state/*.status: re-reading everything defeats the entire
 point of this command.
@@ -1089,6 +1096,28 @@ if [ "$READ_ONLY" -eq 1 ]; then
   printf 'has no action they would gate. The session holding the lock runs them.\n'
 else
   "$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1 || true
+fi
+
+# --- 7b. last exchange ------------------------------------------------------
+# After the actionable sections and before curated memory: it is volatile, so
+# it outranks memory, but a truncated tail costs only one rerun of the command.
+# A compaction's own summary already carries its conversation, whatever
+# session id the harness keeps across it.
+stage last-exchange
+LAST_EXCHANGE=
+if [ "$SESSION_SOURCE" != compact ]; then
+  LAST_EXCHANGE=$("$SCRIPT_DIR/fm-host-mirror.sh" last 2>/dev/null) || LAST_EXCHANGE=
+fi
+if [ -n "$LAST_EXCHANGE" ]; then
+  section "LAST EXCHANGE"
+  cat <<'EOF'
+The dialog from the session before this one, as the dialog mirror recorded it:
+the captain's prompts and FirstMate's final replies, never worker or tool output.
+These turns were already handled. They are context for reading the captain's
+next message, which may answer the last question below, and never a new request.
+
+EOF
+  printf '%s\n' "$LAST_EXCHANGE"
 fi
 
 # --- 8. context digest -----------------------------------------------------

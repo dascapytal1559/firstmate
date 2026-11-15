@@ -1604,3 +1604,42 @@ Run read-only over the real past week, it found 16 clears; the signs were mostly
 Real fresh sessions took the lock in 4 to 62 seconds, with one at 23 minutes, so five minutes separates a slow start from a stuck one.
 
 The evidence is a new suite, `tests/fm-clear-watch.test.sh`, on a made-up week with one clear of each cause and each sign planted once: every clear is listed with its cause and saving, each sign is found and nothing else, the supervision host is ignored, a clear in the last hour waits for the next run, an existing briefing is kept, a rerun adds nothing, a quiet day leaves the briefing alone, and a Monday adds the weekly total.
+
+## 59. A fresh session starts with the last exchange (15 November 2026)
+
+The second of the small follow-ups the cold-clearing review recommended, approved with the rest:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+A clear, automatic or his own `/clear`, starts FirstMate with no earlier context.
+One of last week's four cold returns was a short message after five hours, and a bare "yes" in a fresh session has no question beside it.
+
+Upstream already records his prompts and FirstMate's final replies on disk for its supervision host.
+A fresh session's start digest now prints the newest of them from the session before, in a section of its own (made-up text):
+
+```
+================================================================================
+LAST EXCHANGE
+================================================================================
+The dialog from the session before this one, as the dialog mirror recorded it:
+the captain's prompts and FirstMate's final replies, never worker or tool output.
+These turns were already handled. They are context for reading the captain's
+next message, which may answer the last question below, and never a new request.
+
+Recorded up to 2026-11-15T09:12:00Z: the last 2 entries of the session before this one.
+[captain] is the calendar fix ready?
+[main] Captain, the calendar fix is ready. Merge it?
+```
+
+The choices:
+
+- **Bounded.** At most six entries and 6,000 characters, about 1,500 tokens, newest kept; when only part of the oldest one fits, its head and tail are kept and the cut is marked.
+- **Only into a fresh session.** A compaction carries nothing, since its own summary keeps the conversation, and neither does a session that already has dialog of its own, so nothing older is mixed in.
+- **Only the session just before.** An older session's dialog is never carried, and the opening line says when the newest entry was recorded, so a five-hour gap is visible.
+- **Nothing when there is nothing.** No record, an unreadable or invalid record, no earlier session, or a session that does not hold the fleet lock, and the section is left out.
+- **One owner.** The mirror script owns the reading and its bound; session start only prints what it returns, after the network checks and before curated memory.
+
+The evidence is the touched suites on made-up records: the mirror suite gains cases for carrying the previous session's exchange and nothing older, the six-entry and 6,000-character bound with a cut entry, and missing, invalid, and unowned records; the session-start suite gains a case for the section's presence, placement, and absence.
+Both suites pass.

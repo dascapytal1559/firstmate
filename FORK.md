@@ -217,6 +217,15 @@ Upstream has no equivalent, because upstream does not clear FirstMate's session 
 It reads Claude transcripts only; run it once a night from the host's scheduler.
 Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
 
+## A fresh session starts with the last exchange
+
+A fresh FirstMate session, after an automatic clear or the captain's own `/clear`, starts with no earlier context, so a bare "yes" would arrive without the question it answers.
+Upstream already records the captain's prompts and FirstMate's final replies for its supervision host, and treats a restart as a non-event.
+So the fork's session start prints the previous session's last few entries from that record, at most six and about 1,500 tokens, in a `LAST EXCHANGE` section of its digest.
+It never carries worker or tool output, and it prints nothing when no earlier session was recorded, so it needs a primary whose dialog upstream records, Claude or Cursor, with the supervision host on.
+Approved by the captain on 2026-11-15, with the automatic clearing above.
+Details: [the dialog mirror](docs/supervision-host.md#the-dialog-mirror) and [`fm-host-mirror.sh`](bin/fm-host-mirror.sh).
+
 ## A wake turn alerts only when it needs the captain
 
 The T3 Code fork ends a turn with the alert sound only when the captain's own message started it or was sent into it, so a turn that a notification, a background wake, or another agent's message started ends quietly, since most of FirstMate's turns are supervision.

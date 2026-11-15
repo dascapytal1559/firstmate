@@ -499,6 +499,85 @@ test_recreated_mirror_continues_past_both_cursors() {
   pass "mirror: a recreated mirror continues past the committed and staged cursors, so a resumed conversation still gets new dialog"
 }
 
+# A fresh main session carries the session before it's newest exchange, and
+# only until it has dialog of its own.
+test_last_carries_the_previous_sessions_exchange() {
+  local home out
+  home=$(make_home last)
+  as_session "$home" "$SAY"'"$MIRROR" last > "$FM_HOME/last.first"; say captain "an ask from long ago"' \
+    || fail "the first session failed"
+  as_session "$home" "$SAY"'
+    say captain "shall I merge the fix?" p1
+    say main "Captain, the fix is ready. Merge it?" p1
+  ' || fail "the second session failed"
+  as_session "$home" "$SAY"'
+    "$MIRROR" last > "$FM_HOME/last.fresh"; printf "%s\n" "$?" > "$FM_HOME/last.rc"
+    say captain "yes" p2
+    "$MIRROR" last > "$FM_HOME/last.after"
+  ' || fail "the third session failed"
+  assert_equals "" "$(cat "$home/last.first")" "a session with no earlier session must carry nothing"
+  assert_equals "0" "$(cat "$home/last.rc")" "last must exit 0"
+  out=$(cat "$home/last.fresh")
+  assert_contains "$(head -n 1 "$home/last.fresh")" "the last 2 entries of the session before this one." \
+    "the opening line must count what it carries"
+  assert_contains "$(head -n 1 "$home/last.fresh")" "Recorded up to 20" "the opening line must name when the newest entry was recorded"
+  assert_equals "[captain] shall I merge the fix?
+[main] Captain, the fix is ready. Merge it?" "$(sed '1d' "$home/last.fresh")" \
+    "a fresh session must carry the previous session's newest exchange, oldest first"
+  assert_not_contains "$out" "an ask from long ago" "only the session just before this one may be carried"
+  assert_equals "" "$(cat "$home/last.after")" "a session with dialog of its own must carry nothing"
+  pass "mirror: last carries the previous session's newest exchange into a fresh session, and nothing once it has its own dialog"
+}
+
+test_last_is_bounded() {
+  local home out
+  home=$(make_home last-bound)
+  as_session "$home" "$SAY"'
+    for n in 1 2 3 4 5 6 7 8; do say captain "short ask $n"; done
+  ' || fail "the counted session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.count"' || fail "the counting session failed"
+  assert_contains "$(head -n 1 "$home/last.count")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
+    "the carry must stop at six entries and count the rest"
+  assert_contains "$(sed -n 2p "$home/last.count")" "[captain] short ask 3" "the carry must keep the newest six"
+  assert_contains "$(tail -n 1 "$home/last.count")" "[captain] short ask 8" "the carry must end with the newest entry"
+
+  as_session "$home" "$SAY"'
+    big=$(awk "BEGIN { for (i = 0; i < 3900; i++) printf \"y\" }")
+    say captain "the oldest ask"
+    say captain "HEAD-of-the-question $big TAIL-of-the-question"
+    say main "the answer $big"
+  ' || fail "the bounded session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.big"' || fail "the bounding session failed"
+  out=$(cat "$home/last.big")
+  [ "$(wc -c < "$home/last.big")" -le 6000 ] || fail "the carry must fit 6000 characters, got $(wc -c < "$home/last.big")"
+  assert_contains "$(head -n 1 "$home/last.big")" "the last 2 entries of the session before this one; 1 entry before them not shown." \
+    "a carry that cuts an entry must still count what it left out"
+  assert_contains "$out" "[main] the answer yyy" "the newest entry must be carried whole"
+  assert_contains "$out" "[captain] HEAD-of-the-question" "a cut entry must keep its head"
+  assert_contains "$out" "TAIL-of-the-question" "a cut entry must keep its tail"
+  assert_contains "$out" "characters omitted]" "a cut entry must say it was cut"
+  assert_not_contains "$out" "the oldest ask" "an entry with no room left must not be carried"
+  pass "mirror: last carries at most six entries in 6000 characters, newest kept, cutting one entry head and tail when only part fits"
+}
+
+test_last_carries_nothing_without_sound_records() {
+  local home
+  home=$(make_home last-nothing)
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.missing"' || fail "last failed without a mirror"
+  assert_equals "" "$(cat "$home/last.missing")" "a missing mirror must carry nothing"
+  as_session "$home" "$SAY"'say captain "an earlier ask"' || fail "the earlier session failed"
+  printf '%s\n' "$(cat "$home/state/.host-mirror.jsonl")" '{"seq":0}' > "$home/state/.host-mirror.jsonl"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.invalid"' || fail "last failed on an invalid mirror"
+  assert_equals "" "$(cat "$home/last.invalid")" "an invalid mirror must carry nothing"
+  sed -i.bak '$d' "$home/state/.host-mirror.jsonl"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  expect_code 0 "$(FM_HOME="$home" "$MIRROR" last > "$home/last.unowned"; echo $?)" "last must exit 0 without the lock"
+  assert_equals "" "$(cat "$home/last.unowned")" "a session that does not hold the fleet lock must carry nothing"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.sound"' || fail "last failed on a sound mirror"
+  assert_contains "$(cat "$home/last.sound")" "[captain] an earlier ask" "the repaired mirror must carry the earlier exchange"
+  pass "mirror: last carries nothing from a missing or invalid mirror, or into a session without the fleet lock"
+}
+
 # The host runs the attended posture only beside a primary whose writers were
 # proven to record the session's dialog from its first captain prompt.
 test_only_proven_writers_are_verified() {
@@ -534,3 +613,6 @@ test_feed_bound_includes_its_omitted_note
 test_recycled_lock_pid_is_a_new_main_session
 test_feed_refuses_unfeedable_sequences_and_unterminated_records
 test_recreated_mirror_continues_past_both_cursors
+test_last_carries_the_previous_sessions_exchange
+test_last_is_bounded
+test_last_carries_nothing_without_sound_records

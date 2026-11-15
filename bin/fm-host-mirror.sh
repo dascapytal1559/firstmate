@@ -65,6 +65,21 @@
 # it left out counted within that bound. Mirrored text is context for
 # judgment and authorizes nothing (bin/fm-branch-prompt.sh "Context channels").
 #
+# LAST. `last` prints what a fresh main session carries from the session
+# before it, so the captain's first message after a clear, automatic or his
+# own, lands next to the exchange it answers: the newest entries of the newest
+# earlier main session, oldest first, at most 6 entries and 6000 characters
+# (about 1,500 tokens) with its opening line, newest kept. The opening line
+# names when the newest entry was recorded and how many of that session's
+# entries are not shown, and the oldest entry shown is cut, head and tail
+# kept, when only part of it fits. It prints nothing unless this session holds
+# the fleet lock and has no mirrored dialog of its own yet, so a rerun
+# mid-session, which keeps its own conversation, carries nothing; it
+# prints nothing too when the current main session cannot be identified or
+# the mirror is missing, unreadable, invalid, or holds no earlier session.
+# It reads without the lock, because every append replaces the file whole by
+# rename. bin/fm-session-start.sh prints it as its LAST EXCHANGE section.
+#
 # VERIFIED WRITERS. `verified <harness>` exits 0 for a primary whose writers
 # were proven against the real harness to record a session's dialog from its
 # first captain prompt (docs/supervision-host.md "The dialog mirror"): Claude
@@ -77,8 +92,9 @@
 #   fm-host-mirror.sh feed <session> new|resume
 #   fm-host-mirror.sh commit
 #   fm-host-mirror.sh check
+#   fm-host-mirror.sh last
 #   fm-host-mirror.sh verified <harness>
-# hook and commit always exit 0 and print nothing; feed exits 1 when
+# hook and commit always exit 0 and print nothing; last always exits 0; feed exits 1 when
 # the mirror is missing, could not be read, or holds an invalid entry, or the
 # main session cannot be identified, and prints nothing when there is nothing
 # to feed; check (bin/fm-afk-launch.sh quiet-check's mirror test) exits 1 when
@@ -97,6 +113,8 @@ FM_HOST_MIRROR_VERIFIED='claude cursor'
 MIRROR_CAP=4000
 MIRROR_KEEP=200
 FEED_CAP=16000
+LAST_ENTRIES=6
+LAST_CAP=6000
 
 # shellcheck source=bin/fm-supervision-engine-lib.sh
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
@@ -117,7 +135,7 @@ case "${1:-}" in
     # home that does not run the host stays inert.
     fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0
     ;;
-  feed|commit|check) ;;
+  feed|commit|check|last) ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
@@ -284,6 +302,37 @@ case "$1" in
     jq -Rs "$ENTRIES" "$MIRROR" >/dev/null 2>&1 || rc=1
     fm_lock_release "$LOCK"
     exit "$rc"
+    ;;
+  last)
+    [ "$#" -eq 1 ] || usage
+    [ -f "$MIRROR" ] || exit 0
+    # shellcheck source=bin/fm-session-lock-lib.sh
+    . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+    fm_session_lock_owned_by_self "$STATE" || exit 0
+    KEY=$(fm_supervision_host_main_key "$STATE") || exit 0
+    # Newest first, whole entries while they fit, then one cut entry when
+    # enough room is left to be worth reading; the rest are counted.
+    jq -Rrs --arg key "$KEY" --argjson most "$LAST_ENTRIES" --argjson cap "$LAST_CAP" "$ENTRIES"'
+      | if length == 0 or any(.key == $key) then empty else . end
+      | last.key as $prev
+      | map(select(.key == $prev))
+      | last.epoch as $newest
+      | (map("[\(.tag)] \(.text)") | reverse) as $lines
+      | ($cap - 200) as $room
+      | def cut($n): length as $len | ($n - 64) as $keep
+          | .[0:($keep / 2 | ceil)] + "\n[cut: \($len - $keep) characters omitted]\n"
+            + .[$len - ($keep / 2 | floor):];
+      reduce $lines[] as $line ({kept: [], used: 0, left: 0};
+        ($room - .used - 1) as $free
+        | if .left > 0 or (.kept | length) >= $most then .left += 1
+          elif ($line | length) <= $free then .kept += [$line] | .used += (($line | length) + 1)
+          elif $free >= 400 then .kept += [$line | cut($free)] | .used = $room
+          else .left += 1 end)
+      | def entries($n): if $n == 1 then "1 entry" else "\($n) entries" end;
+      "Recorded \(if ($newest | type) == "number" then "up to \($newest | todate)" else "at an unknown time" end): the last \(entries(.kept | length)) of the session before this one"
+        + (if .left > 0 then "; \(entries(.left)) before \(if (.kept | length) == 1 then "it" else "them" end) not shown." else "." end),
+        (.kept | reverse | .[])' "$MIRROR" 2>/dev/null || true
+    exit 0
     ;;
 esac
 
