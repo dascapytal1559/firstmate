@@ -69,10 +69,13 @@
 # before it, so the captain's first message after a clear, automatic or his
 # own, lands next to the exchange it answers: the newest entries of the newest
 # earlier main session, oldest first, at most 6 entries and 6000 characters
-# (about 1,500 tokens) with its opening line, newest kept. The opening line
-# names when the newest entry was recorded and how many of that session's
-# entries are not shown, and the oldest entry shown is cut, head and tail
-# kept, when only part of it fits. It prints nothing unless this session holds
+# (about 1,500 tokens) with its opening line, newest kept. MAIN replies that
+# are exactly "Captain, shipshape." are skipped (they take a slot and say
+# nothing), and the captain's newest message and MAIN's reply to it are always
+# carried when they exist, the other entries filling the rest newest first. The
+# opening line names when the newest carried entry was recorded and how many of
+# that session's other entries are not shown, and an entry is cut, head and
+# tail kept, when only part of it fits. It prints nothing unless this session holds
 # the fleet lock and has no mirrored dialog of its own yet, so a rerun
 # mid-session, which keeps its own conversation, carries nothing; it
 # prints nothing too when the current main session cannot be identified or
@@ -115,6 +118,8 @@ MIRROR_KEEP=200
 FEED_CAP=16000
 LAST_ENTRIES=6
 LAST_CAP=6000
+# MAIN's whole reply when there is nothing to say (AGENTS.md section 9).
+LAST_NOOP='Captain, shipshape.'
 
 # shellcheck source=bin/fm-supervision-engine-lib.sh
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
@@ -310,28 +315,40 @@ case "$1" in
     . "$SCRIPT_DIR/fm-session-lock-lib.sh"
     fm_session_lock_owned_by_self "$STATE" || exit 0
     KEY=$(fm_supervision_host_main_key "$STATE") || exit 0
-    # Newest first, whole entries while they fit, then one cut entry when
-    # enough room is left to be worth reading; the rest are counted.
-    jq -Rrs --arg key "$KEY" --argjson most "$LAST_ENTRIES" --argjson cap "$LAST_CAP" "$ENTRIES"'
+    # The captain's newest message and MAIN's reply to it are always carried
+    # (the reply is cut head and tail when the two cannot both fit); pure no-op
+    # replies are dropped first. The rest fill newest first, whole entries while
+    # they fit, then one cut entry when enough room is left to be worth reading;
+    # what is left over is counted.
+    jq -Rrs --arg key "$KEY" --arg noop "$LAST_NOOP" --argjson most "$LAST_ENTRIES" --argjson cap "$LAST_CAP" "$ENTRIES"'
       | if length == 0 or any(.key == $key) then empty else . end
       | last.key as $prev
-      | map(select(.key == $prev))
-      | last.epoch as $newest
-      | (map("[\(.tag)] \(.text)") | reverse) as $lines
+      | map(select(.key == $prev) | select((.tag == "main" and .text == $noop) | not)) as $e
+      | if ($e | length) == 0 then empty else . end
+      | ($e | last.epoch) as $newest
+      | ($e | length) as $n
+      | ($e | to_entries | map(select(.value.tag == "captain")) | last | .key) as $ci
+      | ([$ci, (if $ci != null and ($e[$ci + 1].tag // "") == "main" then $ci + 1 else null end)]
+          | map(select(. != null)) | reverse) as $pins
+      | [range($n - 1; -1; -1) | select(. as $i | $pins | any(. == $i) | not)] as $rest
       | ($cap - 200) as $room
       | def cut($n): length as $len | ($n - 64) as $keep
           | .[0:($keep / 2 | ceil)] + "\n[cut: \($len - $keep) characters omitted]\n"
             + .[$len - ($keep / 2 | floor):];
-      reduce $lines[] as $line ({kept: [], used: 0, left: 0};
-        ($room - .used - 1) as $free
-        | if .left > 0 or (.kept | length) >= $most then .left += 1
-          elif ($line | length) <= $free then .kept += [$line] | .used += (($line | length) + 1)
-          elif $free >= 400 then .kept += [$line | cut($free)] | .used = $room
-          else .left += 1 end)
+      def fit($i; $line; $free):
+        if ($line | length) <= $free then .kept += [{i: $i, line: $line}] | .used += (($line | length) + 1)
+        elif $free >= 400 then .kept += [{i: $i, line: ($line | cut($free))}] | .used = $room
+        else .left += 1 end;
+      reduce ($pins + $rest)[] as $i ({kept: [], used: 0, left: 0, stop: false};
+        ($e[$i] | "[\(.tag)] \(.text)") as $line
+        | ($room - .used - 1) as $free
+        | if ($pins | any(. == $i)) then fit($i; $line; $free)
+          elif .stop or (.kept | length) >= $most then .left += 1
+          else (.left) as $before | fit($i; $line; $free) | if .left > $before then .stop = true else . end end)
       | def entries($n): if $n == 1 then "1 entry" else "\($n) entries" end;
       "Recorded \(if ($newest | type) == "number" then "up to \($newest | todate)" else "at an unknown time" end): the last \(entries(.kept | length)) of the session before this one"
         + (if .left > 0 then "; \(entries(.left)) before \(if (.kept | length) == 1 then "it" else "them" end) not shown." else "." end),
-        (.kept | reverse | .[])' "$MIRROR" 2>/dev/null || true
+        (.kept | sort_by(.i) | .[].line)' "$MIRROR" 2>/dev/null || true
     exit 0
     ;;
 esac

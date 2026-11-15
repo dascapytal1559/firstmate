@@ -560,6 +560,60 @@ test_last_is_bounded() {
   pass "mirror: last carries at most six entries in 6000 characters, newest kept, cutting one entry head and tail when only part fits"
 }
 
+# No-op replies take no slot, and the captain's newest message with MAIN's reply
+# to it is carried even when later entries would have pushed it out.
+test_last_skips_no_op_replies_and_keeps_the_last_exchange() {
+  local home out
+  home=$(make_home last-noop)
+  as_session "$home" "$SAY"'
+    say captain "which colour for the badge?"
+    say main "Captain, the badge can be teal or amber. Which one?"
+    say captain "ping 1"
+    say main "Captain, shipshape."
+    say captain "ping 2"
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+    say main "Captain, shipshape."
+  ' || fail "the noisy session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.noop"' || fail "the fresh session failed"
+  out=$(cat "$home/last.noop")
+  assert_not_contains "$out" "shipshape" "a no-op reply must never be carried"
+  assert_contains "$(head -n 1 "$home/last.noop")" "the last 4 entries of the session before this one." \
+    "the opening line must count only real entries, and name none as left out"
+  assert_contains "$out" "[main] Captain, the badge can be teal or amber. Which one?" "the real reply must survive the no-op replies"
+  assert_equals "[captain] which colour for the badge?
+[main] Captain, the badge can be teal or amber. Which one?
+[captain] ping 1
+[captain] ping 2" "$(sed '1d' "$home/last.noop")" "the carry must be oldest first with no no-op reply in it"
+
+  # The newest captain message and its reply are kept even when six newer
+  # entries would otherwise push them out.
+  as_session "$home" "$SAY"'
+    say captain "the question that matters"
+    say main "Captain, here is the answer that matters."
+    for n in 1 2 3 4 5 6; do say main "later note $n"; done
+  ' || fail "the crowded session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.crowded"' || fail "the second fresh session failed"
+  out=$(cat "$home/last.crowded")
+  assert_contains "$(head -n 1 "$home/last.crowded")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
+    "the carry must stay at six entries"
+  assert_equals "[captain] the question that matters
+[main] Captain, here is the answer that matters.
+[main] later note 3
+[main] later note 4
+[main] later note 5
+[main] later note 6" "$(sed '1d' "$home/last.crowded")" "the newest captain message and its reply must be carried, then the newest others"
+
+  # A session of nothing but no-op replies carries nothing.
+  as_session "$home" "$SAY"'say main "Captain, shipshape."' || fail "the quiet session failed"
+  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.quiet"' || fail "the third fresh session failed"
+  assert_equals "" "$(cat "$home/last.quiet")" "a session with only no-op replies must carry nothing"
+  pass "mirror: last skips no-op replies and always carries the captain's newest message and the reply to it"
+}
+
 test_last_carries_nothing_without_sound_records() {
   local home
   home=$(make_home last-nothing)
@@ -615,4 +669,5 @@ test_feed_refuses_unfeedable_sequences_and_unterminated_records
 test_recreated_mirror_continues_past_both_cursors
 test_last_carries_the_previous_sessions_exchange
 test_last_is_bounded
+test_last_skips_no_op_replies_and_keeps_the_last_exchange
 test_last_carries_nothing_without_sound_records

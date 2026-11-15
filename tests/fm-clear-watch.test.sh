@@ -242,6 +242,65 @@ test_usage_and_missing_transcripts() {
   pass "usage and a missing transcript directory"
 }
 
+# The default folders: this home's transcripts under the default account and
+# under each login folder, read together, a copied session counted once.
+make_account_home() {  # <name>: a scratch HOME and a FM_HOME path; sets ACCOUNT_HOME and ACCOUNT_FM
+  ACCOUNT_HOME="$TMP_ROOT/$1-user"
+  ACCOUNT_FM="$TMP_ROOT/$1-home"
+  mkdir -p "$ACCOUNT_FM"
+  ACCOUNT_ENC=$(printf '%s' "$ACCOUNT_FM" | sed 's/[^A-Za-z0-9]/-/g')
+}
+account_dir() {  # <relative config folder>: that account's folder for this home
+  mkdir -p "$ACCOUNT_HOME/$1/projects/$ACCOUNT_ENC"
+  printf '%s' "$ACCOUNT_HOME/$1/projects/$ACCOUNT_ENC"
+}
+watch_default() {  # <minute> [args...]: no --transcripts, so the default folders
+  local minute=$1
+  shift
+  HOME="$ACCOUNT_HOME" FM_HOME="$ACCOUNT_FM" env -u CLAUDE_CONFIG_DIR "$WATCH" --now "$(at "$minute")" "$@"
+}
+
+test_every_account_folder_is_read_and_a_copied_session_counts_once() {
+  local saved=$T out a b
+  make_account_home accounts
+  a=$(account_dir .claude)
+  b=$(account_dir .claude-profiles/second)
+  T=$a
+  digest sa 0
+  prompt sa 1 "Plan the week for the made-up garden project, please."
+  call sa 100 msg_sa 90000
+  T=$b
+  digest sb 300
+  prompt sb 301 "Good afternoon. Where did the seedlings get to today?"
+  call sb 320 msg_sb 60000
+  cp "$b/sb.jsonl" "$a/sb.jsonl"
+  T=$saved
+  out=$(watch_default 480 --no-write) || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF '1 clears, about' || fail "one clear across two accounts, the copy counted once: $out"
+  printf '%s' "$out" | grep -qF 'your /clear' || fail "the clear must be read across the two folders: $out"
+  ! printf '%s' "$out" | grep -qF 'No current main session' || fail "main sessions exist, so none may be reported missing: $out"
+  pass "every account folder is read, and a session copied into two folders counts once"
+}
+
+test_no_current_main_session_is_reported_not_zero_clears() {
+  local saved=$T out h a
+  make_account_home missing
+  a=$(account_dir .claude)
+  account_dir .claude-profiles/second >/dev/null
+  T=$a
+  prompt host 10 "MAIN DIALOG MIRROR (read-only context: what the captain and MAIN said)"
+  call host 11 msg_hm 5000
+  T=$saved
+  h=$ACCOUNT_FM
+  out=$(watch_default 480) || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF 'No current main session found' || fail "a missing main session must be said plainly: $out"
+  ! printf '%s' "$out" | grep -qF 'No clears.' || fail "a missing main session must not read as zero clears: $out"
+  printf '%s' "$out" | grep -qF -- '- **Clear check:** no current main session found in 2 transcript folder(s)' ||
+    fail "the briefing must carry the finding: $out"
+  grep -qF 'no current main session' "$h/data/morning/2026-11-16.md" || fail "the briefing line was not written"
+  pass "no current main session in any folder is reported, not shown as zero clears"
+}
+
 fm_test_run \
   test_day_lists_every_clear_with_cause_and_saving \
   test_each_sign_of_harm_is_found \
@@ -250,4 +309,6 @@ fm_test_run \
   test_quiet_day_writes_no_briefing_line \
   test_monday_adds_the_weekly_total \
   test_no_write_only_prints \
+  test_every_account_folder_is_read_and_a_copied_session_counts_once \
+  test_no_current_main_session_is_reported_not_zero_clears \
   test_usage_and_missing_transcripts

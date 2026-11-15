@@ -10,10 +10,14 @@ Usage:
   fm-clear-watch.sh [--now <epoch>] [--transcripts <dir>]... [--weekly] [--no-write]
 
 What it reads
-  The transcripts of this home's Claude sessions, by default
-  ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<FM_HOME with every
-  non-alphanumeric character replaced by "-">. --transcripts replaces that
-  default (repeatable). A transcript is a main FirstMate session when its first
+  The transcripts of this home's Claude sessions, by default under every
+  account that can run it: ${CLAUDE_CONFIG_DIR:-$HOME/.claude} and each login
+  folder $HOME/.claude-profiles/*, each at projects/<FM_HOME with every
+  non-alphanumeric character replaced by "-">. A session id found in more than
+  one folder counts once (the copy written last). --transcripts replaces that
+  default (repeatable). When none of the folders holds a current main session,
+  the listing says so instead of "No clears", and the morning briefing gets a
+  line saying so. A transcript is a main FirstMate session when its first
   prompt is not the supervision host's (MAIN DIALOG MIRROR, FIRSTMATE
   SUPERVISION WAKE) and it printed the session-start digest, or it began with
   the cold-reroute message, or it never got a model reply (a fresh session that
@@ -57,8 +61,8 @@ What it writes
   - stdout and <FM_HOME>/data/clear-watch/<local date>.md: every clear of the
     day with its cause, context, saving, and signs;
   - <FM_HOME>/data/morning/<local date>.md, the morning briefing, under a
-    "## Clear check" heading: one line only when a clear showed a sign of harm,
-    and on Mondays (or with --weekly) one line totalling the seven days ending
+    "## Clear check" heading: one line only when a clear showed a sign of harm
+    or no current main session was found, and on Mondays (or with --weekly) one line totalling the seven days ending
     at the same point. Each line is written once per date, so a rerun adds
     nothing.
   --no-write prints the listing and the briefing lines and writes no file.
@@ -69,6 +73,7 @@ error.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -411,6 +416,26 @@ def listing(clears, win_start, win_end):
     return "\n".join(lines) + "\n"
 
 
+NO_MAIN_LINE = (
+    "- **Clear check:** no current main session found in {n} transcript folder(s), "
+    "so no clears could be judged. Details: {report}"
+)
+
+
+def no_main_listing(dirs, win_start, win_end):
+    """The listing when no main session is current: say so, never 'No clears'."""
+    lines = [
+        f"# Clears, {datetime.fromtimestamp(win_start).strftime('%a %d %b %H:%M')} to {datetime.fromtimestamp(win_end).strftime('%a %d %b %H:%M')}",
+        "",
+        "No current main session found, so no clears could be judged. "
+        "FirstMate may be running under an account this check does not read.",
+        "",
+        "Folders read:",
+    ]
+    lines += [f"- {d}" for d in dirs]
+    return "\n".join(lines) + "\n"
+
+
 def daily_line(clears, report_rel):
     harmed = [c for c in clears if c["signs"]]
     if not harmed:
@@ -459,9 +484,44 @@ def append_briefing(path, lines):
         handle.write(out)
 
 
-def default_transcript_dir(home):
-    root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(root, "projects", re.sub(r"[^A-Za-z0-9]", "-", home))
+def default_transcript_dirs(home):
+    """This home's transcript folder under every Claude account that can run it.
+
+    The default config folder (CLAUDE_CONFIG_DIR, else ~/.claude) first, then
+    each login folder ~/.claude-profiles/*. FirstMate's main session has run
+    under more than one account, so reading a single folder would see no clears
+    after a move.
+    """
+    encoded = re.sub(r"[^A-Za-z0-9]", "-", home)
+    user = os.path.expanduser("~")
+    roots = [os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(user, ".claude")]
+    roots += sorted(glob.glob(os.path.join(glob.escape(user), ".claude-profiles", "*")))
+    dirs, seen = [], set()
+    for root in roots:
+        directory = os.path.join(root, "projects", encoded)
+        real = os.path.realpath(directory)
+        if real not in seen:
+            seen.add(real)
+            dirs.append(directory)
+    return dirs
+
+
+def recent_transcripts(dirs, load_from):
+    """Transcript paths modified since load_from, one per session id.
+
+    The same session id found in two folders is one session: keep the copy
+    written last.
+    """
+    newest = {}
+    for directory in dirs:
+        for name in sorted(os.listdir(directory)):
+            path = os.path.join(directory, name)
+            if not (name.endswith(".jsonl") and os.path.isfile(path)):
+                continue
+            mtime = os.path.getmtime(path)
+            if mtime >= load_from and (name not in newest or mtime > newest[name][0]):
+                newest[name] = (mtime, path)
+    return [path for _, path in sorted(newest.values())]
 
 
 def usage(code):
@@ -501,7 +561,7 @@ def main(argv):
     if not home:
         sys.stderr.write("fm-clear-watch: FM_HOME is not set\n")
         return 2
-    dirs = dirs or [default_transcript_dir(home)]
+    dirs = dirs or default_transcript_dirs(home)
     dirs = [d for d in dirs if os.path.isdir(d)]
     if not dirs:
         sys.stderr.write("fm-clear-watch: no transcript directory found\n")
@@ -511,19 +571,19 @@ def main(argv):
     day_start = win_end - 86400
     weekly = weekly or datetime.fromtimestamp(now).weekday() == 0
     load_from = (win_end - 7 * 86400 if weekly else day_start) - LOAD_MARGIN_SECONDS
-    sessions = []
-    for directory in dirs:
-        for name in sorted(os.listdir(directory)):
-            path = os.path.join(directory, name)
-            if name.endswith(".jsonl") and os.path.isfile(path) and os.path.getmtime(path) >= load_from:
-                sessions.append(load_session(path))
+    sessions = [load_session(path) for path in recent_transcripts(dirs, load_from)]
 
     date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
     report_rel = f"data/clear-watch/{date}.md"
     day = clears_between(sessions, day_start, win_end)
-    text = listing(day, day_start, win_end)
-    lines = [line for line in (daily_line(day, report_rel),) if line]
-    if weekly:
+    has_main = any(s.start is not None and s.is_main() for s in sessions)
+    if has_main:
+        text = listing(day, day_start, win_end)
+        lines = [line for line in (daily_line(day, report_rel),) if line]
+    else:
+        text = no_main_listing(dirs, day_start, win_end)
+        lines = [NO_MAIN_LINE.format(n=len(dirs), report=report_rel)]
+    if weekly and has_main:
         lines.append(weekly_line(clears_between(sessions, win_end - 7 * 86400, win_end)))
 
     sys.stdout.write(text)
