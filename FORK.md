@@ -207,6 +207,16 @@ Upstream's Stop hook is unchanged; the fork wraps it, and its StopFailure regist
 It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; without that rule the message only reaches the old session.
 Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).
 
+## A nightly check watches every clear
+
+Clearing FirstMate's main session saves most of what its long context costs, but a fresh session can lose the thread of a conversation.
+So a nightly script reads FirstMate's own session transcripts, with no model call, and lists every clear of the day: its cause (the captain's `/clear`, a cold start from a message, a cold start from a notification, or a T3 restart), the context it dropped, and any sign of harm in the new session's first hour.
+The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
+It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
+Upstream has no equivalent, because upstream does not clear FirstMate's session on its own.
+It reads Claude transcripts only; run it once a night from the host's scheduler.
+Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
+
 ## A wake turn alerts only when it needs the captain
 
 The T3 Code fork ends a turn with the alert sound only when the captain's own message started it or was sent into it, so a turn that a notification, a background wake, or another agent's message started ends quietly, since most of FirstMate's turns are supervision.

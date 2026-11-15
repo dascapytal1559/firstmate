@@ -1562,3 +1562,45 @@ This half ships after the T3 Code fork's rule is installed; before it, the messa
 
 The evidence is a new suite, `tests/fm-claude-stop-cold-reroute.test.sh`, on made-up transcripts and a fake T3 Code server: a cold, large wake is one plain message and no wake; a warm session, a session of exactly 100k, a session outside T3 Code, a session without the lock, a failure notice, and another process's ledger entry each pass through unchanged; six kinds of failed send fall back to the wake; a signalled wrapper waits for upstream's outcome and never reroutes; and the real upstream hook's recorded wake is rerouted when cold and passed through when warm.
 The neighbouring suites, upstream's Stop hook, the turn-end guard, the stow guard, the host mirror, and the `/clear` swap, still pass.
+
+## 58. A nightly check watches every clear (15 November 2026)
+
+The design review behind the cold clears recommended measuring them before clearing any more often, and on its six calls he answered:
+
+> Okay, let's start cold clearing on all your recommendations.
+>
+> — 15 November 2026
+
+This entry is that measurement.
+What a morning briefing gets when a clear may have hurt, from a test week of made-up sessions:
+
+```
+## Clear check
+
+- **Clear check:** 4 of 5 clears in the last day showed a sign of harm: after the cold start from a notification at Mon 06:00, a decision you had answered was asked again (dec-a) and a task was dispatched twice (task-x) and a notification was left unacknowledged across the clear and FirstMate was not back at the helm for 10 minutes; after your /clear at Mon 09:30, your first message was short and quoted nothing and you used a recall phrase ("earlier", "we discussed"); after the cold start from your message at Mon 14:00, you quoted the previous session; and 1 more. Details: data/clear-watch/2026-11-17.md
+```
+
+What was built:
+
+- **A script with no model call.**
+  `bin/fm-clear-watch.sh` reads FirstMate's own Claude transcripts, picks out the main sessions (the supervision host's are skipped), and treats each one that follows another as a clear.
+- **Each clear's cause and saving.**
+  A session that began with the cold-reroute message is a cold start from a notification; one that began with T3's restart note is a T3 restart; one whose predecessor sat idle over an hour above 100k is a cold start from his message; anything else is his `/clear`.
+  The saving is the old context minus a fresh session's 71k.
+- **Signs of harm, from the new session's first hour.**
+  A bare short first message, a recall phrase, a quote of a reply the new session never wrote, a decision held again after the old session answered it, a task dispatched again, a notification shown and never acknowledged across the clear, and, after an automatic clear, no lock taken within five minutes.
+  Only successful commands count, and no message text is ever written out.
+- **Quiet unless something shows.**
+  The full listing goes to a dated file in the home; the morning briefing gets one line only when a sign shows, plus a weekly total on Mondays.
+
+Choices made along the way:
+
+- The day ends an hour before the run, so every clear is judged once, with its whole first hour.
+- A quote is matched by the quoted reply's message id, which T3 Code puts in every quote, so a quote of the new session's own reply never counts.
+- "You said" was left off the recall phrases: in a fresh session it usually means the reply just given.
+- A `/clear` he arms on a cold, large session reads as a cold start; either way the context was dropped.
+
+Run read-only over the real past week, it found 16 clears; the signs were mostly his quotes of the previous session after his own `/clear`, which is the gap the next stage, carrying the last exchange into a fresh session, closes.
+Real fresh sessions took the lock in 4 to 62 seconds, with one at 23 minutes, so five minutes separates a slow start from a stuck one.
+
+The evidence is a new suite, `tests/fm-clear-watch.test.sh`, on a made-up week with one clear of each cause and each sign planted once: every clear is listed with its cause and saving, each sign is found and nothing else, the supervision host is ignored, a clear in the last hour waits for the next run, an existing briefing is kept, a rerun adds nothing, a quiet day leaves the briefing alone, and a Monday adds the weekly total.
