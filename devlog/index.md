@@ -1490,3 +1490,33 @@ What this costs: moving between Claude accounts hands the conversation over trim
 On call 7, a live proof of the move: FirstMate answered in chat that a worker had already been moved mid-task to another account that same night, which exercised the same T3 Code call, so no scratch thread was spent.
 The evidence here is the suites for every file the change touches, with new cases against the fake T3 Code server built from the three real items the stopped run left: classification by title, notice and typed fields; one notification per run and none for an ordinary failure; the move's refusals, its order of configure before message, and its read-back; and resume ringing exactly the workers still stopped on the reset account.
 
+
+## 56. A long test never holds an install for more than nine minutes (15 November 2026)
+
+![Before, a worker watched its test to the end and held a clean install for the test's whole length; after, the watch ends by itself at nine minutes and the worker waits for the result](media/long-test-watch-ends-at-nine-minutes.svg)
+
+What happened: on 14 November workers started watching their long tests live instead of ending their turn.
+A clean T3 Code install waits for every running turn, so a worker watching a long test held an install for the whole test.
+A first fix, an install that works out which workers are only watching and stops their turns, was paused, and a design review measured the problem before anything more was built.
+It found the cost was small so far, about 7 minutes of watching in 20 hours, that most workers filtered the output so little of it showed live anyway, and that the install-side check could not tell a watching worker from a thinking one.
+It recommended one small change on the worker's side instead, and he answered:
+
+> Yeah, okay, let's do the nine minute change.
+>
+> — 15 November 2026
+
+What was built:
+
+- **The watch ends by itself.**
+  `fm-job.sh follow` stops after 540 seconds (`FM_JOB_FOLLOW_MAX`, under the ten-minute limit of a worker's command tool) when the job is still running.
+  It says the job is still running and that the worker should declare the wait and end its turn, and exits 75.
+  It does not mark the result delivered, so the existing result delivery sends it when the job ends.
+- **The worker's instructions.**
+  The sentence about re-attaching a cut follow is replaced: when the follow says the job is still running, append the `paused` line naming the job and end the turn.
+- **What he sees.**
+  A short test looks exactly as before.
+  A long test reads Working for up to nine minutes, then Waiting until the result arrives, and an install waits for a watcher at most about nine minutes.
+
+What is left alone: the idle check, the restart request and restart scripts, T3 Code, and the paused install-side branch, which is discarded.
+The bound sits in the follow itself, not only in the instructions, so whatever the worker's tool does at its own limit, no watch outlives nine minutes.
+The evidence is the `fm-job` and `fm-brief` suites: a follow of a still-running job ends at the bound with exit 75, leaves the result undelivered, and the watcher's delivery still sends it when the job ends; a short job and an ended job behave as before; and the generated instructions carry the new wording.
