@@ -194,8 +194,8 @@ Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-c
 
 ## A wake turn alerts only when it needs the captain
 
-The T3 Code fork ends a turn that a notification started without the alert sound, since most of FirstMate's turns are supervision.
-So when such a turn ends with something that must reach the captain at once, FirstMate flags that turn to alert as usual.
+The T3 Code fork ends a turn with the alert sound only when the captain's own message started it or was sent into it, so a turn that a notification, a background wake, or another agent's message started ends quietly, since most of FirstMate's turns are supervision.
+So when such a quiet turn ends with something that must reach the captain at once, FirstMate flags that turn to alert as usual.
 Upstream has no equivalent, for the same reason as above.
 A session outside T3 Code, a read-only session, and a second mate are told nothing about it.
 Details: [`t3-thread.md`](docs/supervision-protocols/t3-thread.md).
