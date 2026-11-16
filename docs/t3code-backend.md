@@ -145,7 +145,8 @@ Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's
 - **Turns no drain describes.** Each drain also claims the computer for the thread's recent finished turns this home never claimed, such as a turn a background command's notification started.
 - **Turns that file a voice journal.** The agent filing it runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
 - **Pipelines.** A ship worker's brief tells it to claim each no-mistakes run it starts, so the run's folder counts to its task's cause.
-- **Engine sessions.** The supervision host claims each engine conversation for the woken task's cause, or the computer.
+- **Engine sessions.** The supervision host claims each engine turn, from that turn's start and before the engine runs, for the woken task's cause, or the computer.
+  A resumed conversation therefore splits across its turns' tasks, since T3 keeps one session claim per start; a T3 whose claim takes no start gets a whole-session claim, which a later turn's replaces.
 
 A turn this home already claimed keeps its first claim against later drains, while an explicit `turn` claim replaces it.
 T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.

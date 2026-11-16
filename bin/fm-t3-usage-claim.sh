@@ -35,10 +35,15 @@
 #     recorded cause. The run is the one `no-mistakes axi status` reports for
 #     that branch, and its folder comes from no-mistakes' state database,
 #     read only.
-#   fm-t3-usage-claim.sh session <session-id> [--task <id>]...
+#   fm-t3-usage-claim.sh session <session-id> [--from <iso-time>] [--task <id>]...
 #     A Claude session run outside T3 (the supervision host's engine) counts
 #     to the first named task's cause, else, with no task named, to the
-#     computer; with tasks named but none caused, nothing.
+#     computer; with tasks named but none caused, nothing. With --from (a
+#     zoned ISO time, such as a turn's start) the claim covers the session
+#     from then until a later claim's start, so a session resumed for
+#     another task's turn splits between them; without it, or on a T3 whose
+#     claim takes no start, it covers the whole session and replaces the
+#     session's earlier claim.
 #
 # Records, both trimmed as they grow:
 #   state/.t3-usage-claimed-runs  "<thread> TAB <run>" of every turn this home
@@ -306,12 +311,13 @@ verb_pipeline() {
 
 verb_session() {
   local session=${1:-} value rc=0 line
-  local -a candidates=() vargs=()
+  local -a candidates=() vargs=() from=()
   [ -n "$session" ] || usage
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --task) [ "$#" -ge 2 ] || usage; candidates+=("task:$2"); shift 2 ;;
+      --from) [ "$#" -ge 2 ] && [ -n "$2" ] || usage; from=(--from "$2"); shift 2 ;;
       *) usage ;;
     esac
   done
@@ -323,7 +329,7 @@ verb_session() {
     *) return 0 ;;
   esac
   while IFS= read -r line; do vargs+=("$line"); done < <(value_args "$value")
-  claim "session $session" --session "$session" "${vargs[@]}" >/dev/null || true
+  claim "session $session" --session "$session" "${from[@]+"${from[@]}"}" "${vargs[@]}" >/dev/null || true
   return 0
 }
 

@@ -1019,13 +1019,17 @@ health_record() {  # <engine-error 0|1> <reports>
 # claim_engine_usage <tasks>: the engine's session runs outside T3, so T3's
 # Usage counts it to the woken task's cause (the first of <tasks>, space
 # separated) or, for a wake about no task, the computer, through
-# bin/fm-t3-usage-claim.sh session. Detached and best effort: the claim never
-# holds up or fails the turn. Claiming again replaces, so a resumed
-# conversation counts to its latest wake's task.
+# bin/fm-t3-usage-claim.sh session. The claim starts at this turn's start and
+# runs just before the engine does, so a resumed conversation splits across
+# its turns' tasks, and a host that dies mid-turn still leaves the turn
+# claimed. A new conversation's session id is minted before its first turn
+# (choose_conversation), so that turn is covered the same way. Detached and
+# best effort: the claim never holds up or fails the turn.
 claim_engine_usage() {  # <tasks>
   local task
-  local -a args=(session "$ENGINE_SESSION")
+  local -a args
   [ "$FM_SUPERVISION_ENGINE" = claude ] && [ -n "$ENGINE_SESSION" ] || return 0
+  args=(session "$ENGINE_SESSION" --from "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
   for task in $1; do args+=(--task "$task"); done
   ( "$SCRIPT_DIR/fm-t3-usage-claim.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & )
 }

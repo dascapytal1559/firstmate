@@ -196,6 +196,23 @@ test_session_claims_the_engine_conversation() {
   pass "fm-t3-usage-claim session: the engine's conversation counts to its task's cause, or the computer for no task"
 }
 
+test_session_claims_split_a_resumed_conversation_by_turn() {
+  fresh_case session-from '{"causedBy":true,"usageClaims":true,"usageClaimFrom":true}'
+  meta_with_cause tk "$CAUSE_T"
+  "$CLAIM" session sess-1 --from 2026-11-16T09:00:00Z --task tk
+  "$CLAIM" session sess-1 --from 2026-11-16T09:05:00Z
+  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims session:sess-1@1794819600000)" "the first turn's claim stands from its start"
+  assert_equals '{"device":"computer"}' "$(claims session:sess-1@1794819900000)" "the next turn's claim is kept beside it from its own start"
+  assert_equals "" "$(claims session:sess-1)" "no whole-session claim is made"
+  fresh_case session-from-absent
+  "$CLAIM" session sess-1 --from 2026-11-16T09:00:00Z
+  assert_equals '{"device":"computer"}' "$(claims session:sess-1)" "a T3 whose claim takes no start gets the whole-session claim"
+  "$CLAIM" session sess-1 --from not-a-time
+  assert_equals 0 "$?" "a start T3 cannot read never fails the caller"
+  assert_contains "$(cat "$STATE_DIR/t3-usage-claims.log" 2>/dev/null)" "session sess-1" "and is logged once"
+  pass "fm-t3-usage-claim session --from: a resumed conversation splits by turn start, and an older T3 keeps the whole-session claim"
+}
+
 # make_nm <dir> <run-id> <branch> [db]: a git worktree on <branch>, a stub
 # no-mistakes reporting run <run-id> on it, and an NM_HOME whose run folder is
 # found through the state database ("db") or the folder layout.
@@ -306,6 +323,7 @@ fm_test_run \
   test_wake_about_nothing_is_upkeep_and_uncaused_tasks_stay_unknown \
   test_claims_are_best_effort_and_logged_once \
   test_session_claims_the_engine_conversation \
+  test_session_claims_split_a_resumed_conversation_by_turn \
   test_pipeline_claims_the_branch_run_folder \
   test_drain_claims_the_wake_turn \
   test_drain_claims_a_followups_arming_cause

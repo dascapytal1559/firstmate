@@ -129,7 +129,7 @@
 //     that runs commands in a shell older than the turn. The message pages
 //     it reads ask for one character of each item, so message text is never
 //     read. Changes nothing.
-//   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> [--unless-listed <file>] | --thread <id> --run <run-id> | --session <id> | --directory <abs-path>)
+//   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> [--unless-listed <file>] | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
 //       (--caused-by <cause-json|null> | --device phone|computer)
 //     The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by
 //     origin"): count work Usage cannot trace to that cause (as an agent
@@ -141,10 +141,14 @@
 //     already); --thread with --run names a run; a
 //     session (native id) or folder covers work run outside T3, such as a
 //     pipeline. T3 counts a claimed turn only when its own prompt does not
-//     already trace, so claiming a prompted turn changes nothing. Claiming
-//     again replaces; --caused-by null removes. Prints {claimed, the target,
-//     causedBy, device} as T3 answered them, which must be what was asked,
-//     else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
+//     already trace, so claiming a prompted turn changes nothing. A session
+//     claim with --from (a zoned ISO time) covers that session from then
+//     until a later claim's start, so a resumed session splits by turn; T3
+//     keeps one claim per session and start. A T3 whose claim takes no from
+//     gets the whole-session claim instead, answered with from null.
+//     Claiming the same target (and start) again replaces; --caused-by null
+//     removes. Prints {claimed, the target, causedBy, device} as T3 answered
+//     them, which must be what was asked, else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
 //     T3 refuses, with nothing claimed; exit 4 (usage_claim_unsupported)
 //     where T3 has no t3_usage_claim.
 //   fm-t3-mcp.mjs recent-runs --thread <id> [--limit <n>]
@@ -1686,6 +1690,13 @@ function listedRun(file, { threadId, runId }) {
   return text.split("\n").includes(`${threadId}\t${runId}`);
 }
 
+// <text> as a UTC ISO 8601 time, or null when it is not a zoned ISO time.
+function isoTime(text) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(text)) return null;
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
 async function usageClaim(flags) {
   const targets = ["turn", "run", "session", "directory"].filter((k) => flags[k] !== undefined);
   if (targets.length !== 1) usage("give exactly one of --turn, --run (with --thread), --session, or --directory");
@@ -1695,7 +1706,13 @@ async function usageClaim(flags) {
   const value = flags.device !== undefined ? { device: flags.device } : flags["caused-by"] === "null" ? { causedBy: null } : { causedBy: causeFlag(flags) };
   if (value.device !== undefined && !USAGE_DEVICES.includes(value.device)) usage(`--device must be one of ${USAGE_DEVICES.join(", ")}`);
   if (flags.directory !== undefined && !path.isAbsolute(flags.directory)) usage("--directory must be an absolute path");
+  if (flags.from !== undefined && flags.session === undefined) usage("--from goes only with --session");
+  const from = flags.from === undefined ? undefined : isoTime(flags.from);
+  if (from === null) usage("--from must be an ISO 8601 time with a zone, such as 2026-11-16T09:30:00Z");
   const session = await usageClaimSession(flags);
+  // A T3 whose claim takes no from (before per-start session claims) gets
+  // the whole-session claim, which replaces that session's earlier one.
+  const sendFrom = from !== undefined && toolOffers(session, USAGE_CLAIM_TOOL, "from");
   let target;
   if (flags.turn !== undefined) {
     const turn = await callerTurn(session, flags.turn);
@@ -1707,7 +1724,7 @@ async function usageClaim(flags) {
   } else if (flags.run !== undefined) {
     target = { threadId: flags.thread, runId: flags.run };
   } else if (flags.session !== undefined) {
-    target = { sessionId: flags.session };
+    target = { sessionId: flags.session, ...(sendFrom ? { from } : {}) };
   } else {
     target = { directory: flags.directory };
   }
@@ -1721,6 +1738,10 @@ async function usageClaim(flags) {
   const causedBy = out?.causedBy ?? null;
   const proven = value.device !== undefined ? device === value.device : value.causedBy === null ? causedBy === null && device === null : sameCause(value.causedBy, causedBy);
   if (!proven) throw new Refusal("usage_claim_unproven", "T3 accepted the usage claim but answered with another value", 1);
+  if (sendFrom && Date.parse(out?.from ?? "") !== Date.parse(from)) {
+    throw new Refusal("usage_claim_unproven", "T3 accepted the session claim but answered with another start", 1);
+  }
+  if (flags.session !== undefined && from !== undefined) target.from = sendFrom ? out.from : null;
   return { ok: true, claimed: true, ...target, causedBy, device };
 }
 

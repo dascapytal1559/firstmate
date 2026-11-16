@@ -109,7 +109,8 @@
 //   - a T3 with usage claims (world usageClaims, the T3 Code fork) offers
 //     t3_usage_claim, checked as the fork's handler does and stored in world
 //     usageClaims (true or a map) keyed session:<id>, directory:<path>, or
-//     run:<thread>:<run>; world restartCause declares t3_restart_request's
+//     run:<thread>:<run> (world usageClaimFrom adds a session claim's from,
+//     keyed session:<id>@<from-epoch-ms>); world restartCause declares t3_restart_request's
 //     causedBy, checked like a launch's and stored on world restartRequest.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
@@ -204,6 +205,11 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "action", "title", ...(w.statusLabels ? ["statusLabel"] : []),
       "clientRequestId"].map((k) => [k, {}])),
+  }),
+  t3_usage_claim: (w) => ({
+    type: "object",
+    properties: Object.fromEntries(["environmentId", "sessionId", ...(w.usageClaimFrom ? ["from"] : []), "directory", "threadId", "runId",
+      "causedBy", "device"].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -440,6 +446,12 @@ async function callTool(w, name, a) {
       // absolute directory, and exactly one of causedBy (null removes) or
       // device; claiming again replaces. Claims live in world usageClaims,
       // keyed by target, and world usageClaimAnswer answers another value.
+      // With world usageClaimFrom, a session claim may take from (an ISO
+      // time), kept one per session and start under session:<id>@<from-ms>;
+      // without it, from is dropped like any argument the schema lacks.
+      const from = w.usageClaimFrom ? a.from : undefined;
+      if (from !== undefined && Number.isNaN(Date.parse(from))) return [err("invalid_request", "from must be an ISO 8601 time."), false];
+      if (from !== undefined && a.sessionId === undefined) return [err("invalid_request", "from goes only with sessionId."), false];
       const targets = ["sessionId", "directory", "runId"].filter((k) => a[k] !== undefined);
       if (targets.length !== 1) return [err("invalid_request", "Give exactly one of sessionId, directory or runId."), false];
       if ((targets[0] === "runId") !== (a.threadId !== undefined)) return [err("invalid_request", "threadId goes with runId, and only with runId."), false];
@@ -451,11 +463,11 @@ async function callTool(w, name, a) {
         const problem = causeProblem(threads, a.causedBy);
         if (problem) return [problem, false];
       }
-      const key = a.sessionId !== undefined ? `session:${a.sessionId}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${a.runId}`;
+      const key = a.sessionId !== undefined ? `session:${a.sessionId}${from === undefined ? "" : `@${Date.parse(from)}`}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${a.runId}`;
       w.usageClaims = typeof w.usageClaims === "object" && w.usageClaims !== null ? w.usageClaims : {};
       if (a.causedBy === null) delete w.usageClaims[key];
       else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : { causedBy: a.causedBy };
-      const target = a.sessionId !== undefined ? { sessionId: a.sessionId } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
+      const target = a.sessionId !== undefined ? { sessionId: a.sessionId, ...(from === undefined ? {} : { from: new Date(from).toISOString() }) } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
       return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null }), true];
     }
     case "t3_restart_cancel":

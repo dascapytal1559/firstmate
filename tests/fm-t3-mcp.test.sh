@@ -1715,6 +1715,26 @@ test_usage_claim_targets_values_and_refusals() {
   mcp usage-claim --session s --device computer
   expect_code 1 "$RC" "an answer naming another value is unproven"
   assert_equals usage_claim_unproven "$(field "$OUT" error.code)" "and typed so"
+  t3_fake_set 'delete w.usageClaimAnswer'
+  mcp usage-claim --session s --from 2026-11-16T09:00:00Z --device computer
+  expect_code 0 "$RC" "a start on a T3 whose claim takes none still claims: $ERR"
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.session:s)" "a T3 whose claim takes no start gets the whole-session claim"
+  assert_equals true "$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).from === null))' "$OUT")" "and the answer says no start was kept"
+  mcp usage-claim --directory /nm/run-1 --from 2026-11-16T09:00:00Z --device computer
+  expect_code 2 "$RC" "a start goes only with a session"
+  mcp usage-claim --session s --from 2026-11-16 --device computer
+  expect_code 2 "$RC" "a start without a time and zone is invalid use"
+  t3_fake_set 'w.usageClaimFrom = true'
+  mcp usage-claim --session s --from 2026-11-16T10:00:00+01:00 --caused-by "$cause"
+  expect_code 0 "$RC" "a session claim from a start succeeds: $ERR"
+  assert_equals 2026-11-16T09:00:00.000Z "$(field "$OUT" from)" "the start is sent and answered in UTC"
+  assert_equals "$cause" "$(field "$(t3_fake_field usageClaims.session:s@1794819600000)" causedBy)" "T3 keeps the claim under its start"
+  mcp usage-claim --session s --from 2026-11-16T09:05:00Z --device computer
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.session:s@1794819900000)" "a later start is kept beside it"
+  assert_equals "$cause" "$(field "$(t3_fake_field usageClaims.session:s@1794819600000)" causedBy)" "leaving the earlier start's claim in place"
+  t3_fake_set 'w.usageClaimAnswer = { sessionId: "s", from: "2026-11-16T08:00:00.000Z", causedBy: null, device: "computer" }'
+  mcp usage-claim --session s --from 2026-11-16T09:05:00Z --device computer
+  expect_code 1 "$RC" "an answer naming another start is unproven"
   fresh_case usage-claim-absent '{"causedBy":true}'
   mcp usage-claim --session s --device computer
   expect_code 4 "$RC" "a T3 without usage claims is a local refusal"
