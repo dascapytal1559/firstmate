@@ -1696,7 +1696,7 @@ test_cause_names_a_wake_and_the_latest_prompt_before_the_command() {
 }
 
 test_usage_claim_targets_values_and_refusals() {
-  local cause='{"threadId":"coord","runId":"run-old","messageId":"msg-old"}' listed="$TMP_ROOT/claimed-runs"
+  local cause='{"threadId":"coord","runId":"run-old","messageId":"msg-old"}'
   fresh_case usage-claim '{"causedBy":true,"usageClaims":true}'
   FM_WAKE=1 t3_coordinator "$(iso_in -60)"
   in_agent coord usage-claim --turn coord --device computer
@@ -1704,11 +1704,18 @@ test_usage_claim_targets_values_and_refusals() {
   assert_equals true "$(field "$OUT" claimed)" "the caller's own turn is claimed"
   assert_equals run-c "$(field "$OUT" runId)" "the claim names the active run"
   assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.run:coord:run-c)" "T3 holds the device claim on that run"
-  printf 'coord\trun-c\n' > "$listed"
-  in_agent coord usage-claim --turn coord --unless-listed "$listed" --caused-by "$cause"
-  assert_equals false "$(field "$OUT" claimed)" "a turn the caller lists is left as claimed"
-  assert_contains "$(field "$OUT" reason)" "already claimed" "the reason says so"
+  in_agent coord usage-claim --turn coord --if-unclaimed --caused-by "$cause"
+  expect_code 0 "$RC" "a kept claim is not a failure: $ERR"
+  assert_equals false "$(field "$OUT" claimed)" "a turn that already has a claim is left as claimed"
+  assert_equals "already claimed" "$(field "$OUT" reason)" "the reason says so"
+  assert_equals computer "$(field "$OUT" device)" "the answer names the kept claim, not the one asked"
+  assert_equals true "$(t3_fake_calls t3_usage_claim | tail -n 1 | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).ifUnclaimed))')" "T3 is asked with ifUnclaimed"
   assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.run:coord:run-c)" "the first claim stands"
+  mcp usage-claim --thread coord --run run-old --if-unclaimed --device phone
+  assert_equals true "$(field "$OUT" claimed)" "an unclaimed target takes the claim: $ERR"
+  assert_equals '{"device":"phone"}' "$(t3_fake_field usageClaims.run:coord:run-old)" "and T3 holds it"
+  mcp usage-claim --thread coord --run run-old --if-unclaimed --caused-by null
+  expect_code 2 "$RC" "--if-unclaimed with a removal is invalid use"
   in_agent coord usage-claim --turn coord --caused-by "$cause"
   assert_equals "$cause" "$(field "$OUT" causedBy)" "claiming again replaces"
   mcp usage-claim --turn coord --device phone
@@ -1759,22 +1766,12 @@ test_usage_claim_targets_values_and_refusals() {
   mcp usage-claim --session s --device computer
   expect_code 4 "$RC" "a T3 without usage claims is a local refusal"
   assert_equals usage_claim_unsupported "$(field "$OUT" error.code)" "and typed so"
-  pass "fm-t3-mcp usage-claim: turn, run, session, and folder targets; device, cause, and removal values; first claims kept; refusals typed"
-}
-
-test_recent_runs_lists_the_threads_runs() {
-  fresh_case recent-runs
-  t3_coordinator "$(iso_in -60)"
-  mcp recent-runs --thread coord
-  expect_code 0 "$RC" "recent-runs answers: $ERR"
-  assert_equals "run-c run-old" "$(field "$OUT" runs | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).map((r) => r.runId).join(" "))')" \
-    "runs come newest first"
-  assert_equals msg-old "$(field "$OUT" runs | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8"))[1].userMessageId)')" \
-    "each run names its starting message"
-  assert_equals "" "$(t3_fake_mutations)" "recent-runs changes nothing"
-  mcp recent-runs --thread coord --limit 21
-  expect_code 2 "$RC" "more than 20 runs is invalid use"
-  pass "fm-t3-mcp recent-runs: the thread's latest runs, newest first, with their starting messages"
+  fresh_case usage-claim-no-keep '{"causedBy":true,"usageClaims":true,"noIfUnclaimed":true}'
+  mcp usage-claim --session s --if-unclaimed --device computer
+  expect_code 4 "$RC" "a T3 that cannot keep a claim refuses --if-unclaimed locally"
+  assert_equals usage_claim_unsupported "$(field "$OUT" error.code)" "and typed so"
+  assert_equals "" "$(t3_fake_field usageClaims.session:s)" "with nothing claimed"
+  pass "fm-t3-mcp usage-claim: turn, run, session, and folder targets; device, cause, and removal values; --if-unclaimed keeps a claim; refusals typed"
 }
 
 test_restart_request_names_its_cause() {
@@ -1862,7 +1859,6 @@ test_cause_answers_null_rather_than_guess
 test_cause_counts_to_the_turn_that_started_the_process
 test_cause_names_a_wake_and_the_latest_prompt_before_the_command
 test_usage_claim_targets_values_and_refusals
-test_recent_runs_lists_the_threads_runs
 test_restart_request_names_its_cause
 test_launch_and_send_carry_the_cause
 test_login_writes_private_credential_and_never_prints_token

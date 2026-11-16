@@ -141,11 +141,10 @@ Some work has no prompt T3 can follow: FirstMate's own wake turns run outside an
 Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Usage by origin" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
 
 - **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
-  A wake about no task is upkeep (watcher recovery, scheduled checks, a follow-up armed with no cause) and counts to the computer, as does a wake about tasks that carry no cause.
-- **Turns no drain describes.** Each drain, and on Claude each turn end of FirstMate's session, also claims the computer for the thread's recent finished turns this home never claimed, such as a turn a background command's notification started.
 - **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
 
-A turn this home already claimed keeps its first claim against later drains, while an explicit `turn` claim replaces it.
+Upkeep needs no claim: T3 files a FirstMate coordinator turn that no claim names and no person typed as computer upkeep by itself, so a wake about no task (watcher recovery, scheduled checks, a follow-up armed with no cause), a wake about tasks that carry no cause, and a turn no drain describes (such as one a background command's notification started) all count to the computer with nothing sent.
+The drain's claim passes `bin/fm-t3-mcp.mjs usage-claim --if-unclaimed`, which sends T3's `ifUnclaimed`, so a turn that already has a claim keeps it against later drains, while an explicit `turn` claim replaces it.
 T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.
 Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, or restart.
 

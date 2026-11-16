@@ -33,12 +33,6 @@ export FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$STATE_DIR" FM_CONFIG_OVERRIDE="$C
 # started a minute ago; plus a fresh state directory.
 # shellcheck disable=SC2016  # ${...} belongs to the JavaScript snippet.
 fresh_case() {
-  local i=0
-  # An earlier case's detached sweep finishes before its world and records go.
-  while pgrep -f "$CLAIM" >/dev/null 2>&1 && [ "$i" -lt 100 ]; do
-    sleep 0.1
-    i=$((i + 1))
-  done
   t3_fake_case "$TMP_ROOT/cases/$1" "${2:-{\"causedBy\":true,\"usageClaims\":true\}}"
   t3_fake_credential "$CONFIG_DIR/t3code-token"
   rm -rf "$STATE_DIR"
@@ -65,25 +59,6 @@ as_agent() {
 
 claims() {  # <key> -> the stored claim
   node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const v = (w.usageClaims || {})[process.argv[2]]; if (v) process.stdout.write(JSON.stringify(v));' "$T3_FAKE_WORLD" "$1"
-}
-
-# wait_claim <key> <expected> <seconds>: the detached sweep's claim lands.
-wait_claim() {
-  local i=0
-  while [ "$i" -lt $(($3 * 10)) ]; do
-    [ "$(claims "$1")" = "$2" ] && return 0
-    sleep 0.1
-    i=$((i + 1))
-  done
-  return 1
-}
-
-# settle_sweep: a wake's detached sweep has claimed both finished turns, so it
-# cannot spill into the next case.
-settle_sweep() {
-  if ! wait_claim run:coord:run-w '{"device":"computer"}' 10 || ! wait_claim run:coord:run-old '{"device":"computer"}' 10; then
-    fail "the sweep claims every unclaimed finished turn computer: $(t3_fake_field usageClaims)"
-  fi
 }
 
 meta_with_cause() {  # <task> <cause-json|empty>
@@ -129,51 +104,53 @@ test_wake_claims_the_first_caused_task_and_keeps_it() {
   as_agent "$CLAIM" wake --task gone --task uncaused --task tk
   expect_code 0 "$RC" "a wake claim exits 0: $ERR"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "the turn counts to the first named task that has a cause"
-  assert_grep "$(printf 'coord\trun-c')" "$STATE_DIR/.t3-usage-claimed-runs" "the claimed turn is remembered"
-  settle_sweep
-  as_agent "$CLAIM" wake
+  as_agent "$CLAIM" wake --device phone
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a later drain in the same turn keeps the first claim"
+  assert_equals true "$(t3_fake_calls t3_usage_claim | tail -n 1 | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).ifUnclaimed))')" "because the drain asks T3 to keep it"
+  assert_equals "" "$(claims run:coord:run-w)$(claims run:coord:run-old)" "and no other turn of the thread is claimed"
+  [ ! -e "$STATE_DIR/.t3-usage-claimed-runs" ] || fail "no claimed-turns list is kept"
   as_agent "$CLAIM" turn --device phone
   expect_code 0 "$RC" "an explicit turn claim exits 0: $ERR"
   assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "an explicit claim replaces the drain's, such as a voice journal's"
   as_agent "$CLAIM" wake --task tk
   assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "and a later drain leaves it"
-  pass "fm-t3-usage-claim wake: the first caused task wins, the first claim of a turn stands, the sweep marks the rest, and turn replaces"
+  pass "fm-t3-usage-claim wake: the first caused task wins, the first claim of a turn stands, and turn replaces"
 }
 
-test_wake_about_nothing_is_upkeep_and_uncaused_tasks_count_to_the_computer() {
+test_wake_about_nothing_claims_nothing() {
   fresh_case wake-upkeep
   as_agent "$CLAIM" wake
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a wake about no task counts to the computer"
-  settle_sweep
+  expect_code 0 "$RC" "an upkeep wake exits 0: $ERR"
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a wake about no task claims nothing, so T3 files it as upkeep"
   fresh_case wake-uncaused
   meta_with_cause old-task ''
   as_agent "$CLAIM" wake --task old-task
   expect_code 0 "$RC" "an uncaused wake exits 0: $ERR"
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a wake about tasks with no cause falls back to the computer"
-  assert_grep "$(printf 'coord\trun-c')" "$STATE_DIR/.t3-usage-claimed-runs" "and the turn is marked handled"
-  settle_sweep
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a wake about tasks with no cause claims nothing either"
   fresh_case wake-note
   as_agent "$CLAIM" wake --caused-by "$CAUSE_T"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a cause given, such as an inbox note's, is claimed"
-  pass "fm-t3-usage-claim wake: upkeep and a wake about tasks with no cause count to the computer"
+  pass "fm-t3-usage-claim wake: upkeep and a wake about tasks with no cause claim nothing"
 }
 
 test_claims_are_best_effort_and_logged_once() {
   fresh_case claim-fails '{"causedBy":true,"usageClaims":true,"failTools":{"t3_usage_claim":{"code":"unavailable","message":"down"}}}'
-  as_agent "$CLAIM" wake
+  as_agent "$CLAIM" wake --device phone
   expect_code 0 "$RC" "a failed claim never fails its caller"
   assert_equals 1 "$(awk 'END { print NR }' "$STATE_DIR/t3-usage-claims.log")" "a failed call is logged once: $(cat "$STATE_DIR/t3-usage-claims.log")"
   assert_grep "unavailable: " "$STATE_DIR/t3-usage-claims.log" "the log names T3's error: $(cat "$STATE_DIR/t3-usage-claims.log")"
-  sleep 1
-  assert_equals 1 "$(t3_fake_calls t3_usage_claim | awk 'END { print NR }')" "a failed turn claim skips the sweep"
   fresh_case claim-unsupported '{"causedBy":true}'
-  as_agent "$CLAIM" wake
+  as_agent "$CLAIM" wake --device phone
   expect_code 0 "$RC" "a T3 without usage claims is not a failure"
+  fresh_case claim-no-keep '{"causedBy":true,"usageClaims":true,"noIfUnclaimed":true}'
+  as_agent "$CLAIM" wake --device phone
+  expect_code 0 "$RC" "a T3 that cannot keep a claim is not a failure"
+  assert_equals "" "$(claims run:coord:run-c)" "and the drain claims nothing there rather than replace"
+  [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "an absent feature is not logged: $(cat "$STATE_DIR/t3-usage-claims.log")"
   rm -f "$CONFIG_DIR/t3code-token"
-  as_agent "$CLAIM" wake
+  as_agent "$CLAIM" wake --device phone
   expect_code 0 "$RC" "a home with no T3 credential claims nothing"
-  as_agent env -u T3CODE_THREAD_ID "$CLAIM" wake
+  as_agent env -u T3CODE_THREAD_ID "$CLAIM" wake --device phone
   expect_code 0 "$RC" "no T3 turn claims nothing"
   as_agent "$CLAIM" turn --device tablet
   expect_code 2 "$RC" "an unknown device is invalid use"
@@ -203,12 +180,12 @@ test_drain_claims_the_wake_turn() {
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a lone turn-ended row claims for its task, not the computer or an empty claim"
   fresh_case drain-empty
   as_agent "$DRAIN"
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a drain with nothing about a task claims the computer"
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a drain with nothing about a task claims nothing, so T3 files it as upkeep"
   fresh_case drain-outside
   append_wake "$STATE_DIR" signal tk.status "signal: tk.status"
   "$DRAIN" > "$out" 2>&1
   assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a drain outside a T3 turn claims nothing"
-  pass "fm-wake-drain: a T3 wake turn is claimed for the task its first wake names, or the computer for upkeep"
+  pass "fm-wake-drain: a T3 wake turn is claimed for the task its first wake names, or left to T3 as upkeep"
 }
 
 # when_spec <name> [cause-json]: a condition->action follow-up's spec, with the
@@ -225,22 +202,19 @@ test_drain_claims_a_followups_arming_cause() {
   as_agent "$DRAIN"
   assert_contains "$ERR" "WAKE_ACK_REQUIRED" "the drain presents as before: $ERR"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a fired follow-up's wake counts to the prompt that armed it"
-  settle_sweep
   fresh_case drain-when-nocause
   when_spec promo ''
   append_wake "$STATE_DIR" check "procevent:when-promo:1" "check: procevent when when-promo 1"
   as_agent "$DRAIN"
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a follow-up armed with no cause stays upkeep, and argv text is never read as a cause"
-  settle_sweep
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a follow-up armed with no cause stays upkeep, and argv text is never read as a cause"
   fresh_case drain-when-gone
   append_wake "$STATE_DIR" check "procevent:when-promo:1" "check: procevent when when-promo 1"
   as_agent "$DRAIN"
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a follow-up whose spec is gone stays upkeep"
-  settle_sweep
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "a follow-up whose spec is gone stays upkeep"
   fresh_case drain-other-procevent
   append_wake "$STATE_DIR" check "procevent:lavish-x:1" "check: procevent lavish lavish-x 1"
   as_agent "$DRAIN"
-  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "any other process-event result stays upkeep"
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "any other process-event result stays upkeep"
   pass "fm-wake-drain: a fired follow-up's wake counts to the prompt that armed it, and upkeep otherwise"
 }
 
@@ -258,7 +232,6 @@ test_drain_claims_a_voice_journal_note_for_the_phone() {
   as_agent "$DRAIN"
   assert_contains "$ERR" "WAKE_ACK_REQUIRED" "the drain presents as before: $ERR"
   assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "a voice journal's note counts to the phone, whatever cause it carries"
-  settle_sweep
   fresh_case drain-note
   inbox_note 1-note request_id=export-1 "caused-by=$CAUSE_T"
   append_wake "$STATE_DIR" check "inbox:1-note" "check: captain inbox note 1-note - note"
@@ -271,7 +244,7 @@ t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
   test_cause_records \
   test_wake_claims_the_first_caused_task_and_keeps_it \
-  test_wake_about_nothing_is_upkeep_and_uncaused_tasks_count_to_the_computer \
+  test_wake_about_nothing_claims_nothing \
   test_drain_claims_a_voice_journal_note_for_the_phone \
   test_claims_are_best_effort_and_logged_once \
   test_drain_claims_the_wake_turn \

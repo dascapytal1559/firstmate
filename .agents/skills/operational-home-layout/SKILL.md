@@ -143,7 +143,7 @@ state/               runtime records and signals; gitignored
   t3-bridge/         the last objectives and model routing pushes to T3's Bridge; bin/fm-t3-bridge.sh owns it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
   <id>.queued-cause t3-landed-cause  the T3 prompt that queued a backlog item (dropped by its spawn, rm, or done) and the latest landed task's cause; bin/fm-t3-cause-lib.sh owns both
-  .t3-usage-claimed-runs t3-usage-claims.log  the T3 turns this home claimed usage for and one line per failed claim, both trimmed as they grow; bin/fm-t3-usage-claim.sh owns them, safe to delete
+  t3-usage-claims.log  one line per failed T3 usage claim, trimmed as it grows; bin/fm-t3-usage-claim.sh owns it, safe to delete
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
   decision-bindings/ private records marking a captured-answer source as feeding the keyed-answer intake, with a legacy origin on pre-collapse records; written only by bin/fm-captain-hold.sh bind, dropped by unbind and by source retirement (`process-event-sources` and `captain-hold-lifecycle` skills; docs/captain-hold-lifecycle.md)

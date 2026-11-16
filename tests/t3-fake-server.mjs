@@ -110,7 +110,9 @@
 //     t3_usage_claim, checked as the fork's handler does and stored in world
 //     usageClaims (true or a map) keyed session:<id>, directory:<path>, or
 //     run:<thread>:<run> (world usageClaimFrom adds a session claim's from,
-//     keyed session:<id>@<from-epoch-ms>); world restartCause declares t3_restart_request's
+//     keyed session:<id>@<from-epoch-ms>; ifUnclaimed keeps a stored claim
+//     and answers it with kept:true, unless world noIfUnclaimed drops the
+//     field); world restartCause declares t3_restart_request's
 //     causedBy, checked like a launch's and stored on world restartRequest;
 //     world usageReasons ({rows}) offers the fork's read-only t3_usage_reasons.
 //
@@ -210,7 +212,7 @@ const TOOL_SCHEMAS = {
   t3_usage_claim: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "sessionId", ...(w.usageClaimFrom ? ["from"] : []), "directory", "threadId", "runId",
-      "causedBy", "device"].map((k) => [k, {}])),
+      "causedBy", "device", ...(w.noIfUnclaimed ? [] : ["ifUnclaimed"])].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -464,12 +466,15 @@ async function callTool(w, name, a) {
         const problem = causeProblem(threads, a.causedBy);
         if (problem) return [problem, false];
       }
+      const ifUnclaimed = !w.noIfUnclaimed && a.ifUnclaimed === true;
+      if (ifUnclaimed && a.causedBy === null) return [err("invalid_request", "ifUnclaimed goes only with a claim, not a removal."), false];
       const key = a.sessionId !== undefined ? `session:${a.sessionId}${from === undefined ? "" : `@${Date.parse(from)}`}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${a.runId}`;
       w.usageClaims = typeof w.usageClaims === "object" && w.usageClaims !== null ? w.usageClaims : {};
-      if (a.causedBy === null) delete w.usageClaims[key];
+      const kept = ifUnclaimed && w.usageClaims[key] !== undefined;
+      if (kept) { /* the earlier claim stands */ } else if (a.causedBy === null) delete w.usageClaims[key];
       else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : { causedBy: a.causedBy };
       const target = a.sessionId !== undefined ? { sessionId: a.sessionId, ...(from === undefined ? {} : { from: new Date(from).toISOString() }) } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
-      return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null }), true];
+      return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null, ...(kept ? { kept: true } : {}) }), !kept];
     }
     case "t3_usage_reasons": {
       // The fork's read-only watchdog over world usageReasons.rows: the day

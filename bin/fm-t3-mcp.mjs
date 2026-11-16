@@ -135,16 +135,14 @@
 //     would count them to the turn that started that shell. The message pages
 //     it reads ask for one character of each item, so message text is never
 //     read. Changes nothing.
-//   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> [--unless-listed <file>] | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
-//       (--caused-by <cause-json|null> | --device phone|computer)
+//   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
+//       (--caused-by <cause-json|null> | --device phone|computer) [--if-unclaimed]
 //     The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by
 //     origin"): count work Usage cannot trace to that cause (as an agent
 //     prompt with it would count) or straight to that device. --turn claims
 //     the calling process's own turn of that thread, found exactly as cause
 //     finds it, and answers claimed:false with a reason, claiming nothing,
-//     where cause would answer null, or when --unless-listed <file> lists
-//     that turn as a "<thread> TAB <run>" line (a turn the caller claimed
-//     already); --thread with --run names a run; a
+//     where cause would answer null; --thread with --run names a run; a
 //     session (native id) or folder covers work run outside T3, such as a
 //     pipeline. T3 counts a claimed turn only when its own prompt does not
 //     already trace, so claiming a prompted turn changes nothing. A session
@@ -152,11 +150,16 @@
 //     until a later claim's start, so a resumed session splits by turn; T3
 //     keeps one claim per session and start. A T3 whose claim takes no from
 //     gets the whole-session claim instead, answered with from null.
-//     Claiming the same target (and start) again replaces; --caused-by null
-//     removes. Prints {claimed, the target, causedBy, device} as T3 answered
-//     them, which must be what was asked, else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
+//     Claiming the same target (and start) again replaces, unless
+//     --if-unclaimed sends T3's ifUnclaimed, which keeps a claim the target
+//     already has and answers claimed:false, reason "already claimed", with
+//     that earlier claim's causedBy and device; --caused-by null removes
+//     (not with --if-unclaimed). Prints {claimed, the target, causedBy,
+//     device} as T3 answered them, which must be what was asked unless kept,
+//     else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
 //     T3 refuses, with nothing claimed; exit 4 (usage_claim_unsupported)
-//     where T3 has no t3_usage_claim.
+//     where T3 has no t3_usage_claim, or none that takes ifUnclaimed when
+//     --if-unclaimed asks for it.
 //   fm-t3-mcp.mjs usage-reasons [--days <n>] [--until-day <YYYY-MM-DD>] [--time-zone <iana>]
 //     The T3 Code fork's read-only t3_usage_reasons, the labels watchdog:
 //     Usage tokens over <n> days (T3's default 7, at most 366) ending
@@ -168,10 +171,6 @@
 //     day than --until-day, exits 1 (usage_reasons_malformed), never an
 //     empty figure; exit 4 (usage_reasons_unsupported) where T3 has no
 //     t3_usage_reasons. Changes nothing.
-//   fm-t3-mcp.mjs recent-runs --thread <id> [--limit <n>]
-//     The thread's latest runs, newest first (default 10, at most 20): each
-//     {runId, status, userMessageId, startedAt, completedAt}. Changes
-//     nothing.
 //   fm-t3-mcp.mjs cause-check --json <text>
 //     Local, no T3 call: {causedBy} for <text>, a JSON object of exactly
 //     threadId, messageId, and optional runId, all non-empty strings, in any
@@ -525,6 +524,8 @@ const EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "thought_level", "thinki
 // A name a thread environment may set; T3 checks names and caps sizes again.
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REPEATABLE = new Set(["option", "thread", "escalated"]);
+// Flags that take no value: flags[key] is true when given.
+const SWITCHES = new Set(["if-unclaimed"]);
 // Every MCP session this invocation opened, ended when the verb returns.
 const SESSIONS = new Set();
 
@@ -543,14 +544,18 @@ function usage(message) {
   throw new Refusal("usage", message ?? "invalid use; see the header of bin/fm-t3-mcp.mjs", 2);
 }
 
-// Every flag takes one value; a repeatable flag also collects every value in
-// flags.all[key], while flags[key] keeps the last.
+// Every flag but a switch takes one value; a repeatable flag also collects
+// every value in flags.all[key], while flags[key] keeps the last.
 function parseFlags(argv) {
   const flags = { all: {} };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith("--")) usage(`unexpected argument '${arg}'`);
     const key = arg.slice(2);
+    if (SWITCHES.has(key)) {
+      flags[key] = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined || value.startsWith("--")) usage(`--${key} needs a value`);
     i++;
@@ -1688,8 +1693,6 @@ async function causeVerb(flags) {
 // count work Usage cannot trace to a cause or a device.
 const USAGE_CLAIM_TOOL = "t3_usage_claim";
 const USAGE_DEVICES = ["phone", "computer"];
-// T3 keeps a few runs per read; the recent-runs verb asks for at most this.
-const RECENT_RUNS_MAX = 20;
 
 async function usageClaimSession(flags) {
   const { session } = await verifiedSession(flags);
@@ -1697,18 +1700,6 @@ async function usageClaimSession(flags) {
     throw new Refusal("usage_claim_unsupported", `this T3 cannot take usage claims (${USAGE_CLAIM_TOOL} absent)`, 4);
   }
   return session;
-}
-
-// Whether <file> lists {threadId, runId} as a "<thread> TAB <run>" line; a
-// missing or unreadable file lists nothing.
-function listedRun(file, { threadId, runId }) {
-  let text = "";
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return false;
-  }
-  return text.split("\n").includes(`${threadId}\t${runId}`);
 }
 
 // <text> as a UTC ISO 8601 time, or null when it is not a zoned ISO time.
@@ -1730,7 +1721,12 @@ async function usageClaim(flags) {
   if (flags.from !== undefined && flags.session === undefined) usage("--from goes only with --session");
   const from = flags.from === undefined ? undefined : isoTime(flags.from);
   if (from === null) usage("--from must be an ISO 8601 time with a zone, such as 2026-11-16T09:30:00Z");
+  const ifUnclaimed = flags["if-unclaimed"] === true;
+  if (ifUnclaimed && value.causedBy === null) usage("--if-unclaimed goes only with a claim, not a removal");
   const session = await usageClaimSession(flags);
+  if (ifUnclaimed && !toolOffers(session, USAGE_CLAIM_TOOL, "ifUnclaimed")) {
+    throw new Refusal("usage_claim_unsupported", `this T3 cannot keep an earlier claim (${USAGE_CLAIM_TOOL} takes no ifUnclaimed)`, 4);
+  }
   // A T3 whose claim takes no from (before per-start session claims) gets
   // the whole-session claim, which replaces that session's earlier one.
   const sendFrom = from !== undefined && toolOffers(session, USAGE_CLAIM_TOOL, "from");
@@ -1739,9 +1735,6 @@ async function usageClaim(flags) {
     const turn = await callerTurn(session, flags.turn);
     if (!turn.runId) return { ok: true, claimed: false, threadId: flags.turn, reason: turn.reason };
     target = { threadId: flags.turn, runId: turn.runId };
-    if (flags["unless-listed"] !== undefined && listedRun(flags["unless-listed"], target)) {
-      return { ok: true, claimed: false, ...target, reason: `turn ${turn.runId} is already claimed` };
-    }
   } else if (flags.run !== undefined) {
     target = { threadId: flags.thread, runId: flags.run };
   } else if (flags.session !== undefined) {
@@ -1751,12 +1744,17 @@ async function usageClaim(flags) {
   }
   let out;
   try {
-    out = await session.call(USAGE_CLAIM_TOOL, { ...target, ...value });
+    out = await session.call(USAGE_CLAIM_TOOL, { ...target, ...value, ...(ifUnclaimed ? { ifUnclaimed: true } : {}) });
   } catch (err) {
     throw causeRefusal(err, value.causedBy ?? null, "nothing was claimed");
   }
   const device = out?.device ?? null;
   const causedBy = out?.causedBy ?? null;
+  // A kept claim answers with the earlier value, not the one asked.
+  if (ifUnclaimed && out?.kept === true) {
+    if (flags.session !== undefined && from !== undefined) target.from = sendFrom ? out.from ?? null : null;
+    return { ok: true, claimed: false, ...target, causedBy, device, reason: "already claimed" };
+  }
   const proven = value.device !== undefined ? device === value.device : value.causedBy === null ? causedBy === null && device === null : sameCause(value.causedBy, causedBy);
   if (!proven) throw new Refusal("usage_claim_unproven", "T3 accepted the usage claim but answered with another value", 1);
   if (sendFrom && Date.parse(out?.from ?? "") !== Date.parse(from)) {
@@ -1807,16 +1805,6 @@ async function usageReasons(flags) {
     ok: true, sinceDay: out.sinceDay, untilDay: out.untilDay, timeZone: out.timeZone,
     tokens: out.tokens, byDefaultTokens: out.byDefaultTokens, rows: out.rows,
   };
-}
-
-async function recentRuns(flags) {
-  const threadId = need(flags, "thread");
-  const { session } = await verifiedSession(flags);
-  const out = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: positiveInt(flags, "limit", 10, RECENT_RUNS_MAX) });
-  const runs = (out?.recentRuns ?? []).map((r) => ({
-    runId: r.runId, status: r.status ?? null, userMessageId: r.userMessageId ?? null, startedAt: r.startedAt ?? null, completedAt: r.completedAt ?? null,
-  }));
-  return { ok: true, threadId, runs };
 }
 
 async function read(flags) {
@@ -2820,7 +2808,6 @@ const VERBS = {
   cause: causeVerb,
   "usage-claim": usageClaim,
   "usage-reasons": usageReasons,
-  "recent-runs": recentRuns,
   "cause-check": (flags) => ({ ok: true, causedBy: causeFlag({ "caused-by": need(flags, "json") }) }),
   read,
   capture,
