@@ -122,6 +122,20 @@ test_fit_picks_the_soonest_weekly_reset() {
   pass "a job that fits starts on the fitting account with the soonest weekly reset, and the pick is recorded"
 }
 
+# watcher_runs_retry_check: run the retry check through the watcher's own trust
+# gate for custom state checks, failing as the watcher would reject it.
+watcher_runs_retry_check() {
+  (
+    . "$ROOT/bin/fm-pr-lib.sh"
+    . "$ROOT/bin/fm-check-lib.sh"
+    fm_custom_check_snapshot_prepare "$HOME_DIR/state" worker-sizing-retry || { echo "rejected"; exit 1; }
+    FM_SIZE_NOW="${SIZE_NOW:-$NOW}" bash "$FM_CUSTOM_CHECK_SNAPSHOT"
+    rc=$?
+    fm_custom_check_snapshot_cleanup
+    exit "$rc"
+  )
+}
+
 test_no_fit_queues_until_the_soonest_reset() {
   local out rc
   new_case queue
@@ -134,13 +148,14 @@ test_no_fit_queues_until_the_soonest_reset() {
   assert_contains "$out" "sizing: queued - no account fits now; soonest fit after a reset; $CASE/a1 at $(jq -nr "$((NOW + 5400)) | todate | sub(\":[0-9]{2}Z$\"; \"Z\")") (in 90 min)" "the soonest fit is named"
   assert_contains "$out" "the wait passes 60 minutes - tell the captain" "a wait over an hour says to tell the captain"
   assert_grep "at=$((NOW + 5400))" "$HOME_DIR/state/worker-sizing/queue/queue-1" "the retry time is queued"
-  assert_present "$HOME_DIR/state/worker-sizing-retry.check.sh" "the watcher check that wakes firstmate is written"
   [ "$(last_record | jq -r '.event')" = queue ] || fail "the queue decision is recorded"
-  out=$(bash "$HOME_DIR/state/worker-sizing-retry.check.sh")
+  out=$(watcher_runs_retry_check) || fail "the watcher accepts the retry check it is handed: $out"
   assert_equals "" "$out" "nothing is due before the reset"
   out=$(SIZE_NOW=$((NOW + 5400)) run_tool due)
   assert_contains "$out" "check: worker sizing: queued start of queue-1 is due (expected to fit on $CASE/a1) after 90 min; dispatch it again" "the due start wakes firstmate"
   assert_absent "$HOME_DIR/state/worker-sizing/queue/queue-1" "a due entry is retired"
+  assert_absent "$HOME_DIR/state/worker-sizing-retry.check.sh" "with nothing queued the retry check is retired"
+  assert_absent "$HOME_DIR/state/worker-sizing-retry.check-trust" "and so is its trust binding"
   pass "a job no account has room for is queued until the soonest reset where it fits, and the retry wakes firstmate"
 }
 

@@ -47,7 +47,8 @@
 #      account that could not be measured (with a warning); else the start is
 #      queued: exit 76, naming the soonest time an account's 5-hour (or weekly)
 #      reset would let it fit, a state/worker-sizing/queue/<task> entry, and
-#      state/worker-sizing-retry.check.sh so the watcher wakes firstmate then.
+#      state/worker-sizing-retry.check.sh, registered with the watcher while
+#      any start is queued, so it wakes firstmate then.
 #      A wait over queue_notice_minutes says to tell the captain.
 #   --account <id> is firstmate's explicit choice: that account is sized and
 #   started on whether or not it fits, and the record says so.
@@ -64,9 +65,9 @@
 # actual: duration, the transcripts' tokens, weight and busy minutes, the
 # account's reading then, and whether a usage limit cut the task off
 # (state/<id>.usage-limit). due prints one `check:` line per queued start
-# whose time has come and retires its entry. report summarises estimate
-# against actual per class, cut-offs, queued starts and their waits, and the
-# sizing step's cost. refit recomputes each class's p75, p90 and busy_p90 from
+# whose time has come and retires its entry, and the retry check once no
+# entry is left. report summarises estimate against actual per class,
+# cut-offs, queued starts and their waits, and the sizing step's cost. refit recomputes each class's p75, p90 and busy_p90 from
 # finished records (classes with fewer than --min, default 5, keep theirs),
 # prints the changes, and with --write saves them, keeping a backup.
 #
@@ -87,7 +88,8 @@ CONFIG_FILE="$CONFIG/worker-sizing.json"
 RECORDS="$DATA/worker-sizing/records.jsonl"
 QUEUE_DIR="$STATE/worker-sizing/queue"
 LOCK="$STATE/worker-sizing/lock"
-CHECK_SCRIPT="$STATE/worker-sizing-retry.check.sh"
+CHECK_ID=worker-sizing-retry
+CHECK_SCRIPT="$STATE/$CHECK_ID.check.sh"
 QUEUED_EXIT=76
 
 # shellcheck source=bin/fm-timeout-lib.sh
@@ -505,14 +507,19 @@ EOF
 }
 
 ensure_check_script() {
-  [ -f "$CHECK_SCRIPT" ] && return 0
+  local tmp
   mkdir -p "$STATE" || return 1
-  {
+  tmp=$(umask 077; mktemp "$STATE/.fm-size-check.XXXXXX") || return 1
+  if ! {
     printf '#!/usr/bin/env bash\n'
     printf '# Written by bin/fm-size.sh: wakes firstmate when a queued worker start is due.\n'
     printf 'FM_HOME=%q FM_STATE_OVERRIDE=%q FM_DATA_OVERRIDE=%q FM_CONFIG_OVERRIDE=%q exec %q due\n' \
       "$FM_HOME" "$STATE" "$DATA" "$CONFIG" "$SCRIPT_DIR/fm-size.sh"
-  } > "$CHECK_SCRIPT.tmp.$$" && chmod +x "$CHECK_SCRIPT.tmp.$$" && mv "$CHECK_SCRIPT.tmp.$$" "$CHECK_SCRIPT"
+  } > "$tmp" || ! chmod 0700 "$tmp" || ! mv -f -- "$tmp" "$CHECK_SCRIPT"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-check-register.sh" "$CHECK_ID" >/dev/null
 }
 
 cmd_pick() {
@@ -620,7 +627,7 @@ cmd_pick() {
   if [ "$decision" = queue ]; then
     mkdir -p "$QUEUE_DIR"
     printf 'at=%s\naccount=%s\nqueued=%s\nkind=%s\nmodel=%s\neffort=%s\n' "$at" "$account" "$ts" "$kind" "$model" "$eff" > "$QUEUE_DIR/$task"
-    ensure_check_script || echo "warning: could not write $CHECK_SCRIPT; retry the start by hand" >&2
+    ensure_check_script || echo "warning: could not write or register $CHECK_SCRIPT; retry the start by hand" >&2
     rc=$QUEUED_EXIT
   else
     rm -f "$QUEUE_DIR/$task"
@@ -686,7 +693,6 @@ cmd_finish() {
 # --- due ----------------------------------------------------------------------------
 
 cmd_due() {
-  [ -d "$QUEUE_DIR" ] || return 0
   local f task at queued account t
   t=$(now)
   for f in "$QUEUE_DIR"/*; do
@@ -700,7 +706,21 @@ cmd_due() {
     rm -f "$f"
     echo "check: worker sizing: queued start of $task is due${account:+ (expected to fit on $account)} after $(( (t - ${queued:-$t}) / 60 )) min; dispatch it again"
   done
+  retire_check_script_if_idle
   return 0
+}
+
+retire_check_script_if_idle() {
+  [ -e "$CHECK_SCRIPT" ] || return 0
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  mkdir -p "$(dirname "$LOCK")" || return 0
+  fm_lock_try_acquire "$LOCK" || return 0
+  if [ -z "$(ls -A "$QUEUE_DIR" 2>/dev/null)" ]; then
+    FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-check-unregister.sh" "$CHECK_ID" >/dev/null ||
+      echo "warning: could not retire $CHECK_SCRIPT" >&2
+  fi
+  fm_lock_release "$LOCK"
 }
 
 # --- report -------------------------------------------------------------------------

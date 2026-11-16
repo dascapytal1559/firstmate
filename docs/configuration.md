@@ -1861,7 +1861,7 @@ It fits when, on every limit the account reports, the percent left less what is 
 The start goes to the fitting account whose week resets soonest; when none fits, to an account quota-axi could not measure, with a warning; otherwise it is queued.
 
 A queued start exits 76 with nothing leased or launched, so its backlog item stays queued, and names the soonest time a 5-hour or weekly reset would let it fit.
-`state/worker-sizing-retry.check.sh` then wakes firstmate at that time to dispatch it again, and a wait over `queue_notice_minutes` says to tell the captain.
+`state/worker-sizing-retry.check.sh`, registered as a watcher check while any start is queued and retired once none is, then wakes firstmate at that time to dispatch it again, and a wait over `queue_notice_minutes` says to tell the captain.
 
 The pick becomes that one start's `--t3-instance` on T3 Code or its `--account` elsewhere; `config/t3code-instances` is never rewritten.
 An explicit `--t3-instance <id>` or `--account <entry>` from firstmate is still sized and recorded, and starts there even when it does not fit.
