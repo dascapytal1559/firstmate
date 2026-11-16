@@ -1672,3 +1672,25 @@ Every claim is best effort: a claim that cannot be made is skipped or logged onc
 What stays Unknown by design: work before causes were recorded, a task launched without a cause until it ends, and work outside T3 that no claim covers.
 
 The evidence is the touched suites against the fake T3 server, never the live one: the T3 client gains cases for wake causes, the latest prompt, claims, and restart causes; a new claim suite covers each claim, the drain end to end, and failures; the restart, backlog, landing, and brief suites gain a case each.
+
+## 61. A delayed follow-up now counts to the message that set it up (16 November 2026)
+
+Some work waits before it starts: a timed follow-up holds until an account has room, then fires and launches the workers.
+On 15-16 November six promo films and the nightly review were set up this way from the phone, yet the follow-up's firing counted as upkeep on the computer, and so did every worker launched in that turn, about 806M tokens.
+
+The ask:
+
+> Yep, let's go with all three.
+>
+> (16 November 2026)
+
+This is the second of the three builds toward "We'll keep going until unknown is zero percent": phone work that waits and then starts automatically, so that when the job fires it counts to you, phone or computer.
+
+What was built, in two small edits:
+
+- **Arming remembers the cause.** Arming a follow-up records the prompt behind the arming turn in the follow-up's own record, before that record is sealed; with no cause available it records nothing, as before.
+- **The firing wake claims it.** When the wake for a fired follow-up arrives, its turn is claimed for the recorded prompt; a follow-up armed with no cause stays upkeep on the computer.
+
+Workers launched in that wake turn need no change: a launch from a wake turn already names the wake, and the wake now counts to the phone message that armed the follow-up, so the workers inherit it.
+
+The evidence is the touched suites, with no live T3: the follow-up suite covers a recorded cause, none, a malformed one refused, and a cause kept through an update; the claim suite covers a fired follow-up counting to its cause, one with none, one whose record is gone, and any other result staying upkeep.

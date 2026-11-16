@@ -878,7 +878,8 @@ print_status_presentation() {  # [<deduped-raw-rows>]
 # and its best-effort contract). The candidates, in presentation order, are
 # the task each row names - a status line's or stale worker's task, an
 # inactive outcome's child, a merge's, an open decision's, a usage limit's,
-# a relayed supervision outcome's - or the cause an inbox note recorded,
+# a relayed supervision outcome's - or the cause an inbox note recorded, or
+# the cause a fired condition->action follow-up was armed under,
 # then the tasks BRANCH OUTCOMES presented. A row naming none of these is
 # upkeep. Only main in a T3 turn claims; the call is bounded and its outcome
 # never changes the drain's.
@@ -898,6 +899,14 @@ claim_wake_usage() {
           merged-*) task=$(printf '%s\n' "$payload" | sed -n 's/^check: merge landed: \([^ ]*\) .*/\1/p') ;;
           open-decision:*|usage-limit:*) task=${key#*:}; task=${task%%:*} ;;
           supervision-host-return:*) task=$(printf '%s\n' "$payload" | sed -n 's/^check: supervision-host outcome [0-9]* for \([^ ]*\) \[.*/\1/p') ;;
+          procevent:when-*:*)
+            # A condition->action follow-up's result: the prompt that armed it
+            # (bin/fm-procevent-when.sh records caused_by= in its spec).
+            # Gone spec or no line: upkeep, as before.
+            note=${key#procevent:}
+            note="$STATE/when/${note%%:*}.spec"
+            [ ! -f "$note" ] || cause=$(sed -n '/^argv:$/q;s/^caused_by=//p' "$note" 2>/dev/null | head -n 1)
+            ;;
           inbox:*)
             note="$STATE/inbox/${key#inbox:}.note"
             [ -f "$note" ] || note="$STATE/inbox/handled/${key#inbox:}.note"

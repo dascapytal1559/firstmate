@@ -121,6 +121,7 @@ Firstmate names that prompt at its durable boundaries, and [`bin/fm-t3-cause-lib
 - A spawn records it in the task record as `caused_by=` and sends it on the worker's launch and its brief; a relaunch keeps the recorded one.
 - A steer through `fm-send.sh` keeps it in the steer's inbox record, and every doorbell for that record carries it.
 - A note written with `fm-inbox.sh note` from inside a T3 turn keeps the prompt that made the agent write it, and `drain` shows it.
+- A condition-then-action follow-up armed with `fm-procevent-when.sh arm` keeps the prompt behind its arming turn in its spec as `caused_by=`, and the wake that reports its fired result claims that cause.
 - A backlog item added with `fm-tasks-axi.sh add` keeps the prompt that queued it, and its first spawn names that prompt, whatever turn launches it, such as a recovery wake after a restart.
 - A landing keeps the landed task's cause as the latest landed cause, and a [clean restart](#clean-restart) names it, since a restart installs landed work.
 
@@ -138,8 +139,8 @@ A launch reads the thread back and refuses one that did not bind the cause; a ca
 Some work has no prompt T3 can follow: FirstMate's own wake turns, no-mistakes pipelines, and the supervision host's engine sessions run outside any traced prompt.
 Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Usage by origin" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
 
-- **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or an inbox note's recorded cause.
-  A wake about no task is upkeep (watcher recovery, scheduled checks, process-event results) and counts to the computer.
+- **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
+  A wake about no task is upkeep (watcher recovery, scheduled checks, a follow-up armed with no cause) and counts to the computer.
   A wake about tasks that carry no cause gets an empty claim, which leaves it Unknown rather than guess a device.
 - **Turns no drain describes.** Each drain also claims the computer for the thread's recent finished turns this home never claimed, such as a turn a background command's notification started.
 - **Turns that file a voice journal.** The agent filing it runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.

@@ -11,6 +11,9 @@
 #     every doorbell for that record carries it (bin/fm-task-inbox-lib.sh);
 #   - bin/fm-inbox.sh note records the prompt that made an agent write a note
 #     (caused-by=), so firstmate can name it when it acts on that note;
+#   - bin/fm-procevent-when.sh arm records the prompt behind a condition-then-
+#     action follow-up in its spec (caused_by=), which bin/fm-wake-drain.sh
+#     claims when that follow-up's fired result wakes firstmate;
 #   - bin/fm-tasks-axi.sh add records the prompt that queued a backlog item
 #     (state/<id>.queued-cause), which bin/fm-spawn.sh sends when it launches
 #     that item later, from whatever turn, and then removes;

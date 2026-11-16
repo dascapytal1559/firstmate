@@ -266,6 +266,39 @@ test_drain_claims_the_wake_turn() {
   pass "fm-wake-drain: a T3 wake turn is claimed for the task its first wake names, or the computer for upkeep"
 }
 
+# when_spec <name> [cause-json]: a condition->action follow-up's spec, with the
+# caused_by= line bin/fm-procevent-when.sh arm records when it has a cause.
+when_spec() {
+  mkdir -p "$STATE_DIR/when"
+  { printf 'fm-when-spec-v1\narmed=1\n'; [ -z "${2:-}" ] || printf 'caused_by=%s\n' "$2"; printf 'argv:\ncaused_by=not-a-cause\n'; } > "$STATE_DIR/when/when-$1.spec"
+}
+
+test_drain_claims_a_followups_arming_cause() {
+  fresh_case drain-when
+  when_spec promo "$CAUSE_T"
+  append_wake "$STATE_DIR" check "procevent:when-promo:1" "check: procevent when when-promo 1"
+  as_agent "$DRAIN"
+  assert_contains "$ERR" "WAKE_ACK_REQUIRED" "the drain presents as before: $ERR"
+  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a fired follow-up's wake counts to the prompt that armed it"
+  settle_sweep
+  fresh_case drain-when-nocause
+  when_spec promo ''
+  append_wake "$STATE_DIR" check "procevent:when-promo:1" "check: procevent when when-promo 1"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a follow-up armed with no cause stays upkeep, and argv text is never read as a cause"
+  settle_sweep
+  fresh_case drain-when-gone
+  append_wake "$STATE_DIR" check "procevent:when-promo:1" "check: procevent when when-promo 1"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a follow-up whose spec is gone stays upkeep"
+  settle_sweep
+  fresh_case drain-other-procevent
+  append_wake "$STATE_DIR" check "procevent:lavish-x:1" "check: procevent lavish lavish-x 1"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "any other process-event result stays upkeep"
+  pass "fm-wake-drain: a fired follow-up's wake counts to the prompt that armed it, and upkeep otherwise"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
   test_cause_records \
@@ -274,4 +307,5 @@ fm_test_run \
   test_claims_are_best_effort_and_logged_once \
   test_session_claims_the_engine_conversation \
   test_pipeline_claims_the_branch_run_folder \
-  test_drain_claims_the_wake_turn
+  test_drain_claims_the_wake_turn \
+  test_drain_claims_a_followups_arming_cause
