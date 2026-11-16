@@ -245,6 +245,75 @@ test_stdin_transports_and_output_shapes() {
   pass "both stdin transports classify correctly and Claude's deny keeps stdout empty"
 }
 
+run_stdin() {
+  local payload=$1 rc=0
+  shift
+  : > "$OUT"
+  : > "$ERR"
+  printf '%s' "$payload" \
+    | env FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" "$@" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  return "$rc"
+}
+
+test_web_fetch_page_reader_is_the_only_agent_exemption() {
+  local rc payload
+  rc=0
+  run_stdin '{"tool_name":"Agent","tool_input":{"subagent_type":"web-fetch","prompt":"read https://example.test"}}' || rc=$?
+  [ "$rc" -eq 0 ] || fail "Agent with subagent_type web-fetch must allow in a primary home, got exit $rc: $(cat "$ERR")"
+  [ ! -s "$OUT" ] && [ ! -s "$ERR" ] || fail "web-fetch allow wrote output"
+
+  # Everything else stays denied: other types, no type, and near-miss names.
+  for payload in \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"Explore","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"Plan","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":null,"prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":["web-fetch"],"prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"Web-Fetch","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":"web-fetch-2","prompt":"go"}}' \
+    '{"tool_name":"Agent","tool_input":{"subagent_type":" web-fetch","prompt":"go"}}' \
+    '{"tool_name":"Agent"}' \
+    '{"tool_name":"Workflow","tool_input":{"subagent_type":"web-fetch"}}' \
+    '{"tool_name":"Task","tool_input":{"subagent_type":"web-fetch"}}' \
+    '{"tool_name":"TaskCreateAgent","tool_input":{"subagent_type":"web-fetch"}}'; do
+    rc=0
+    run_stdin "$payload" || rc=$?
+    [ "$rc" -eq 2 ] || fail "must still deny $payload, got exit $rc"
+    [ ! -s "$OUT" ] || fail "deny wrote stdout for $payload"
+  done
+
+  # --tool mode carries no tool input, so it can never earn the exemption.
+  expect_deny "Agent by --tool name" Agent
+  pass "only an Agent call with subagent_type exactly web-fetch is released; every other Agent call stays denied"
+}
+
+test_web_fetch_does_not_change_scope_or_escape_hatch() {
+  local child="$TMP_ROOT/child-web-fetch" rc=0 payload
+  payload='{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose","prompt":"go"}}'
+
+  # The escape hatch still releases an otherwise denied Agent call, and only on its exact value.
+  rc=0
+  run_stdin "$payload" FM_ALLOW_SUBAGENT=1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "FM_ALLOW_SUBAGENT=1 must still allow, got exit $rc"
+  rc=0
+  run_stdin "$payload" FM_ALLOW_SUBAGENT=0 || rc=$?
+  [ "$rc" -eq 2 ] || fail "FM_ALLOW_SUBAGENT=0 must still deny, got exit $rc"
+
+  # A crewmate task worktree stays inert for a non-web-fetch Agent call.
+  git -C "$PRIMARY" worktree add -q -b fixture-child-web-fetch "$child"
+  mkdir -p "$child/bin" "$child/state"
+  printf '# fixture\n' > "$child/AGENTS.md"
+  rc=0
+  printf '%s' "$payload" \
+    | FM_ROOT_OVERRIDE="$child" FM_HOME="$child" FM_STATE_OVERRIDE="$child/state" \
+      "$CHECK" --claude > "$OUT" 2> "$ERR" || rc=$?
+  [ "$rc" -eq 0 ] || fail "a crewmate task worktree must stay out of scope, got exit $rc"
+  pass "the escape hatch and the crewmate-worktree scope are unchanged by the page-reader allow"
+}
+
 test_malformed_transport_fails_open() {
   local rc payload
   for payload in '{not-json' '' '{}' '{"tool_name":null}'; do
@@ -287,5 +356,7 @@ test_escape_hatch_allows_deliberate_use
 test_task_worktree_and_non_firstmate_repo_are_inert
 test_secondmate_home_is_in_scope
 test_stdin_transports_and_output_shapes
+test_web_fetch_page_reader_is_the_only_agent_exemption
+test_web_fetch_does_not_change_scope_or_escape_hatch
 test_malformed_transport_fails_open
 test_missing_jq_stdin_transport_fails_open

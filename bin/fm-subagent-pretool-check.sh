@@ -25,6 +25,11 @@
 # It matches a delegation-SHAPED tool name rather than a fixed list, so a future
 # tool that ships before anyone updates a local deny list is still refused.
 #
+# Allowed by exact name: observe-or-stop tools, the session-local todo tools,
+# and a Claude `Agent` call whose tool_input.subagent_type is exactly `web-fetch`
+# (the primary's only page reader; see PAGE_READER_SUBAGENT_TYPE below and
+# docs/subagent-guard.md for the same-name custom-agent limit).
+#
 # The guard is narrow by design. It classifies ONE thing: the shape of the tool
 # name. It makes no judgment about whether the work should be delegated at all,
 # which is a reasoning boundary no tool-shape hook can enforce.
@@ -78,8 +83,21 @@ OBSERVE_ONLY_TOOLS='taskoutput taskstop taskget tasklist cronlist bashoutput kil
 # widen by accident.
 PLAN_ONLY_TOOLS='taskcreate taskupdate'
 
+# The one exact Claude `Agent` subagent_type that is a page reader, not
+# delegated work. The primary has no direct WebFetch tool, so this helper is its
+# only way to read a web page: it fetches a page and returns its text, creates
+# nothing that outlives the call, and a denial would leave the primary unable to
+# read the web at all. The match is on the stdin JSON's tool_input.subagent_type
+# (so it never applies to --tool mode, which carries no input), exact and
+# case-sensitive, and only for the tool named Agent: every other subagent type,
+# and an Agent call with no subagent_type, stays denied. Claude Code also
+# resolves a project, user, or plugin agent defined under this same name, which
+# this guard cannot see; docs/subagent-guard.md records that limit.
+PAGE_READER_SUBAGENT_TYPE='web-fetch'
+
 TOOL=""
 TOOL_SET=0
+SUBAGENT_TYPE=""
 CLAUDE_MODE=0
 AGY_MODE=0
 
@@ -144,6 +162,7 @@ if [ "$TOOL_SET" -eq 0 ]; then
   [ -n "$PAYLOAD" ] || exit 0
   command -v jq >/dev/null 2>&1 || exit 0
   TOOL=$(printf '%s' "$PAYLOAD" | jq -r '(.toolCall.name // .tool_name // .toolName // empty)' 2>/dev/null) || exit 0
+  SUBAGENT_TYPE=$(printf '%s' "$PAYLOAD" | jq -r '(.tool_input.subagent_type // empty) | strings' 2>/dev/null) || SUBAGENT_TYPE=""
 fi
 
 [ -n "$TOOL" ] || exit 0
@@ -161,6 +180,8 @@ esac
 for allowed in $OBSERVE_ONLY_TOOLS $PLAN_ONLY_TOOLS; do
   [ "$NORMALIZED" != "$allowed" ] || exit 0
 done
+
+[ "$NORMALIZED" != "agent" ] || [ "$SUBAGENT_TYPE" != "$PAGE_READER_SUBAGENT_TYPE" ] || exit 0
 
 MATCHED=""
 for stem in $DELEGATION_STEMS; do
