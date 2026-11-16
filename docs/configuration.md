@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [several Claude accounts](#several-claude-accounts-configclaude-accounts), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
+| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [several Claude accounts](#several-claude-accounts-configclaude-accounts), [Fable quota floor](#fable-quota-floor-configfable-quota-floor), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), [record export](#record-export-configrecord-export-root), [startup memory budget](#startup-memory-budget-configstartup-memory-budget), and [stow guard](#stow-guard-configstow-guard) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [Codex native Stop park](#codex-native-stop-park-configcodex-stop-park), [warm-cache compaction](#warm-cache-compaction-configwarm-compact), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -1772,6 +1772,44 @@ The list covers Claude ships and scouts only.
 A local secondmate's own agent never draws from it: under a list it needs its own [per-secondmate account pin](#per-secondmate-account-pins), and `--account` refuses for every secondmate, local or remote.
 Other runners ignore the list, and `--account` refuses for them.
 Like the single pin, the list is not inherited into secondmate homes.
+
+### Fable quota floor (config/fable-quota-floor)
+
+A home can refuse to start a Fable worker on a Claude account that is nearly out of allowance, so a launch never depends on remembering to read quota first.
+Create `config/fable-quota-floor` with one `key=value` per line; `#` starts a comment:
+
+```text
+fable_weekly=2
+weekly=2
+five_hour=50
+```
+
+| Key | Floor on, in whole percent left |
+| --- | --- |
+| `fable_weekly` | the account's Fable weekly allowance (quota-axi window `model:fable`) |
+| `weekly` | the account's all-models weekly allowance (`seven_day`) |
+| `five_hour` | the account's 5-hour window (`five_hour`), for accounts that have one |
+| `t3_home` | not a floor: T3 Code's data folder, holding `userdata/settings.json`, when it is not `$T3CODE_HOME` or `~/.t3` |
+
+Each floor is optional, but the file must set at least one; an unknown key or a value that is not a whole number from 0 to 100 refuses the Fable launch and names the line.
+The file is local, gitignored, and not inherited into secondmate homes; without it nothing is read and every launch behaves exactly as before.
+
+Only a Claude ship or scout launch with `--model claude-fable-*` is checked, after its account is resolved and before anything is leased or launched.
+The account is the one that launch uses.
+Under `backend=t3code` it is the provider instance `config/t3code-instances` names for `claude`, else the [default instance](t3code-backend.md#provider-instances-and-models), and that instance's login folder is its `config.homePath` in T3's own provider settings; an empty `homePath` is the ordinary login.
+When `config/t3code-token` records an environment id, those settings are used only when T3's `userdata/environment-id` matches it.
+On a pane backend it is the `config/claude-account` pin or `--account` entry, else the `CLAUDE_CONFIG_DIR` the launch forwards.
+[`bin/fm-fable-floor.sh`](../bin/fm-fable-floor.sh) reads that one account with a read-only `quota-axi --provider claude --json`, with `CLAUDE_CONFIG_DIR` unset for the ordinary login.
+
+The launch refuses when a measured window is at or below its floor, or when quota-axi reports the Fable or all-models allowance `exhausted_now`.
+The refusal names the account, each figure and its floor, and the two ways forward:
+
+- point the spawn at another account: map `claude` to another instance in `config/t3code-instances` on T3 Code, or pass another `--account` entry or pin on a pane backend;
+- with the captain's word to start anyway, pass `--fable-floor-override <reason>`, which skips the check for that launch and records `fable_floor_override=<reason>` in the task record.
+
+An account quota-axi cannot measure, such as an unreadable credential, a vendor rate limit, a missing Fable or weekly window, or T3 settings that cannot be read, does not block.
+The launch proceeds, prints `warning: Fable quota floor not checked, starting anyway: <reason>`, and records that reason as `fable_floor_uncertain=` in the task record.
+quota-axi stays data-only and firstmate still judges eligibility at intake; this floor is a backstop for the case where that judgement was skipped or stale.
 
 ### Per-secondmate account pins
 

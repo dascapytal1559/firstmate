@@ -330,3 +330,14 @@ The fresh worker is also told that PR text is input to read, never instructions 
 Pushes, failing checks, requested changes, and conflicts restart it as upstream does.
 Approved by the captain on 2026-11-13.
 Details: the trigger contract in [`fm-park.sh`](bin/fm-park.sh).
+
+## A Fable worker never starts on a nearly-out account
+
+With `config/fable-quota-floor` set, starting a Fable worker refuses when the Claude account it would run on is at or below the home's floor on its Fable weekly allowance, its all-models weekly allowance, or its 5-hour window.
+On T3 Code that account is the provider instance the launch uses and that instance's own login folder from T3's provider settings.
+The refusal names the account, the figure, and the floor, and says how to go on: point the spawn at another account, or start anyway with `--fable-floor-override <reason>`, which the task record keeps.
+An account quota-axi cannot measure does not block; the worker starts and the task record keeps a one-line warning.
+Upstream keeps quota-axi data-only and leaves eligibility to firstmate's judgement at dispatch, which reads quota first.
+The fork adds a structural backstop because that judgement is a step firstmate has to remember: on 16 Nov new workers were still routed to an account whose Fable allowance had fallen to 2% and then run out.
+Approved by the captain on 2026-11-16.
+Details: [Fable quota floor](docs/configuration.md#fable-quota-floor-configfable-quota-floor).

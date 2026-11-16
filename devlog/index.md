@@ -1718,3 +1718,27 @@ What was built:
 - **FirstMate's own moves stay quiet.** Its own snoozes and the archive at cleanup send nothing back.
 
 The evidence is the touched suites on made-up records: the reader suite gains cases for each action, a dated, quoted, and open-ended snooze, an unknown thread, and malformed or doubled actions; the supervision suite checks the rules reach only a session running in T3.
+
+## 63. A Fable worker never starts on a nearly-out account (16 November 2026)
+
+On 16 November the first Claude account's Fable weekly allowance fell to 2% and then ran out, while new workers were still being sent there.
+FirstMate's account rules already said such an account is no longer used, but nothing checked them when a worker started: FirstMate had to remember to read quota first.
+
+Asked whether to file a fix so starting a worker refuses a Fable start on a nearly-out account, his answer:
+
+> Yeah, do it.
+>
+> (16 November 2026)
+
+What was built:
+
+- **An opt-in floor.** A home sets `config/fable-quota-floor` with a weekly floor on an account's Fable allowance and on its all-models allowance, and a floor on its 5-hour window; this home uses 2% weekly and 50% for the 5-hour window.
+  Without the file nothing is read and nothing changes.
+- **The account the launch really uses.** On T3 Code that is the provider instance the launch runs on and that instance's own login folder, read from T3's provider settings rather than guessed from the instance's name; a settings file from a different T3 install is not trusted.
+  On a pane backend it is the pinned or chosen account, or the one the launch passes on.
+- **A refusal before anything starts.** At or below a floor, or with the allowance already exhausted, the start stops before a copy is leased or a thread opened, and says which account, the figure, the floor, and the two ways forward: another account, or an explicit override with a reason the task record keeps.
+- **Unknown is not a no.** An account that cannot be measured, such as a rate-limited read or a missing Fable window, does not block; the worker starts and the task record keeps a one-line warning.
+
+Checked against this home's three accounts at the time of writing, read-only: the first and third accounts were refused, with Fable at 0% and the third's 5-hour window at 0%, and the second passed.
+
+The evidence is the new suite on made-up quota readings: refusals at each floor and on an exhausted allowance, a pass above every floor, unmeasured accounts proceeding with their reason, the ordinary login read with its folder unset, T3 instance mapping from made-up provider settings, malformed floor files, and through the real spawn script a refusal before launch, a pass with an unchanged record, a recorded warning, and the recorded override.

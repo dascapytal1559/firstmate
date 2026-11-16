@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -64,7 +64,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>] [--fable-floor-override <reason>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -525,6 +525,16 @@
 #   relaunch reuses the recorded entry unless --account moves it. Without the
 #   list, --account refuses and nothing else changes. docs/configuration.md
 #   "Several Claude accounts" owns the contract.
+# Fable quota floor (config/fable-quota-floor, --fable-floor-override <reason>):
+#   Opt-in. A Claude ship or scout launch with --model claude-fable-* runs
+#   bin/fm-fable-floor.sh on the account it will use, after the account is
+#   resolved and before anything is leased or launched, and refuses when that
+#   account is at or below the home's floor. An account it cannot measure
+#   proceeds with a one-line warning, recorded as fable_floor_uncertain=.
+#   --fable-floor-override skips the check for that launch with the captain's
+#   word and records fable_floor_override=<reason>; it refuses on a secondmate
+#   or a model that is not claude-fable-*. docs/configuration.md "Fable quota
+#   floor" owns the contract.
 # Per-secondmate omp profile (config/secondmate-accounts/<id>/omp-profile):
 #   Opt-in, and read only for a local secondmate's own omp agent;
 #   bin/fm-omp-profile-lib.sh owns the file and its refusals. A pinned launch
@@ -1016,6 +1026,8 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 DISPATCH_OVERRIDE=
+FABLE_FLOOR_OVERRIDE=
+FABLE_FLOOR_OVERRIDE_SET=0
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -1065,6 +1077,10 @@ for a in "$@"; do
       EFFORT_SET=1
       ;;
     dispatch-override) DISPATCH_OVERRIDE=$a ;;
+    fable-floor-override)
+      FABLE_FLOOR_OVERRIDE=$a
+      FABLE_FLOOR_OVERRIDE_SET=1
+      ;;
     hermes-profile)
       HERMES_PROFILE=$a
       HERMES_PROFILE_SET=1
@@ -1137,6 +1153,11 @@ for a in "$@"; do
     ;;
   --dispatch-override) want_value=dispatch-override ;;
   --dispatch-override=*) DISPATCH_OVERRIDE=${a#--dispatch-override=} ;;
+  --fable-floor-override) want_value=fable-floor-override ;;
+  --fable-floor-override=*)
+    FABLE_FLOOR_OVERRIDE=${a#--fable-floor-override=}
+    FABLE_FLOOR_OVERRIDE_SET=1
+    ;;
   --hermes-profile) want_value=hermes-profile ;;
   --hermes-profile=*) HERMES_PROFILE=${a#--hermes-profile=}; HERMES_PROFILE_SET=1 ;;
   --backend) want_value=backend ;;
@@ -1230,6 +1251,17 @@ fi
   echo "error: --account requires a non-empty value" >&2
   exit 1
 }
+# The Fable floor override needs a printable reason for the task record, and
+# applies only where the floor check runs: a Fable ship or scout launch.
+if [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 1 ]; then
+  case "$FABLE_FLOOR_OVERRIDE" in
+    ''|*[![:print:]]*) echo 'error: --fable-floor-override requires a printable reason' >&2; exit 1 ;;
+  esac
+  [ "$KIND" != secondmate ] || {
+    echo 'error: --fable-floor-override applies to ship and scout launches; a secondmate launch runs no Fable floor check' >&2
+    exit 1
+  }
+fi
 # A secondmate, local or remote, launches on its own per-mate pin, so --account
 # is refused here, before the remote route could ignore it.
 [ "$ACCOUNT_SET" -eq 0 ] || [ "$KIND" != secondmate ] || {
@@ -2179,6 +2211,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
+  [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ] || shared_args+=(--fable-floor-override "$FABLE_FLOOR_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
@@ -3670,6 +3703,28 @@ if [ "$BACKEND" = t3code ]; then
   if [ -n "$WORKER_ACCOUNT" ]; then
     echo "error: backend=t3code cannot apply the $HARNESS worker account pin because T3's provider instance owns the account; select that instance in config/t3code-instances instead" >&2
     exit 1
+  fi
+fi
+# Fable quota floor (header above): the account is known here and nothing is
+# leased or launched yet. On a pane backend the launch exports the pinned or
+# declared root, else forwards the invoking process's own CLAUDE_CONFIG_DIR.
+FABLE_FLOOR_UNCERTAIN=
+case "$MODEL" in claude-fable-*) fable_floor_model=1 ;; *) fable_floor_model=0 ;; esac
+if [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 1 ] && { [ "$fable_floor_model" = 0 ] || [ "$HARNESS" != claude ]; }; then
+  echo "error: --fable-floor-override applies only to a claude launch with --model claude-fable-*, not harness=$HARNESS model=${MODEL:-default}" >&2
+  exit 1
+fi
+if [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] && [ "$fable_floor_model" = 1 ] && [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ]; then
+  if [ -n "$WORKER_ACCOUNT" ]; then
+    fable_floor_root=$WORKER_ACCOUNT_ROOT
+  else
+    fable_floor_root=${CLAUDE_CONFIG_DIR:-}
+  fi
+  fable_floor_out=$("$SCRIPT_DIR/fm-fable-floor.sh" check --model "$MODEL" --backend "$BACKEND" \
+    --root "$fable_floor_root" --account "${WORKER_ACCOUNT_DECLARED:-${fable_floor_root:-ordinary}}") || exit 1
+  if [ -n "$fable_floor_out" ]; then
+    FABLE_FLOOR_UNCERTAIN=${fable_floor_out#uncertain: }
+    echo "warning: Fable quota floor not checked, starting anyway: $FABLE_FLOOR_UNCERTAIN" >&2
   fi
 fi
 if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
@@ -7419,7 +7474,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential caused_by", keys, " ")
+      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential caused_by fable_floor_override fable_floor_uncertain", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -7451,6 +7506,10 @@ preserve_relaunch_meta() {
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+  # The Fable quota floor's override reason or unmeasured warning, only when
+  # one applies, so every other task record stays byte-identical.
+  [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ] || printf 'fable_floor_override=%s\n' "$FABLE_FLOOR_OVERRIDE"
+  [ -z "$FABLE_FLOOR_UNCERTAIN" ] || printf 'fable_floor_uncertain=%s\n' "$FABLE_FLOOR_UNCERTAIN"
   [ -z "$SPAWN_CAUSE" ] || printf 'caused_by=%s\n' "$SPAWN_CAUSE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
