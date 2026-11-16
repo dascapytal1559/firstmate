@@ -1742,3 +1742,35 @@ What was built:
 Checked against this home's three accounts at the time of writing, read-only: the first and third accounts were refused, with Fable at 0% and the third's 5-hour window at 0%, and the second passed.
 
 The evidence is the new suite on made-up quota readings: refusals at each floor and on an exhausted allowance, a pass above every floor, unmeasured accounts proceeding with their reason, the ordinary login read with its folder unset, T3 instance mapping from made-up provider settings, malformed floor files, and through the real spawn script a refusal before launch, a pass with an unchanged record, a recorded warning, and the recorded override.
+
+## 64. Every Claude worker is sized before it starts (16 November 2026)
+
+Until now FirstMate chose an account for each worker by hand: read every account's quota, weigh what was already running, pick one.
+The scout that measured what workers really cost showed fixed thresholds fail both ways, and a hand-run sizing costs a few thousand tokens that stay in FirstMate's context for the rest of the session.
+The captain's ask:
+
+> I think just recall the goal and make sure we size up each job before we start just take into consideration of quotas and how many workers we've already put on something.
+>
+> We should assess how costly this is because we're gonna be starting workers all day. We want this step to not cost too much.
+>
+> whatever you implement, make sure we have some way of like tracking how it's going.
+>
+> (16 November 2026)
+
+What was built:
+
+- **A sizing step inside every start.** With a cost table in the home's config, starting a Claude worker reads each account's quota once, sizes the job at its class's 90th percentile, and holds back what the workers and pipeline runs already on each account are still expected to spend: their 75th percentile less what their transcripts show they have spent.
+  It starts on the account where the job fits whose week resets soonest, keeping 10 points of the 5-hour window and 2 points of the week in reserve, and checks the Fable allowance for Fable work.
+- **One start, one account.** On T3 Code the pick rides that one start as its provider instance, so the home's standing account mapping is never rewritten; FirstMate can still name an account itself, and that choice wins and is recorded.
+- **Waiting instead of failing.** When no account has room the start is held, the backlog item stays queued, and FirstMate is woken at the soonest reset where the job would fit; a wait over an hour is reported to the captain.
+- **Tracking for the review.** Each start records the estimate, every account's reading, and why it chose; each cleanup records what the worker actually spent, how long it ran, and whether a usage limit cut it off.
+  A report sets estimates against actuals per kind of job and counts cut-offs, waits, and the sizing step's own cost; a refit updates the cost table from those records.
+- **Finding T3's own folder.** Both this and the Fable floor now find T3's settings in the folder whose environment id matches the signed-in server, such as a fork's own folder, instead of assuming the default one.
+
+The table was seeded from the scout's own data: for example a Fable ship's 90th percentile is about 82% of the smaller account's 5-hour window, and an Opus high ship's about 6%.
+
+A dry run against this home's three accounts, read-only and in a scratch copy of the home, took about 3 seconds and printed four lines per start.
+It placed the ten running workers on the accounts their transcripts are written to.
+An Opus ship went to the first account, whose week resets soonest and still had room for it at 7% left; Fable work skipped it (its Fable allowance at 0%) and went to the second, whose week resets before the third's.
+
+The evidence is the new suite on made-up quota readings: a fit on the soonest-resetting account, a queued start and its wake, running and moments-old work held back, the Fable allowance, an unmeasured account, an explicit override, a malformed table, T3 instances and their folders, cleanup records, the report and refit, and through the real spawn script a start on the picked account, a deferred start with nothing launched, and an unchanged start with sizing off.

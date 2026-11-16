@@ -341,3 +341,15 @@ Upstream keeps quota-axi data-only and leaves eligibility to firstmate's judgeme
 The fork adds a structural backstop because that judgement is a step firstmate has to remember: on 16 Nov new workers were still routed to an account whose Fable allowance had fallen to 2% and then run out.
 Approved by the captain on 2026-11-16.
 Details: [Fable quota floor](docs/configuration.md#fable-quota-floor-configfable-quota-floor).
+
+## Each Claude worker is sized before it starts
+
+With `config/worker-sizing.json` set, every Claude ship or scout is sized before it starts against each account's 5-hour window, its week, and for Fable work its Fable allowance, counting what the workers and pipeline runs already on that account are still expected to spend.
+It starts on the account where it fits whose week resets soonest, so the allowance that expires first is used first while enough is kept back that a worker is rarely cut off midway.
+When no account has room, the start waits for the soonest reset where it fits and FirstMate is woken then; a wait over about an hour is reported to the captain.
+The sizing is a script inside the start, printing one short line per account, so it costs FirstMate almost nothing however many workers start in a day.
+Every start and every cleanup is recorded, and `bin/fm-size.sh report` and `refit` show how estimates compared with what workers actually spent and update the cost table from that data.
+Upstream leaves account eligibility to FirstMate's judgement, with quota-axi as data only.
+The fork makes that judgement a deterministic step because doing it by hand cost thousands of tokens per start that stayed in FirstMate's context all session.
+Approved by the captain on 2026-11-16.
+Details: [Worker sizing](docs/configuration.md#worker-sizing-configworker-sizingjson).

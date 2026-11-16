@@ -40,6 +40,7 @@ Outside T3 Code:
 - [Rebased landings](FORK.md#rebased-local-only-work-still-lands): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes.
 - [Trusted review wakes](FORK.md#only-trusted-reviewers-wake-a-parked-worker): a worker parked on review restarts only for review activity from trusted people; anything else is reported to FirstMate.
 - [Fable quota floor](FORK.md#a-fable-worker-never-starts-on-a-nearly-out-account): a Fable worker never starts on a Claude account nearly out of its allowance.
+- [Sized worker starts](FORK.md#each-claude-worker-is-sized-before-it-starts): each Claude worker is sized against every account's quota and starts where it fits, or waits for the soonest reset.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

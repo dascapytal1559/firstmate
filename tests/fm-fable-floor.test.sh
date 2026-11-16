@@ -237,6 +237,21 @@ test_t3_settings_of_another_server_are_not_read() {
   pass "T3 settings whose environment id differs from the signed-in server's are not used"
 }
 
+test_t3_finds_the_signed_in_servers_data_folder() {
+  local out rc
+  new_tool_case t3-discover
+  floors 'fable_weekly=2'
+  printf '{"environment_id":"env-fork"}\n' > "$HOME_DIR/config/t3code-token"
+  t3_settings "$USER_HOME/.t3" env-other
+  t3_settings "$USER_HOME/.t3-fork" env-fork
+  printf 'claude=claudeSecond\n' > "$HOME_DIR/config/t3code-instances"
+  account "$CASE/second" 80 40 1
+  out=$(run_tool --model "$FABLE" --backend t3code); rc=$?
+  expect_code 3 "$rc" "without t3_home the signed-in server's own folder is read: $out"
+  assert_contains "$out" "T3 instance claudeSecond ($CASE/second)" "the instance's login folder comes from the matching folder"
+  pass "without t3_home, the T3 data folder is the one whose environment id matches the signed-in server"
+}
+
 test_a_malformed_floor_file_is_an_error() {
   local out rc
   new_tool_case malformed
@@ -346,6 +361,7 @@ test_an_unmeasured_account_proceeds_with_its_reason
 test_the_ordinary_login_is_read_with_the_root_unset
 test_t3_reads_the_mapped_instance_login_folder
 test_t3_settings_of_another_server_are_not_read
+test_t3_finds_the_signed_in_servers_data_folder
 test_a_malformed_floor_file_is_an_error
 test_spawn_refuses_before_launch
 test_spawn_passes_and_leaves_the_record_unchanged

@@ -106,11 +106,16 @@ fm_backend_t3code_harness_field() {  # <harness> <field>
   node "$FM_BACKEND_T3CODE_HELPER" harness --harness "$1" | fm_backend_t3code_json_get "$2"
 }
 
-# fm_backend_t3code_instance_id <harness>: the instance config/t3code-instances
-# names for <harness> (the last matching line wins), or nothing when it names
-# none, leaving the choice to resolve-selection.
+# fm_backend_t3code_instance_id <harness>: the instance this one spawn was
+# given for <harness> (FM_T3CODE_SPAWN_INSTANCE=<harness>=<id>, which
+# bin/fm-spawn.sh sets from --t3-instance or the worker sizing pick), else the
+# instance config/t3code-instances names for it (the last matching line wins),
+# or nothing when it names none, leaving the choice to resolve-selection.
 fm_backend_t3code_instance_id() {  # <harness>
   local harness=$1 file line value='' named=0
+  case "${FM_T3CODE_SPAWN_INSTANCE:-}" in
+    "$harness="?*) printf '%s' "${FM_T3CODE_SPAWN_INSTANCE#*=}"; return 0 ;;
+  esac
   file="$(fm_backend_t3code_config_dir)/t3code-instances"
   if [ -f "$file" ]; then
     while IFS= read -r line || [ -n "$line" ]; do

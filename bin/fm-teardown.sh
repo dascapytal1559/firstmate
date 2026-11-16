@@ -4305,6 +4305,12 @@ LAUNCH_HOME_TOKEN=$(teardown_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
 if [ -n "$LAUNCH_HOME_TOKEN" ]; then
   rm -rf "/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
 fi
+# Opt-in worker sizing (bin/fm-size.sh): record the actual cost of a start it
+# sized while the task and usage-limit records are still here; a home that
+# never sized a start has no records file and runs nothing.
+[ ! -s "$DATA/worker-sizing/records.jsonl" ] ||
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_DATA_OVERRIDE=$DATA FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-size.sh" finish --task "$ID" </dev/null >/dev/null 2>&1 || true
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 # Opt-in fleet activity ledger (docs/fleet-ledger.md), before the status log is

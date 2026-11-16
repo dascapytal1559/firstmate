@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -535,6 +535,17 @@
 #   word and records fable_floor_override=<reason>; it refuses on a secondmate
 #   or a model that is not claude-fable-*. docs/configuration.md "Fable quota
 #   floor" owns the contract.
+# Worker sizing (config/worker-sizing.json, --t3-instance <id>):
+#   Opt-in. A fresh Claude ship or scout runs bin/fm-size.sh pick before its
+#   account is resolved; the account it picks becomes this start's
+#   --t3-instance on backend t3code, or its --account elsewhere, so the home's
+#   standing mapping is never rewritten. An explicit --t3-instance or --account
+#   is still sized and recorded, and wins. When no account has room the spawn
+#   exits 76 with nothing leased or launched and the item stays queued;
+#   bin/fm-size.sh has arranged the wake that retries it. --t3-instance alone
+#   (sizing off) starts on that T3 provider instance for this one start; it is
+#   recorded as t3_instance= and refused on another backend, a relaunch, or a
+#   secondmate. docs/configuration.md "Worker sizing" owns the contract.
 # Per-secondmate omp profile (config/secondmate-accounts/<id>/omp-profile):
 #   Opt-in, and read only for a local secondmate's own omp agent;
 #   bin/fm-omp-profile-lib.sh owns the file and its refusals. A pinned launch
@@ -1049,6 +1060,10 @@ UPSTREAM_CONSENT_SET=0
 TRACEPARENT_SET=0
 ACCOUNT_ARG=
 ACCOUNT_SET=0
+T3_INSTANCE_ARG=
+T3_INSTANCE_SET=0
+# bin/fm-size.sh's exit when no Claude account has room for the start.
+SPAWN_SIZING_QUEUED_EXIT=76
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
@@ -1116,6 +1131,10 @@ for a in "$@"; do
     account)
       ACCOUNT_ARG=$a
       ACCOUNT_SET=1
+      ;;
+    t3-instance)
+      T3_INSTANCE_ARG=$a
+      T3_INSTANCE_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -1200,6 +1219,11 @@ for a in "$@"; do
     ACCOUNT_ARG=${a#--account=}
     ACCOUNT_SET=1
     ;;
+  --t3-instance) want_value=t3-instance ;;
+  --t3-instance=*)
+    T3_INSTANCE_ARG=${a#--t3-instance=}
+    T3_INSTANCE_SET=1
+    ;;
   *) POS+=("$a") ;;
   esac
 done
@@ -1268,6 +1292,17 @@ fi
   echo "error: --account applies to ships and scouts; secondmate ${POS[0]:-} launches on its own config/secondmate-accounts/<id>/claude-account pin" >&2
   exit 1
 }
+# --t3-instance picks the T3 provider instance for this one ship or scout
+# start; the backend is checked once it is resolved.
+if [ "$T3_INSTANCE_SET" -eq 1 ]; then
+  case "$T3_INSTANCE_ARG" in
+    ''|*[!A-Za-z0-9._-]*) echo 'error: --t3-instance requires a T3 provider instance id (letters, digits, ., _ or -)' >&2; exit 1 ;;
+  esac
+  [ "$KIND" != secondmate ] || {
+    echo 'error: --t3-instance applies to ship and scout starts; a secondmate runs on its home'"'"'s own mapping' >&2
+    exit 1
+  }
+fi
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -2223,6 +2258,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$BASE_BRANCH_SET" -eq 0 ] || shared_args+=(--base-branch "$BASE_BRANCH")
   [ "$HERDR_RESUME_LOCK_WAIT" -eq 0 ] || shared_args+=(--herdr-resume-lock-wait)
   [ "$ACCOUNT_SET" -eq 0 ] || shared_args+=(--account "$ACCOUNT_ARG")
+  [ "$T3_INSTANCE_SET" -eq 0 ] || shared_args+=(--t3-instance "$T3_INSTANCE_ARG")
   for pair in "${POS[@]}"; do
     case "$pair" in
     *=*) : ;;
@@ -2244,6 +2280,9 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     if [ "$pair_rc" -eq "$FM_PROJECT_CAPACITY_DEFER_EXIT" ]; then
       echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - its project or this machine's lanes are at capacity, so it stays queued" >&2
       [ "$rc" -ne 0 ] || rc=$FM_PROJECT_CAPACITY_DEFER_EXIT
+    elif [ "$pair_rc" -eq "$SPAWN_SIZING_QUEUED_EXIT" ]; then
+      echo "batch: QUEUED ${pair%%=*} (${pair#*=}) - no Claude account has room for it now; its start is retried at the time named above" >&2
+      [ "$rc" -ne 0 ] || rc=$SPAWN_SIZING_QUEUED_EXIT
     elif [ "$pair_rc" -ne 0 ]; then
       echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
       rc=1
@@ -3657,6 +3696,44 @@ WORKER_ACCOUNT_MATE=
 # A declared Claude account list (config/claude-accounts) needs the entry this
 # launch spends: --account on a fresh spawn, and on a relaunch that flag or
 # else the account the task already records.
+if [ "$T3_INSTANCE_SET" -eq 1 ]; then
+  [ "$BACKEND" = t3code ] || { echo "error: --t3-instance applies only to backend=t3code, not $BACKEND; on a pane backend name the account with --account" >&2; exit 1; }
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --t3-instance applies to a fresh start; a relaunch keeps its thread's instance" >&2; exit 1; }
+fi
+# Worker sizing (header above): before the account is resolved, so the pick
+# becomes this start's --t3-instance on T3 Code or its --account elsewhere.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] && [ -f "$CONFIG/worker-sizing.json" ]; then
+  sizing_explicit=
+  if [ "$BACKEND" = t3code ]; then
+    sizing_explicit=$T3_INSTANCE_ARG
+  elif [ "$ACCOUNT_SET" -eq 1 ]; then
+    sizing_explicit=$ACCOUNT_ARG
+  fi
+  sizing_rc=0
+  sizing_pick=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_DATA_OVERRIDE=$DATA FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-size.sh" pick --task "$ID" --kind "$KIND" --model "${MODEL:-default}" --effort "${EFFORT:-default}" \
+    --backend "$BACKEND" ${sizing_explicit:+--account "$sizing_explicit"} </dev/null) || sizing_rc=$?
+  case "$sizing_rc" in
+    0) ;;
+    "$SPAWN_SIZING_QUEUED_EXIT")
+      echo "deferred: task $ID was not launched and its backlog item stays queued; firstmate is woken to start it again at the time named above" >&2
+      exit "$SPAWN_SIZING_QUEUED_EXIT"
+      ;;
+    *) exit 1 ;;
+  esac
+  if [ -n "$sizing_pick" ] && [ -z "$sizing_explicit" ]; then
+    if [ "$BACKEND" = t3code ]; then
+      T3_INSTANCE_ARG=$sizing_pick
+      T3_INSTANCE_SET=1
+    else
+      ACCOUNT_ARG=$sizing_pick
+      ACCOUNT_SET=1
+    fi
+  fi
+fi
+# One start's T3 instance rides the backend's instance lookup
+# (fm_backend_t3code_instance_id) without touching config/t3code-instances.
+[ "$T3_INSTANCE_SET" -eq 0 ] || export FM_T3CODE_SPAWN_INSTANCE="$HARNESS=$T3_INSTANCE_ARG"
 WORKER_ACCOUNT_REQUEST=$ACCOUNT_ARG
 if [ "$RELAUNCH" -eq 1 ]; then
   WORKER_ACCOUNT_REQUEST=$(fm_worker_account_relaunch_request "$HARNESS" "$CONFIG" "$RELAUNCH_PRIOR_HARNESS" \
@@ -3721,7 +3798,8 @@ if [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] && [ "$fable_floor_model
     fable_floor_root=${CLAUDE_CONFIG_DIR:-}
   fi
   fable_floor_out=$("$SCRIPT_DIR/fm-fable-floor.sh" check --model "$MODEL" --backend "$BACKEND" \
-    --root "$fable_floor_root" --account "${WORKER_ACCOUNT_DECLARED:-${fable_floor_root:-ordinary}}") || exit 1
+    --root "$fable_floor_root" --account "${WORKER_ACCOUNT_DECLARED:-${fable_floor_root:-ordinary}}" \
+    ${T3_INSTANCE_ARG:+--instance "$T3_INSTANCE_ARG"}) || exit 1
   if [ -n "$fable_floor_out" ]; then
     FABLE_FLOOR_UNCERTAIN=${fable_floor_out#uncertain: }
     echo "warning: Fable quota floor not checked, starting anyway: $FABLE_FLOOR_UNCERTAIN" >&2
@@ -7568,6 +7646,9 @@ preserve_relaunch_meta() {
   if [ "$BACKEND" = t3code ]; then
     echo "t3_thread_id=$T"
     echo "t3_project_id=$T3CODE_PROJECT_ID"
+    # The instance this one start was given (--t3-instance or the worker
+    # sizing pick), only when one was; a relaunch keeps the recorded line.
+    [ -z "$T3_INSTANCE_ARG" ] || echo "t3_instance=$T3_INSTANCE_ARG"
   fi
   if [ "$BACKEND" = tern ]; then
     echo "tern_session_id=$TERN_SESSION_ID"
@@ -8430,6 +8511,7 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT" ] || SPAWN_ACCOUNT=" account=$WORKER_ACCOUNT_DECLARED"
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
+[ -z "$T3_INSTANCE_ARG" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT t3_instance=$T3_INSTANCE_ARG"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the

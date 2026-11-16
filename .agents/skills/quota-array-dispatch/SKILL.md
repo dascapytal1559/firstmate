@@ -51,6 +51,7 @@ A genuine tie or no rankable account is the same terminal case as below: decide 
 Account for every declared account in the rationale, including unmeasured ones.
 A typed-resolver `clear` profile for Claude still needs this step's `--account`.
 The account is chosen once, at intake: a relaunch keeps the recorded one, and only an explicit `--account` relaunch moves a task ([`docs/configuration.md`](../../../docs/configuration.md#several-claude-accounts-configclaude-accounts) owns the contract).
+When the home has `config/worker-sizing.json`, skip this section: `bin/fm-spawn.sh` sizes the start and picks the Claude account itself, so pass `--account` (or `--t3-instance` on T3 Code) only to override it ([`docs/configuration.md`](../../../docs/configuration.md#worker-sizing-configworker-sizingjson) owns the contract).
 
 ## Read the default TOON
 

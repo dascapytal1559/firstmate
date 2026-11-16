@@ -3,7 +3,7 @@
 # at or below this home's opt-in quota floor.
 #
 # Usage:
-#   fm-fable-floor.sh check --model <model> --backend <backend> [--root <dir>] [--account <label>]
+#   fm-fable-floor.sh check --model <model> --backend <backend> [--root <dir>] [--account <label>] [--instance <id>]
 #
 # bin/fm-spawn.sh runs this for every ship or scout launch before anything is
 # leased or launched. docs/configuration.md "Fable quota floor" owns the
@@ -15,28 +15,19 @@
 # behaves exactly as before.
 #
 # The account measured is the one the launch actually uses:
-#   - backend t3code: the provider instance config/t3code-instances names for
-#     the claude harness, else the claude row of bin/fm-t3-mcp.mjs's HARNESSES
-#     table, and that instance's login folder from T3's own provider settings
-#     (<t3-home>/userdata/settings.json providerInstances.<id>.config.homePath,
-#     where <t3-home> is the file's t3_home, else $T3CODE_HOME, else ~/.t3).
-#     An empty homePath is the ordinary login, as T3's Claude driver resolves it
-#     when its server inherits no CLAUDE_CONFIG_DIR. When config/t3code-token
-#     records an environment id, <t3-home>/userdata/environment-id must match
-#     it, so another T3 install's settings are never read as this server's.
+#   - backend t3code: --instance, the provider instance this one launch was
+#     given (fm-spawn --t3-instance, or the worker sizing pick), else
+#     fm_claude_login_standing_instance, and that instance's login folder
+#     from fm_claude_login_t3_root, where <t3-home> is
+#     fm_claude_login_default_t3_home of the file's t3_home: the signed-in
+#     server's own data folder unless t3_home or $T3CODE_HOME names one
+#     (bin/fm-claude-login-lib.sh owns all three).
 #   - any other backend: --root, the Claude config directory the launch
 #     exports (empty means the ordinary login, CLAUDE_CONFIG_DIR unset).
 #     --account names it in messages, such as a config/claude-accounts entry.
-# A login folder equal to ~/.claude is read as the ordinary login, because a
-# set CLAUDE_CONFIG_DIR names a different Keychain entry.
 #
-# The read is one bounded
-#   quota-axi --provider claude --json --no-credential-refresh --max-age 60s
-# under that login (CLAUDE_CONFIG_DIR set, or unset for the ordinary login),
-# with QUOTA_AXI_CLAUDE_PROFILES and QUOTA_AXI_SNAPSHOT removed so it reports
-# that one account. It is read-only: it never refreshes or writes a
-# credential, and never prompts. The snapshot is validated with
-# fm_quota_json_valid and its claude row joined with FM_QUOTA_ROW_JQ.
+# The read is fm_claude_login_read with --max-age 60s, read-only. The snapshot
+# is joined with FM_QUOTA_ROW_JQ.
 # Window percentages come from the row's windows[] (five_hour, seven_day,
 # model:fable), using percentRemaining, else 100 - percentUsed.
 #
@@ -66,6 +57,8 @@ FLOOR_FILE="$CONFIG/fable-quota-floor"
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-claude-login-lib.sh
+. "$SCRIPT_DIR/fm-claude-login-lib.sh"
 
 FM_FABLE_FLOOR_SECONDS=${FM_FABLE_FLOOR_SECONDS:-60}
 
@@ -82,7 +75,7 @@ usage() {
 case "${1-}" in
   check) shift ;;
   -h|--help|help) usage; exit 0 ;;
-  *) die "usage: fm-fable-floor.sh check --model <model> --backend <backend> [--root <dir>] [--account <label>]" ;;
+  *) die "usage: fm-fable-floor.sh check --model <model> --backend <backend> [--root <dir>] [--account <label>] [--instance <id>]" ;;
 esac
 
 MODEL=''
@@ -90,15 +83,17 @@ BACKEND=''
 ROOT=''
 ROOT_SET=0
 LABEL=''
+INSTANCE=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --model|--backend|--root|--account)
+    --model|--backend|--root|--account|--instance)
       [ "$#" -ge 2 ] || die "$1 needs a value"
       case "$1" in
         --model) MODEL=$2 ;;
         --backend) BACKEND=$2 ;;
         --root) ROOT=$2; ROOT_SET=1 ;;
         --account) LABEL=$2 ;;
+        --instance) INSTANCE=$2 ;;
       esac
       shift 2
       ;;
@@ -145,73 +140,38 @@ done < "$FLOOR_FILE"
   die "$FLOOR_FILE sets no floor; set fable_weekly, weekly, or five_hour, or remove the file"
 
 command -v jq >/dev/null 2>&1 || uncertain "jq is not installed, so the Fable quota floor could not be checked"
-HOME_DIR=${HOME:?HOME is required}
-
-# A literal leading ~ in a config value or T3 setting names the home folder.
-expand_home() {  # <path>
-  local tilde='~'
-  case "$1" in
-    "$tilde") printf '%s' "$HOME_DIR" ;;
-    "$tilde/"*) printf '%s/%s' "$HOME_DIR" "${1#"$tilde/"}" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
+: "${HOME:?HOME is required}"
 
 # --- the account this launch uses --------------------------------------------
 REMEDY=
 if [ "$BACKEND" = t3code ]; then
-  instance=
-  if [ -f "$CONFIG/t3code-instances" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in claude=*) instance=${line#claude=} ;; esac
-    done < "$CONFIG/t3code-instances"
-  fi
-  if [ -z "$instance" ]; then
-    instance=$(node "$SCRIPT_DIR/fm-t3-mcp.mjs" harness --harness claude 2>/dev/null | jq -r '.instanceId // empty' 2>/dev/null) ||
-      instance=
-  fi
+  instance=$INSTANCE
+  [ -n "$instance" ] || instance=$(fm_claude_login_standing_instance "$CONFIG" "$SCRIPT_DIR/fm-t3-mcp.mjs")
   [ -n "$instance" ] || uncertain "could not tell which T3 provider instance runs the claude harness"
-  t3_home=$(expand_home "${T3_HOME_SETTING:-${T3CODE_HOME:-$HOME_DIR/.t3}}")
-  settings="$t3_home/userdata/settings.json"
-  token_env=
-  [ ! -f "$CONFIG/t3code-token" ] || token_env=$(jq -r '.environment_id // empty' "$CONFIG/t3code-token" 2>/dev/null) || token_env=
-  if [ -n "$token_env" ]; then
-    settings_env=$(tr -d '[:space:]' < "$t3_home/userdata/environment-id" 2>/dev/null) || settings_env=
-    [ "$settings_env" = "$token_env" ] ||
-      uncertain "T3 settings at $t3_home belong to ${settings_env:-an unknown} T3 environment, not the signed-in server $token_env; set t3_home in config/fable-quota-floor"
+  t3_home=$(fm_claude_login_default_t3_home "$T3_HOME_SETTING" "$CONFIG")
+  if ! fm_claude_login_t3_root "$CONFIG" "$t3_home" "$instance"; then
+    case "$FM_CLAUDE_LOGIN_WHY" in
+      *"not the signed-in server"*) uncertain "$FM_CLAUDE_LOGIN_WHY; set t3_home in config/fable-quota-floor" ;;
+      *) uncertain "$FM_CLAUDE_LOGIN_WHY" ;;
+    esac
   fi
-  [ -r "$settings" ] || uncertain "cannot read T3 provider settings at $settings"
-  instance_json=$(jq -c --arg id "$instance" '.providerInstances[$id] // empty' "$settings" 2>/dev/null) ||
-    uncertain "cannot parse T3 provider settings at $settings"
-  [ -n "$instance_json" ] || uncertain "T3 provider settings at $settings have no instance '$instance'"
-  driver=$(printf '%s' "$instance_json" | jq -r '.driver // empty')
-  [ "$driver" = claudeAgent ] || uncertain "T3 instance '$instance' runs driver '${driver:-none}', not claudeAgent"
-  home_path=$(printf '%s' "$instance_json" | jq -r '.config.homePath // "" | sub("^\\s+"; "") | sub("\\s+$"; "")')
-  ROOT=$(expand_home "$home_path")
+  ROOT=$FM_CLAUDE_LOGIN_ROOT
   LABEL="T3 instance $instance"
-  REMEDY="map claude to another instance in config/t3code-instances"
+  REMEDY="map claude to another instance in config/t3code-instances, or start on another instance with --t3-instance <id>"
 else
   [ "$ROOT_SET" = 1 ] || die "--root is required for backend $BACKEND (empty for the ordinary login)"
   [ -n "$LABEL" ] || LABEL=${ROOT:-ordinary}
   REMEDY="point the spawn at another account (--account <entry> from config/claude-accounts, or another config/claude-account pin)"
 fi
-# A trailing slash or the default folder by name is still the ordinary login.
-ROOT=${ROOT%/}
-[ "$ROOT" != "$HOME_DIR/.claude" ] || ROOT=
+ROOT=$(fm_claude_login_normalize "$ROOT")
 LABEL="$LABEL (${ROOT:-~/.claude, the ordinary login})"
 
 # --- the read -----------------------------------------------------------------
 command -v quota-axi >/dev/null 2>&1 || uncertain "quota-axi is not installed, so $LABEL was not measured"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-fable-floor.XXXXXX") || uncertain "cannot create a scratch directory"
 trap 'rm -rf "$WORK"' EXIT
-read_env=(env -u QUOTA_AXI_CLAUDE_PROFILES -u QUOTA_AXI_SNAPSHOT)
-if [ -n "$ROOT" ]; then read_env+=(CLAUDE_CONFIG_DIR="$ROOT"); else read_env+=(-u CLAUDE_CONFIG_DIR); fi
-# A nonzero exit that still prints a valid snapshot names the vendor's own
-# state, such as a rate limit, which the row below reports.
-fm_run_timed "$FM_FABLE_FLOOR_SECONDS" "${read_env[@]}" \
-  quota-axi --provider claude --json --no-credential-refresh --max-age 60s \
-  > "$WORK/snapshot.json" 2>/dev/null </dev/null || :
-fm_quota_json_valid < "$WORK/snapshot.json" || uncertain "quota-axi could not measure $LABEL"
+fm_claude_login_read "$ROOT" 60s "$FM_FABLE_FLOOR_SECONDS" "$WORK/snapshot.json" ||
+  uncertain "quota-axi could not measure $LABEL"
 
 verdict=$(jq -r \
   --arg fable_weekly "$FLOOR_FABLE_WEEKLY" --arg weekly "$FLOOR_WEEKLY" --arg five_hour "$FLOOR_FIVE_HOUR" "$FM_QUOTA_ROW_JQ"'
