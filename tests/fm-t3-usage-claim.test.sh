@@ -141,7 +141,7 @@ test_wake_claims_the_first_caused_task_and_keeps_it() {
   pass "fm-t3-usage-claim wake: the first caused task wins, the first claim of a turn stands, the sweep marks the rest, and turn replaces"
 }
 
-test_wake_about_nothing_is_upkeep_and_uncaused_tasks_stay_unknown() {
+test_wake_about_nothing_is_upkeep_and_uncaused_tasks_count_to_the_computer() {
   fresh_case wake-upkeep
   as_agent "$CLAIM" wake
   assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a wake about no task counts to the computer"
@@ -150,14 +150,13 @@ test_wake_about_nothing_is_upkeep_and_uncaused_tasks_stay_unknown() {
   meta_with_cause old-task ''
   as_agent "$CLAIM" wake --task old-task
   expect_code 0 "$RC" "an uncaused wake exits 0: $ERR"
-  assert_equals "" "$(claims run:coord:run-c)" "a wake about a task with no cause is not given a device"
-  assert_grep "$(printf 'coord\trun-c')" "$STATE_DIR/.t3-usage-claimed-runs" "yet the turn is marked handled"
+  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a wake about tasks with no cause falls back to the computer"
+  assert_grep "$(printf 'coord\trun-c')" "$STATE_DIR/.t3-usage-claimed-runs" "and the turn is marked handled"
   settle_sweep
-  assert_equals "" "$(claims run:coord:run-c)" "and never guesses for the handled turn"
   fresh_case wake-note
   as_agent "$CLAIM" wake --caused-by "$CAUSE_T"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a cause given, such as an inbox note's, is claimed"
-  pass "fm-t3-usage-claim wake: upkeep counts to the computer, and a task with no cause gets an empty claim"
+  pass "fm-t3-usage-claim wake: upkeep and a wake about tasks with no cause count to the computer"
 }
 
 test_claims_are_best_effort_and_logged_once() {
@@ -321,11 +320,49 @@ test_drain_claims_a_followups_arming_cause() {
   pass "fm-wake-drain: a fired follow-up's wake counts to the prompt that armed it, and upkeep otherwise"
 }
 
+inbox_note() {  # <id> <header-line...>: a saved inbox note with those header lines
+  local id=$1
+  shift
+  mkdir -p "$STATE_DIR/inbox"
+  { printf 'id=%s\nsource=text\n' "$id"; printf '%s\n' "$@"; printf -- '--\nmade-up body\n'; } > "$STATE_DIR/inbox/$id.note"
+}
+
+test_drain_claims_a_voice_journal_note_for_the_phone() {
+  fresh_case drain-journal
+  inbox_note 1-journal request_id=voice-journal-2026-11-16 "caused-by=$CAUSE_T"
+  append_wake "$STATE_DIR" check "inbox:1-journal" "check: captain inbox note 1-journal - journal"
+  as_agent "$DRAIN"
+  assert_contains "$ERR" "WAKE_ACK_REQUIRED" "the drain presents as before: $ERR"
+  assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "a voice journal's note counts to the phone, whatever cause it carries"
+  settle_sweep
+  fresh_case drain-note
+  inbox_note 1-note request_id=export-1 "caused-by=$CAUSE_T"
+  append_wake "$STATE_DIR" check "inbox:1-note" "check: captain inbox note 1-note - note"
+  as_agent "$DRAIN"
+  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "any other note keeps the cause it recorded"
+  pass "fm-wake-drain: a voice journal's inbox note claims its wake turn for the phone"
+}
+
+test_folder_claims_a_tasks_data_folder() {
+  fresh_case folder
+  meta_with_cause tk "$CAUSE_T"
+  "$CLAIM" folder "$HOME_DIR/data/tk" --task tk
+  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims "directory:$HOME_DIR/data/tk")" "the folder counts to the task's cause"
+  meta_with_cause none ''
+  "$CLAIM" folder "$HOME_DIR/data/none" --task none
+  assert_equals "" "$(claims "directory:$HOME_DIR/data/none")" "a task with no cause claims nothing"
+  "$CLAIM" folder data/tk --task tk 2>/dev/null
+  expect_code 2 "$?" "a relative folder is invalid use"
+  pass "fm-t3-usage-claim folder: a task's folder counts to its cause, and nothing without one"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
   test_cause_records \
   test_wake_claims_the_first_caused_task_and_keeps_it \
-  test_wake_about_nothing_is_upkeep_and_uncaused_tasks_stay_unknown \
+  test_wake_about_nothing_is_upkeep_and_uncaused_tasks_count_to_the_computer \
+  test_folder_claims_a_tasks_data_folder \
+  test_drain_claims_a_voice_journal_note_for_the_phone \
   test_claims_are_best_effort_and_logged_once \
   test_session_claims_the_engine_conversation \
   test_session_claims_split_a_resumed_conversation_by_turn \

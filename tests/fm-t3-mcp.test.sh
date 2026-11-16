@@ -1646,6 +1646,26 @@ test_cause_answers_null_rather_than_guess() {
   pass "fm-t3-mcp cause: null with a reason for a turn with no start, a stale or foreign process, an unknown thread, and an idle one"
 }
 
+test_cause_counts_to_the_turn_that_started_the_process() {
+  fresh_case cause-ended '{"causedBy":true}'
+  # A send made just after the turn that started it ended: the thread is idle.
+  t3_coordinator "$(iso_in -60)"
+  FM_DONE="$(iso_in 30)" t3_fake_set 'const r = w.threads.coord.runs.find((x) => x.runId === "run-c");
+r.status = "completed"; r.completedAt = process.env.FM_DONE; w.threads.coord.activeRunId = null; w.threads.coord.status = "completed";'
+  in_agent coord cause --thread coord
+  expect_code 0 "$RC" "cause should answer: $ERR"
+  assert_equals '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' "$(field "$OUT" causedBy)" \
+    "with no turn active, the turn whose span holds the process's start is its cause"
+  # A process an earlier turn started, calling once a later turn is active.
+  t3_coordinator "$(iso_in 60)"
+  FM_BEGIN="$(iso_in -120)" FM_DONE="$(iso_in 30)" t3_fake_set 'const r = w.threads.coord.runs.find((x) => x.runId === "run-old");
+r.startedAt = r.requestedAt = process.env.FM_BEGIN; r.completedAt = process.env.FM_DONE;'
+  in_agent coord cause --thread coord
+  assert_equals '{"threadId":"coord","runId":"run-old","messageId":"msg-old"}' "$(field "$OUT" causedBy)" \
+    "a process older than the current turn counts to the earlier turn that started it"
+  pass "fm-t3-mcp cause: a process counts to the recent turn whose span holds its start, active or not"
+}
+
 # t3_wake_start_unnamed: coord's active wake turn, from a T3 that names no
 # run's starting message and shows no prompt in it.
 t3_wake_start_unnamed() {
@@ -1839,6 +1859,7 @@ test_launch_and_send_carry_the_cause() {
 t3_fake_start "$TMP_ROOT/server"
 test_cause_names_the_one_prompt_of_the_callers_turn
 test_cause_answers_null_rather_than_guess
+test_cause_counts_to_the_turn_that_started_the_process
 test_cause_names_a_wake_and_the_latest_prompt_before_the_command
 test_usage_claim_targets_values_and_refusals
 test_recent_runs_lists_the_threads_runs

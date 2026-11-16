@@ -125,9 +125,10 @@ Firstmate names that prompt at its durable boundaries, and [`bin/fm-t3-cause-lib
 - A backlog item added with `fm-tasks-axi.sh add` keeps the prompt that queued it, and its first spawn names that prompt, whatever turn launches it, such as a recovery wake after a restart.
 - A landing keeps the landed task's cause as the latest landed cause, and a [clean restart](#clean-restart) names it, since a restart installs landed work.
 
-The cause is the current T3 turn of the agent running the command, which T3 names in each agent's environment as `T3CODE_THREAD_ID`: the message that started the turn, or, when the turn received more prompts (a steer or queued input), the latest one that arrived before the command began.
+The cause is the T3 turn that started the command, in the thread T3 names in each agent's environment as `T3CODE_THREAD_ID`: the message that started the turn, or, when the turn received more prompts (a steer or queued input), the latest one that arrived before the command began.
+That is usually the current turn, but a command that began in a turn that has since ended, such as a send made just after it, or a background job still running into a later turn, names the turn it began in.
 A wake turn starts from T3's notification rather than a prompt, so work launched in it names that notification, and counts wherever the wake turn's [usage claim](#usage-claims) puts it.
-Firstmate records nothing rather than guess: when the command did not start inside that turn (a background job left over from an earlier turn), or when T3 cannot be read.
+Firstmate records nothing rather than guess: when no recent turn spans the command's start, or when T3 cannot be read.
 `bin/fm-t3-mcp.mjs cause` owns the exact rule, and it never reads message text.
 Set `FM_T3CODE_CAUSED_BY` to `off` for no cause, or to a cause JSON (`{"threadId", "runId"?, "messageId"}`) to name one explicitly, such as the prompt a note recorded or an earlier prompt of a turn that received several.
 
@@ -140,18 +141,18 @@ Some work has no prompt T3 can follow: FirstMate's own wake turns, no-mistakes p
 Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Usage by origin" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
 
 - **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
-  A wake about no task is upkeep (watcher recovery, scheduled checks, a follow-up armed with no cause) and counts to the computer.
-  A wake about tasks that carry no cause gets an empty claim, which leaves it Unknown rather than guess a device.
-- **Turns no drain describes.** Each drain also claims the computer for the thread's recent finished turns this home never claimed, such as a turn a background command's notification started.
-- **Turns that file a voice journal.** The agent filing it runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
+  A wake about no task is upkeep (watcher recovery, scheduled checks, a follow-up armed with no cause) and counts to the computer, as does a wake about tasks that carry no cause.
+- **Turns no drain describes.** Each drain, and on Claude each turn end of FirstMate's session, also claims the computer for the thread's recent finished turns this home never claimed, such as a turn a background command's notification started.
+- **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
 - **Pipelines.** A ship worker's brief tells it to claim each no-mistakes run it starts, so the run's folder counts to its task's cause.
+- **Task data folders.** A spawn claims the task's data folder for its cause, so critics, probes, and scratch sessions a worker runs there trace.
 - **Engine sessions.** The supervision host claims each engine turn, from that turn's start and before the engine runs, for the woken task's cause, or the computer.
   A resumed conversation therefore splits across its turns' tasks, since T3 keeps one session claim per start; a T3 whose claim takes no start gets a whole-session claim, which a later turn's replaces.
 
 A turn this home already claimed keeps its first claim against later drains, while an explicit `turn` claim replaces it.
 T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.
 Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, restart, or pipeline.
-Work that still counts as Unknown by design: a task launched with no cause, its pipelines, and the wakes about it, until that task ends; and work outside T3 that no claim covers, such as a CLI run with no working folder.
+Work that still counts as Unknown by design: a task launched with no cause and its pipelines, until that task ends; and work outside T3 that no claim covers, such as a CLI run with no working folder.
 
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.
 

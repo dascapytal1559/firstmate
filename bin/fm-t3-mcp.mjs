@@ -108,7 +108,8 @@
 //     exits 1.
 //   fm-t3-mcp.mjs cause --thread <caller-thread-id>
 //     The prompt that caused what the calling process is about to do, from
-//     <caller-thread-id>'s active turn, as a cause {threadId, runId,
+//     the turn of <caller-thread-id> that started the calling process (its
+//     process turn, below), as a cause {threadId, runId,
 //     messageId} T3's causedBy takes: the message that started the turn
 //     (the run's userMessageId, which for a wake is the notification T3
 //     posted, so work a claimed wake turn launches inherits its claim), or,
@@ -117,16 +118,21 @@
 //     updatedAt with one second of slack. The caller passes
 //     the thread it runs in ($T3CODE_THREAD_ID, which T3 sets in each
 //     agent's environment). It answers causedBy null with a reason, and
-//     never guesses, when the thread is unknown or idle, when the turn
+//     never guesses, when the thread is unknown, when the turn
 //     names no starting message and shows no prompt,
-//     or when this process did not start inside that turn: walking up its
+//     or when no turn started this process: walking up its
 //     ancestors, the topmost one whose environment carries
 //     T3CODE_THREAD_ID=<caller-thread-id> is the agent T3 started, and the
-//     process just below it must have started no earlier than the turn did
-//     (one second of slack for ps's whole-second ages). A background job left
-//     over from an earlier turn, or one orphaned to init, therefore answers
-//     null rather than borrowing the current turn's prompt; so does an agent
-//     that runs commands in a shell older than the turn. The message pages
+//     process just below it began the call. Its turn is the latest of the
+//     thread's five most recent runs that started no later than that process
+//     did, provided that run is still active or ended no earlier than that
+//     process started (one second of slack each way for ps's whole-second
+//     ages). A send made just after its turn ended, or by a job an earlier
+//     turn left running into a later one, therefore counts to the turn that
+//     started it, not to the current one; a process older than every recent
+//     turn, one started between turns, or one orphaned to init answers null.
+//     An agent that runs commands in a shell older than its current turn
+//     would count them to the turn that started that shell. The message pages
 //     it reads ask for one character of each item, so message text is never
 //     read. Changes nothing.
 //   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> [--unless-listed <file>] | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
@@ -1598,33 +1604,31 @@ function processFacts(pid, threadId) {
   return { ppid: Number(m[1]), age, carries };
 }
 
-// Whether this process began inside <threadId>'s turn that started at
-// <runStartMs> (the cause verb's header owns the rule). {local, reason}.
+// When the process below <threadId>'s agent that began this call started
+// (the cause verb's header owns the rule): {began} in epoch ms, or {reason}.
 // Every ancestor is read, not only an unbroken run of carriers: a harness may
 // start its command shell with a reduced environment that the shell then
 // re-exports (Claude Code does), so a non-carrier can sit between this
 // process and the agent.
-function turnLocality(threadId, runStartMs) {
+function callerStart(threadId) {
   const chain = [];
   let pid = process.pid;
   for (let depth = 0; depth < 64 && pid > 1; depth++) {
     const f = processFacts(pid, threadId);
-    if (!f) return { local: false, reason: `process ${pid} could not be read` };
+    if (!f) return { reason: `process ${pid} could not be read` };
     chain.push(f);
     pid = f.ppid;
   }
-  if (pid > 1) return { local: false, reason: "the calling process tree is too deep to read" };
+  if (pid > 1) return { reason: "the calling process tree is too deep to read" };
   const agent = chain.findLastIndex((f) => f.carries);
-  if (agent < 1) return { local: false, reason: `the calling process does not run under thread ${threadId}'s agent` };
-  if (chain[agent].ppid <= 1) return { local: false, reason: "the calling process was orphaned from the agent that started it" };
+  if (agent < 1) return { reason: `the calling process does not run under thread ${threadId}'s agent` };
+  if (chain[agent].ppid <= 1) return { reason: "the calling process was orphaned from the agent that started it" };
   // The process just below the agent began this call.
-  const began = Date.now() - chain[agent - 1].age * 1000;
-  if (began + 1000 < runStartMs) return { local: false, reason: "the calling process started before the thread's current turn" };
-  return { local: true, reason: null, began };
+  return { began: Date.now() - chain[agent - 1].age * 1000 };
 }
 
-// The calling process's own turn of <threadId> (the cause verb's header owns
-// the rule): {runId, run, thread, began}, or {runId: null, reason}.
+// The turn of <threadId> that started the calling process (the cause verb's
+// header owns the rule): {runId, run, thread, began}, or {runId: null, reason}.
 async function callerTurn(session, threadId) {
   let head;
   try {
@@ -1634,14 +1638,20 @@ async function callerTurn(session, threadId) {
     throw err;
   }
   const t = threadOf(head);
-  const runId = t.activeRunId ?? null;
-  if (!runId) return { runId: null, reason: `thread ${threadId} has no active turn` };
-  const run = (head?.recentRuns ?? []).find((r) => r.runId === runId);
-  const startMs = Date.parse(run?.startedAt ?? run?.requestedAt ?? "");
-  if (!Number.isFinite(startMs)) return { runId: null, reason: `turn ${runId} has no start time` };
-  const locality = turnLocality(threadId, startMs);
-  if (!locality.local) return { runId: null, reason: locality.reason };
-  return { runId, run, thread: t, began: locality.began };
+  const activeRunId = t.activeRunId ?? null;
+  const runs = (head?.recentRuns ?? []).map((r) => ({ r, startMs: Date.parse(r.startedAt ?? r.requestedAt ?? "") }));
+  const active = runs.find(({ r }) => r.runId === activeRunId);
+  if (active && !Number.isFinite(active.startMs)) return { runId: null, reason: `turn ${activeRunId} has no start time` };
+  const start = callerStart(threadId);
+  if (start.reason) return { runId: null, reason: start.reason };
+  const { began } = start;
+  const latest = runs.filter(({ startMs }) => Number.isFinite(startMs) && startMs <= began + 1000).sort((a, b) => b.startMs - a.startMs)[0];
+  const spans = latest && (latest.r.runId === activeRunId || began <= Date.parse(latest.r.completedAt ?? "") + 1000);
+  if (!spans) {
+    const why = activeRunId ? "the calling process started before the thread's current turn" : `thread ${threadId} has no active turn`;
+    return { runId: null, reason: `${why}, and no recent turn spans its start` };
+  }
+  return { runId: latest.r.runId, run: latest.r, thread: t, began };
 }
 
 async function causeVerb(flags) {

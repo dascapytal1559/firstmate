@@ -1612,18 +1612,30 @@ test_turn_start_carries_its_cause_and_never_drops_the_message() {
   pass "t3code turn_start: a handed cause rides the send, and a refused one is reported while the message goes out without it"
 }
 
-# A spawn from inside a T3 turn records that turn's prompt and names it on the
-# worker's launch and its brief; a malformed explicit cause refuses first.
+t3_folder_claim() {  # <abs-dir> -> the fake T3's stored claim on that folder
+  node -e 'const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const v = (w.usageClaims || {})[`directory:${process.argv[2]}`]; if (v) process.stdout.write(JSON.stringify(v));' "$T3_FAKE_WORLD" "$1"
+}
+
+# A spawn from inside a T3 turn records that turn's prompt, names it on the
+# worker's launch and its brief, and claims the task's data folder for it; a
+# malformed explicit cause refuses first.
 test_spawn_records_and_sends_its_turns_cause() {
   local id out rc meta
   id=$(t3_uid t3cause-spawn)
   t3_case spawn-cause
   t3_worker_setup "$id"
   t3_cause_world
+  t3_world_set 'w.usageClaims = true;'
   out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
   expect_code 0 "$rc" "a spawn inside a T3 turn should succeed"$'\n'"$out"
   meta="$CASE_DIR/state/$id.meta"
   assert_grep "caused_by=$T3_CAUSE" "$meta" "the task record keeps the prompt that caused it"
+  for _ in $(seq 1 100); do
+    [ "$(t3_folder_claim "$CASE_DIR/data/$id")" = "{\"causedBy\":$T3_CAUSE}" ] && break
+    sleep 0.1
+  done
+  assert_equals "{\"causedBy\":$T3_CAUSE}" "$(t3_folder_claim "$CASE_DIR/data/$id")" \
+    "the task's data folder counts to the same cause, so sessions the worker runs there trace"
   [ "$(t3_launch_field 'JSON.stringify(a.causedBy)')" = "$T3_CAUSE" ] || fail "the worker's launch names its cause, got '$(t3_launch_field 'JSON.stringify(a.causedBy)')'"
   [ "$(t3_request "$(t3_log_line_of 'r.tool === "t3_thread_send"')" 'JSON.stringify(r.arguments.causedBy)')" = "$T3_CAUSE" ] \
     || fail "the brief names the same cause"
@@ -1647,7 +1659,7 @@ test_spawn_records_and_sends_its_turns_cause() {
   assert_contains "$out" "FM_T3CODE_CAUSED_BY must be off or a JSON object" "the refusal names the variable"
   [ -z "$(t3_dispatch_types)" ] || fail "a refused cause launches nothing, got '$(t3_dispatch_types)'"
   assert_absent "$CASE_DIR/state/$id.meta" "a refused cause writes no task record"
-  pass "fm-spawn.sh --backend t3code: the turn's prompt is recorded and named on the launch and brief, and a malformed cause refuses first"
+  pass "fm-spawn.sh --backend t3code: the turn's prompt is recorded, named on the launch and brief, and given the task's data folder, and a malformed cause refuses first"
 }
 
 # A steer from inside a T3 turn keeps that turn's prompt in its inbox record,

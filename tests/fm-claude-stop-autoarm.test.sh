@@ -442,6 +442,25 @@ test_inert_when_fleet_idle() {
   pass "auto-arm: inert with nothing in flight and no X-mode need"
 }
 
+# Every turn end of the lock-owning session in a T3 thread starts the usage
+# sweep of that thread, even in an idle home, and a session outside T3 starts
+# none. The claim script is a fixture that records how it was called.
+test_turn_end_starts_the_usage_sweep() {
+  local dir i
+  dir=$(make_primary_dir "$TMP_ROOT/usage-sweep")
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/state/sweep-calls"\n' "$dir" > "$dir/bin/fm-t3-usage-claim.sh"
+  chmod +x "$dir/bin/fm-t3-usage-claim.sh"
+  (unset T3CODE_THREAD_ID; run_autoarm "$dir") >/dev/null 2>&1
+  (export T3CODE_THREAD_ID=thread-sweep; run_autoarm "$dir") >/dev/null 2>&1
+  for i in $(seq 1 50); do
+    [ -s "$dir/state/sweep-calls" ] && break
+    sleep 0.1
+  done
+  assert_equals "_sweep thread-sweep" "$(cat "$dir/state/sweep-calls" 2>/dev/null)" \
+    "the turn end sweeps the session's own T3 thread once, and a session outside T3 sweeps nothing"
+  pass "auto-arm: a turn end in a T3 thread starts that thread's usage sweep"
+}
+
 # --- the armed cycle ----------------------------------------------------------
 
 test_actionable_close_rewakes_with_reason() {
@@ -2397,6 +2416,7 @@ test_inert_when_afk
 test_stale_lock_recovery_preserves_afk_and_need_gates
 test_resolves_outermost_claude_pid_in_nested_bgspare_chain
 test_inert_when_fleet_idle
+test_turn_end_starts_the_usage_sweep
 test_actionable_close_rewakes_with_reason
 test_actionable_close_with_live_successor_rewakes_once
 test_stopfailure_close_rewakes_paced_per_cooldown

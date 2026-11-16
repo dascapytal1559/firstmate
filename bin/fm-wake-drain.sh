@@ -878,18 +878,20 @@ print_status_presentation() {  # [<deduped-raw-rows>]
 # and its best-effort contract). The candidates, in presentation order, are
 # the task each row names - a status line's or stale worker's task, an
 # inactive outcome's child, a merge's, an open decision's, a usage limit's,
-# a relayed supervision outcome's - or the cause an inbox note recorded, or
+# a relayed supervision outcome's - or the cause an inbox note recorded (the
+# phone for a voice journal's note, request_id=voice-journal-*), or
 # the cause a fired condition->action follow-up was armed under,
 # then the tasks BRANCH OUTCOMES presented. A row naming none of these is
 # upkeep. Only main in a T3 turn claims; the call is bounded and its outcome
 # never changes the drain's.
 claim_wake_usage() {
-  local rows=${1:-} kind key payload task cause note
+  local rows=${1:-} kind key payload task cause device note
   local -a args=()
   [ "$ACTOR" = main ] && [ -n "${T3CODE_THREAD_ID:-}" ] || return 0
   while IFS=$'\t' read -r _ _ kind key payload; do
     task=
     cause=
+    device=
     case "$kind" in
       signal) task=${key%.status}; task=${task%.turn-ended} ;;
       stale) task=$(window_to_task "$key" "$STATE" 2>/dev/null) || task= ;;
@@ -908,15 +910,23 @@ claim_wake_usage() {
             [ ! -f "$note" ] || cause=$(sed -n '/^argv:$/q;s/^caused_by=//p' "$note" 2>/dev/null | head -n 1)
             ;;
           inbox:*)
+            # A voice journal's note is phone work, whatever cause it carries.
             note="$STATE/inbox/${key#inbox:}.note"
             [ -f "$note" ] || note="$STATE/inbox/handled/${key#inbox:}.note"
-            [ ! -f "$note" ] || cause=$(sed -n '/^--$/q;s/^caused-by=//p' "$note" 2>/dev/null | head -n 1)
+            if [ ! -f "$note" ]; then
+              :
+            elif sed -n '/^--$/q;p' "$note" 2>/dev/null | grep -q '^request_id=voice-journal-'; then
+              device=phone
+            else
+              cause=$(sed -n '/^--$/q;s/^caused-by=//p' "$note" 2>/dev/null | head -n 1)
+            fi
             ;;
         esac
         ;;
     esac
     [ -z "$task" ] || args+=(--task "$task")
     [ -z "$cause" ] || args+=(--caused-by "$cause")
+    [ -z "$device" ] || args+=(--device "$device")
   done <<ROWS
 $rows
 ROWS

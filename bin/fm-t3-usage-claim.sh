@@ -18,12 +18,14 @@
 #     For a turn the drain's claim does not describe, such as the turn that
 #     files a voice journal (--device phone). It replaces any claim on that
 #     turn, and a later drain in the same turn leaves it.
-#   fm-t3-usage-claim.sh wake [--task <id> | --caused-by <cause-json>]...
+#   fm-t3-usage-claim.sh wake [--task <id> | --caused-by <cause-json> | --device phone|computer]...
 #     The wake drain's claim on the current turn: the first candidate, in
-#     order, that has a cause (a task's recorded cause, or a cause given);
-#     with no candidate at all, the computer, because a wake about no task
-#     is upkeep; with candidates but none caused, an empty claim, since the
-#     device is not known. A turn this home already claimed keeps its first claim.
+#     order, that has a cause (a task's recorded cause, a cause given, or a
+#     device given, such as the phone for a voice journal's note);
+#     with no candidate caused, or none at all, the computer, because a wake
+#     about no task is upkeep and a task launched with no recorded cause
+#     (before T3 ran this home) has no device to trace. A turn this home
+#     already claimed keeps its first claim.
 #     Then, detached, each of the thread's recent finished turns this home
 #     never claimed is claimed computer: a turn a notification started that
 #     no drain described, such as a background command finishing. T3 counts
@@ -35,6 +37,11 @@
 #     recorded cause. The run is the one `no-mistakes axi status` reports for
 #     that branch, and its folder comes from no-mistakes' state database,
 #     read only.
+#   fm-t3-usage-claim.sh folder <abs-dir> --task <id>
+#     Work run in <abs-dir> with no T3 thread owning that folder, such as the
+#     critics, probes, and scratch sessions a worker runs in its task's data
+#     folder, counts to <id>'s recorded cause; with none recorded, nothing.
+#     bin/fm-spawn.sh claims each task's data folder this way at launch.
 #   fm-t3-usage-claim.sh session <session-id> [--from <iso-time>] [--task <id>]...
 #     A Claude session run outside T3 (the supervision host's engine) counts
 #     to the first named task's cause, else, with no task named, to the
@@ -144,19 +151,17 @@ run_claimed() {  # <thread> <run>
   [ -f "$CLAIMED" ] && grep -Fxq -- "$1$TAB$2" "$CLAIMED" 2>/dev/null
 }
 
-# value_args <cause-json|device|null>: the usage-claim value flags; null is
-# the empty claim.
+# value_args <cause-json|device>: the usage-claim value flags.
 value_args() {
   case "$1" in
     phone|computer) printf '%s\n' --device "$1" ;;
-    null) printf '%s\n' --caused-by null ;;
     *) printf '%s\n' --caused-by "$1" ;;
   esac
 }
 
-# first_cause <candidate...>: each candidate is task:<id> or cause:<json>.
-# Prints the first cause found; status 1 when none was named at all, 2 when
-# some were named but none had a cause.
+# first_cause <candidate...>: each candidate is task:<id>, cause:<json>, or
+# device:<device>. Prints the first cause or device found; status 1 when none
+# was named at all, 2 when some were named but none had a cause.
 first_cause() {
   local c cause
   [ "$#" -gt 0 ] || return 1
@@ -164,6 +169,7 @@ first_cause() {
     case "$c" in
       task:*) cause=$(fm_t3_cause_of_task "$STATE" "${c#task:}") ;;
       cause:*) cause=${c#cause:} ;;
+      device:*) cause=${c#device:} ;;
       *) cause= ;;
     esac
     if [ -n "$cause" ]; then
@@ -231,23 +237,17 @@ verb_turn() {
 
 verb_wake() {
   local -a candidates=()
-  local value rc=0
+  local value
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --task) [ "$#" -ge 2 ] || usage; candidates+=("task:$2"); shift 2 ;;
       --caused-by) [ "$#" -ge 2 ] || usage; candidates+=("cause:$2"); shift 2 ;;
+      --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; candidates+=("device:$2"); shift 2 ;;
       *) usage ;;
     esac
   done
   [ -n "${T3CODE_THREAD_ID:-}" ] && t3_ready || return 0
-  value=$(first_cause "${candidates[@]+"${candidates[@]}"}") || rc=$?
-  case "$rc" in
-    0) ;;
-    1) value=computer ;;
-    # Named tasks without a cause: an empty claim marks the turn handled, so
-    # the sweep below never guesses a device for it.
-    *) value=null ;;
-  esac
+  value=$(first_cause "${candidates[@]+"${candidates[@]}"}") || value=computer
   claim_turn 1 "$value" || return 0
   # The sweep names its runs, so it needs no tie to this turn: detached, it
   # never holds up the drain. A failed turn claim above skips it, so an
@@ -309,6 +309,24 @@ verb_pipeline() {
   return 0
 }
 
+verb_folder() {
+  local dir=${1:-} task='' cause
+  case "$dir" in /*) ;; *) usage ;; esac
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --task) [ "$#" -ge 2 ] || usage; task=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$task" ] || usage
+  t3_ready || return 0
+  cause=$(fm_t3_cause_of_task "$STATE" "$task")
+  [ -n "$cause" ] || return 0
+  claim "folder $task" --directory "$dir" --caused-by "$cause" >/dev/null || true
+  return 0
+}
+
 verb_session() {
   local session=${1:-} value rc=0 line
   local -a candidates=() vargs=() from=()
@@ -340,6 +358,7 @@ case "$VERB" in
   turn) verb_turn "$@" ;;
   wake) verb_wake "$@" ;;
   pipeline) verb_pipeline "$@" ;;
+  folder) verb_folder "$@" ;;
   session) verb_session "$@" ;;
   # wake's detached sweep (header); not a public verb.
   _sweep) [ "$#" -eq 1 ] || usage; t3_ready && sweep "$1" ;;

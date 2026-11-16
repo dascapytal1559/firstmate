@@ -25,6 +25,12 @@
 #     guarded recovery to bin/fm-lock.sh and then re-verifies ownership.
 #     A missing lock, a malformed record, or unresolved ancestry stays inert too,
 #     so a competing session never arms or rewakes.
+#   - Usage sweep: once identity holds, a session running in a T3 thread
+#     ($T3CODE_THREAD_ID) starts bin/fm-t3-usage-claim.sh's sweep of that
+#     thread, detached like the handling successor below, before the AFK and
+#     need gates, so a turn a background command started counts before the
+#     next wake drain. That script's header owns the sweep rule; nothing below
+#     waits on it or reads its result.
 #   - AFK: while state/.afk exists the away daemon owns the watcher and triage;
 #     this hook exits 0 and NEVER rewakes the primary (checked again at
 #     translation time so a mid-cycle AFK transition is honored).
@@ -262,6 +268,16 @@ if ! fm_session_lock_owned_by_self "$STATE"; then
   fm_session_pid_valid "$LOCK_PID" || exit 0
   fm_session_lock_pid_blocks_reclaim "$LOCK_PID" && exit 0
   RECOVER_SESSION_LOCK=1
+fi
+
+# --- usage sweep (header "Usage sweep") ---------------------------------------
+# Only a session that already owns the lock: a stale-lock recovery below may
+# still refuse. Its own process group, so it outlives this hook.
+if [ "$RECOVER_SESSION_LOCK" -eq 0 ] && [ -n "${T3CODE_THREAD_ID:-}" ] && [ -x "$SCRIPT_DIR/fm-t3-usage-claim.sh" ]; then
+  (
+    set -m 2>/dev/null || true
+    nohup "$SCRIPT_DIR/fm-t3-usage-claim.sh" _sweep "$T3CODE_THREAD_ID" </dev/null >/dev/null 2>&1 &
+  )
 fi
 
 # --- AFK: the away daemon owns the watcher and triage; never rewake ----------
