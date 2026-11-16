@@ -107,6 +107,7 @@ The T3 Code fork has no message box that types into a worker; a box on a worker'
 FirstMate reads which worker's task the message belongs to and treats his words as his input on that task.
 Upstream T3 Code sends anything typed in a thread to that thread's agent, which is right for threads he talks to directly.
 The fork departs for FirstMate's workers because a message typed into one cuts across FirstMate's steering, and FirstMate is the one who records his answers.
+Settling, un-settling, snoozing, or un-snoozing a worker's thread sends FirstMate the same kind of message, so FirstMate closes, reopens, parks, or un-parks the matching backlog item and the records stay in sync with what he sees.
 Details: [replies from a worker's thread](docs/t3code-backend.md#replies-from-a-workers-thread) and [`fm-t3-worker-reply.sh`](bin/fm-t3-worker-reply.sh).
 
 ## Priorities and high level objectives in every check-in

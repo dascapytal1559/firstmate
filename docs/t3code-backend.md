@@ -288,6 +288,12 @@ The message names its worker on its second line, in one of two forms:
 A blank line and then his words follow either form.
 [`bin/fm-t3-worker-reply.sh`](../bin/fm-t3-worker-reply.sh) reads the task from such a message and refuses one that names no worker or more than one.
 FirstMate treats his words as captain input on that task: an answer to one of its open calls is recorded through the `captain-hold-lifecycle` skill, and anything else is acted on or passed to the worker with `bin/fm-send.sh`.
+
+Settling, un-settling, snoozing, or un-snoozing a worker's thread is the captain's own action in the fork, while archiving is FirstMate's, done when it cleans a worker up.
+Each of his four actions sends the same kind of message, headed `**Settled · <thread title>**` (or `Un-settled`, `Snoozed`, `Un-snoozed`), with `kept-thread: <thread-id>` and then a `thread-action:` line naming the action and, for a dated snooze, its time.
+The reader prints that action after the task, and its header owns the line's exact form.
+FirstMate then brings the backlog in line: a settle cleans up finished, landed work that waits on nothing and closes its item, an un-settle reopens an item a settle closed, and a snooze or un-snooze parks or lifts the item's park; the supervision instruction below owns the full rules.
+FirstMate's own snooze and archive calls on a thread send no message back.
 The session-start supervision block of a session running as a T3 thread carries this instruction ([`supervision-protocols/t3-thread.md`](supervision-protocols/t3-thread.md)).
 
 ### Objectives

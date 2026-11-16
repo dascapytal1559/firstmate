@@ -1694,3 +1694,27 @@ What was built, in two small edits:
 Workers launched in that wake turn need no change: a launch from a wake turn already names the wake, and the wake now counts to the phone message that armed the follow-up, so the workers inherit it.
 
 The evidence is the touched suites, with no live T3: the follow-up suite covers a recorded cause, none, a malformed one refused, and a cause kept through an update; the claim suite covers a fired follow-up counting to its cause, one with none, one whose record is gone, and any other result staying upkeep.
+
+## 62. Settling or snoozing a thread in T3 now reaches FirstMate (16 November 2026)
+
+He had archived a worker's thread in T3, then decided that putting a thread away should be his own reversible move, separate from FirstMate's cleanup.
+
+The ask:
+
+> Thinking let's bring back settled for T3 code. I had just archived a thread, but I realized I think my action should only like settle it That way I can unsettle it. So I don't see archive. Archive is something you do, and what I do is I settle. And when I settle or when I snooze I expect I'm thinking to also send a message to first mate so that the records are in sync.
+>
+> (16 November 2026)
+
+The T3 fork's menus are being changed in parallel to offer Settle instead of Archive and to send FirstMate a message on each settle, un-settle, snooze, and un-snooze; this is FirstMate's half.
+
+What was built:
+
+- **The message is read.** The reader that already names the task behind a reply typed on a worker's thread now also reports the action line T3 adds, with a snooze's return time; a malformed or doubled action is refused, and an ordinary reply reads exactly as before.
+- **Settle closes finished work.** A settled thread whose worker has finished, landed, and waits on nothing is cleaned up and its item closed with a note saying it was settled in T3.
+  A thread with an open decision gets a one-line question instead, since FirstMate never closes a decision without his words, and a thread whose worker is still busy is left running with a word to him.
+- **Un-settle brings it back.** An item a settle closed is reopened; anything else is left alone.
+- **Snooze parks.** A snoozed thread parks its item until the snooze's date, or with no date for an open-ended snooze, the same as saying "snooze" in chat; un-snoozing lifts the park.
+- **Unknown threads are let go.** A message about a thread no task records is acknowledged and nothing changes.
+- **FirstMate's own moves stay quiet.** Its own snoozes and the archive at cleanup send nothing back.
+
+The evidence is the touched suites on made-up records: the reader suite gains cases for each action, a dated, quoted, and open-ended snooze, an unknown thread, and malformed or doubled actions; the supervision suite checks the rules reach only a session running in T3.
