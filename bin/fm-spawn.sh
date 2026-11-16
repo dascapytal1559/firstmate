@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--hermes-profile <name>] [--account <entry>] [--backend <name>] [--herdr-resume-lock-wait]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -64,7 +64,7 @@
 #   first in the private launch-brief overlay, including the exact task-owned
 #   steering inbox. This never rewrites a project's instruction files or a
 #   secondmate's charter.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--account <entry>] [--fable-floor-override <reason>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded worktree, reusing its recorded endpoint when that
 #   endpoint still exists, instead of creating either from scratch. It is
@@ -525,6 +525,27 @@
 #   relaunch reuses the recorded entry unless --account moves it. Without the
 #   list, --account refuses and nothing else changes. docs/configuration.md
 #   "Several Claude accounts" owns the contract.
+# Fable quota floor (config/fable-quota-floor, --fable-floor-override <reason>):
+#   Opt-in. A Claude ship or scout launch with --model claude-fable-* runs
+#   bin/fm-fable-floor.sh on the account it will use, after the account is
+#   resolved and before anything is leased or launched, and refuses when that
+#   account is at or below the home's floor. An account it cannot measure
+#   proceeds with a one-line warning, recorded as fable_floor_uncertain=.
+#   --fable-floor-override skips the check for that launch with the captain's
+#   word and records fable_floor_override=<reason>; it refuses on a secondmate
+#   or a model that is not claude-fable-*. docs/configuration.md "Fable quota
+#   floor" owns the contract.
+# Worker sizing (config/worker-sizing.json, --t3-instance <id>):
+#   Opt-in. A fresh Claude ship or scout runs bin/fm-size.sh pick before its
+#   account is resolved; the account it picks becomes this start's
+#   --t3-instance on backend t3code, or its --account elsewhere, so the home's
+#   standing mapping is never rewritten. An explicit --t3-instance or --account
+#   is still sized and recorded, and wins. When no account has room the spawn
+#   exits 76 with nothing leased or launched and the item stays queued;
+#   bin/fm-size.sh has arranged the wake that retries it. --t3-instance alone
+#   (sizing off) starts on that T3 provider instance for this one start; it is
+#   recorded as t3_instance= and refused on another backend, a relaunch, or a
+#   secondmate. docs/configuration.md "Worker sizing" owns the contract.
 # Per-secondmate omp profile (config/secondmate-accounts/<id>/omp-profile):
 #   Opt-in, and read only for a local secondmate's own omp agent;
 #   bin/fm-omp-profile-lib.sh owns the file and its refusals. A pinned launch
@@ -760,7 +781,9 @@
 # (FM_T3CODE_CAUSED_BY overrides; a malformed value refuses before anything is
 # leased), is recorded as caused_by=<cause-json> and, on the t3code backend,
 # sent as causedBy on the worker's launch and its brief. A relaunch keeps the
-# recorded cause unless FM_T3CODE_CAUSED_BY is set. No cause writes no line.
+# recorded cause unless FM_T3CODE_CAUSED_BY is set; a first launch of a
+# backlog item queued with a cause (state/<id>.queued-cause) sends that one,
+# and a successful spawn drops that record. No cause writes no line.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -1014,6 +1037,8 @@ HARNESS_ARG=
 MODEL=
 EFFORT=
 DISPATCH_OVERRIDE=
+FABLE_FLOOR_OVERRIDE=
+FABLE_FLOOR_OVERRIDE_SET=0
 BACKEND_ARG=
 MODE=
 YOLO=
@@ -1035,6 +1060,10 @@ UPSTREAM_CONSENT_SET=0
 TRACEPARENT_SET=0
 ACCOUNT_ARG=
 ACCOUNT_SET=0
+T3_INSTANCE_ARG=
+T3_INSTANCE_SET=0
+# bin/fm-size.sh's exit when no Claude account has room for the start.
+SPAWN_SIZING_QUEUED_EXIT=76
 RELAUNCH=0
 # Opt-in only: exact-resume presentation-order lock waits instead of refusing.
 # Absent/unset keeps upstream refuse-on-contention. See header.
@@ -1063,6 +1092,10 @@ for a in "$@"; do
       EFFORT_SET=1
       ;;
     dispatch-override) DISPATCH_OVERRIDE=$a ;;
+    fable-floor-override)
+      FABLE_FLOOR_OVERRIDE=$a
+      FABLE_FLOOR_OVERRIDE_SET=1
+      ;;
     hermes-profile)
       HERMES_PROFILE=$a
       HERMES_PROFILE_SET=1
@@ -1098,6 +1131,10 @@ for a in "$@"; do
     account)
       ACCOUNT_ARG=$a
       ACCOUNT_SET=1
+      ;;
+    t3-instance)
+      T3_INSTANCE_ARG=$a
+      T3_INSTANCE_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -1135,6 +1172,11 @@ for a in "$@"; do
     ;;
   --dispatch-override) want_value=dispatch-override ;;
   --dispatch-override=*) DISPATCH_OVERRIDE=${a#--dispatch-override=} ;;
+  --fable-floor-override) want_value=fable-floor-override ;;
+  --fable-floor-override=*)
+    FABLE_FLOOR_OVERRIDE=${a#--fable-floor-override=}
+    FABLE_FLOOR_OVERRIDE_SET=1
+    ;;
   --hermes-profile) want_value=hermes-profile ;;
   --hermes-profile=*) HERMES_PROFILE=${a#--hermes-profile=}; HERMES_PROFILE_SET=1 ;;
   --backend) want_value=backend ;;
@@ -1176,6 +1218,11 @@ for a in "$@"; do
   --account=*)
     ACCOUNT_ARG=${a#--account=}
     ACCOUNT_SET=1
+    ;;
+  --t3-instance) want_value=t3-instance ;;
+  --t3-instance=*)
+    T3_INSTANCE_ARG=${a#--t3-instance=}
+    T3_INSTANCE_SET=1
     ;;
   *) POS+=("$a") ;;
   esac
@@ -1228,12 +1275,34 @@ fi
   echo "error: --account requires a non-empty value" >&2
   exit 1
 }
+# The Fable floor override needs a printable reason for the task record, and
+# applies only where the floor check runs: a Fable ship or scout launch.
+if [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 1 ]; then
+  case "$FABLE_FLOOR_OVERRIDE" in
+    ''|*[![:print:]]*) echo 'error: --fable-floor-override requires a printable reason' >&2; exit 1 ;;
+  esac
+  [ "$KIND" != secondmate ] || {
+    echo 'error: --fable-floor-override applies to ship and scout launches; a secondmate launch runs no Fable floor check' >&2
+    exit 1
+  }
+fi
 # A secondmate, local or remote, launches on its own per-mate pin, so --account
 # is refused here, before the remote route could ignore it.
 [ "$ACCOUNT_SET" -eq 0 ] || [ "$KIND" != secondmate ] || {
   echo "error: --account applies to ships and scouts; secondmate ${POS[0]:-} launches on its own config/secondmate-accounts/<id>/claude-account pin" >&2
   exit 1
 }
+# --t3-instance picks the T3 provider instance for this one ship or scout
+# start; the backend is checked once it is resolved.
+if [ "$T3_INSTANCE_SET" -eq 1 ]; then
+  case "$T3_INSTANCE_ARG" in
+    ''|*[!A-Za-z0-9._-]*) echo 'error: --t3-instance requires a T3 provider instance id (letters, digits, ., _ or -)' >&2; exit 1 ;;
+  esac
+  [ "$KIND" != secondmate ] || {
+    echo 'error: --t3-instance applies to ship and scout starts; a secondmate runs on its home'"'"'s own mapping' >&2
+    exit 1
+  }
+fi
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -2177,6 +2246,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$DISPATCH_OVERRIDE" ] || shared_args+=(--dispatch-override "$DISPATCH_OVERRIDE")
+  [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ] || shared_args+=(--fable-floor-override "$FABLE_FLOOR_OVERRIDE")
   [ "$HERMES_PROFILE_SET" -eq 0 ] || shared_args+=(--hermes-profile "$HERMES_PROFILE")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
@@ -2188,6 +2258,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$BASE_BRANCH_SET" -eq 0 ] || shared_args+=(--base-branch "$BASE_BRANCH")
   [ "$HERDR_RESUME_LOCK_WAIT" -eq 0 ] || shared_args+=(--herdr-resume-lock-wait)
   [ "$ACCOUNT_SET" -eq 0 ] || shared_args+=(--account "$ACCOUNT_ARG")
+  [ "$T3_INSTANCE_SET" -eq 0 ] || shared_args+=(--t3-instance "$T3_INSTANCE_ARG")
   for pair in "${POS[@]}"; do
     case "$pair" in
     *=*) : ;;
@@ -2209,6 +2280,9 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
     if [ "$pair_rc" -eq "$FM_PROJECT_CAPACITY_DEFER_EXIT" ]; then
       echo "batch: DEFERRED ${pair%%=*} (${pair#*=}) - its project or this machine's lanes are at capacity, so it stays queued" >&2
       [ "$rc" -ne 0 ] || rc=$FM_PROJECT_CAPACITY_DEFER_EXIT
+    elif [ "$pair_rc" -eq "$SPAWN_SIZING_QUEUED_EXIT" ]; then
+      echo "batch: QUEUED ${pair%%=*} (${pair#*=}) - no Claude account has room for it now; its start is retried at the time named above" >&2
+      [ "$rc" -ne 0 ] || rc=$SPAWN_SIZING_QUEUED_EXIT
     elif [ "$pair_rc" -ne 0 ]; then
       echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2
       rc=1
@@ -2227,6 +2301,9 @@ fm_task_id_creation_valid "$ID" || {
 # the prompt of whatever turn relaunches it.
 if [ "$RELAUNCH" -eq 1 ] && [ -z "${FM_T3CODE_CAUSED_BY:-}" ]; then
   SPAWN_CAUSE=$(fm_meta_get "$STATE/$ID.meta" caused_by)
+elif [ -z "${FM_T3CODE_CAUSED_BY:-}" ] && SPAWN_CAUSE=$(fm_t3_cause_queued "$STATE" "$ID") && [ -n "$SPAWN_CAUSE" ]; then
+  # The request that queued this backlog item, whatever turn launches it.
+  :
 else
   SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
 fi
@@ -3619,6 +3696,44 @@ WORKER_ACCOUNT_MATE=
 # A declared Claude account list (config/claude-accounts) needs the entry this
 # launch spends: --account on a fresh spawn, and on a relaunch that flag or
 # else the account the task already records.
+if [ "$T3_INSTANCE_SET" -eq 1 ]; then
+  [ "$BACKEND" = t3code ] || { echo "error: --t3-instance applies only to backend=t3code, not $BACKEND; on a pane backend name the account with --account" >&2; exit 1; }
+  [ "$RELAUNCH" -eq 0 ] || { echo "error: --t3-instance applies to a fresh start; a relaunch keeps its thread's instance" >&2; exit 1; }
+fi
+# Worker sizing (header above): before the account is resolved, so the pick
+# becomes this start's --t3-instance on T3 Code or its --account elsewhere.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] && [ -f "$CONFIG/worker-sizing.json" ]; then
+  sizing_explicit=
+  if [ "$BACKEND" = t3code ]; then
+    sizing_explicit=$T3_INSTANCE_ARG
+  elif [ "$ACCOUNT_SET" -eq 1 ]; then
+    sizing_explicit=$ACCOUNT_ARG
+  fi
+  sizing_rc=0
+  sizing_pick=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_DATA_OVERRIDE=$DATA FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-size.sh" pick --task "$ID" --kind "$KIND" --model "${MODEL:-default}" --effort "${EFFORT:-default}" \
+    --backend "$BACKEND" ${sizing_explicit:+--account "$sizing_explicit"} </dev/null) || sizing_rc=$?
+  case "$sizing_rc" in
+    0) ;;
+    "$SPAWN_SIZING_QUEUED_EXIT")
+      echo "deferred: task $ID was not launched and its backlog item stays queued; firstmate is woken to start it again at the time named above" >&2
+      exit "$SPAWN_SIZING_QUEUED_EXIT"
+      ;;
+    *) exit 1 ;;
+  esac
+  if [ -n "$sizing_pick" ] && [ -z "$sizing_explicit" ]; then
+    if [ "$BACKEND" = t3code ]; then
+      T3_INSTANCE_ARG=$sizing_pick
+      T3_INSTANCE_SET=1
+    else
+      ACCOUNT_ARG=$sizing_pick
+      ACCOUNT_SET=1
+    fi
+  fi
+fi
+# One start's T3 instance rides the backend's instance lookup
+# (fm_backend_t3code_instance_id) without touching config/t3code-instances.
+[ "$T3_INSTANCE_SET" -eq 0 ] || export FM_T3CODE_SPAWN_INSTANCE="$HARNESS=$T3_INSTANCE_ARG"
 WORKER_ACCOUNT_REQUEST=$ACCOUNT_ARG
 if [ "$RELAUNCH" -eq 1 ]; then
   WORKER_ACCOUNT_REQUEST=$(fm_worker_account_relaunch_request "$HARNESS" "$CONFIG" "$RELAUNCH_PRIOR_HARNESS" \
@@ -3665,6 +3780,29 @@ if [ "$BACKEND" = t3code ]; then
   if [ -n "$WORKER_ACCOUNT" ]; then
     echo "error: backend=t3code cannot apply the $HARNESS worker account pin because T3's provider instance owns the account; select that instance in config/t3code-instances instead" >&2
     exit 1
+  fi
+fi
+# Fable quota floor (header above): the account is known here and nothing is
+# leased or launched yet. On a pane backend the launch exports the pinned or
+# declared root, else forwards the invoking process's own CLAUDE_CONFIG_DIR.
+FABLE_FLOOR_UNCERTAIN=
+case "$MODEL" in claude-fable-*) fable_floor_model=1 ;; *) fable_floor_model=0 ;; esac
+if [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 1 ] && { [ "$fable_floor_model" = 0 ] || [ "$HARNESS" != claude ]; }; then
+  echo "error: --fable-floor-override applies only to a claude launch with --model claude-fable-*, not harness=$HARNESS model=${MODEL:-default}" >&2
+  exit 1
+fi
+if [ "$KIND" != secondmate ] && [ "$HARNESS" = claude ] && [ "$fable_floor_model" = 1 ] && [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ]; then
+  if [ -n "$WORKER_ACCOUNT" ]; then
+    fable_floor_root=$WORKER_ACCOUNT_ROOT
+  else
+    fable_floor_root=${CLAUDE_CONFIG_DIR:-}
+  fi
+  fable_floor_out=$("$SCRIPT_DIR/fm-fable-floor.sh" check --model "$MODEL" --backend "$BACKEND" \
+    --root "$fable_floor_root" --account "${WORKER_ACCOUNT_DECLARED:-${fable_floor_root:-ordinary}}" \
+    ${T3_INSTANCE_ARG:+--instance "$T3_INSTANCE_ARG"}) || exit 1
+  if [ -n "$fable_floor_out" ]; then
+    FABLE_FLOOR_UNCERTAIN=${fable_floor_out#uncertain: }
+    echo "warning: Fable quota floor not checked, starting anyway: $FABLE_FLOOR_UNCERTAIN" >&2
   fi
 fi
 if [ -n "$WORKER_ACCOUNT" ] && [ "$HARNESS" = claude ]; then
@@ -7414,7 +7552,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential caused_by", keys, " ")
+      split("window endpoint_task_id worktree project harness hermes_profile hermes_home kind mode yolo branch tasktmp base_branch upstream_consent forge backup_remote backup_prefix model effort opencode_version account account_provider omp_profile busy_gen spawn_gen approval_mode traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id paseo_terminal_id paseo_workspace_id rex_server rex_session_id rex_window_id rex_block_id t3_thread_id t3_project_id tern_session_id tern_tab_id tern_block_id hc_session hc_terminal home projects control_relaunch_tx polytoken_session polytoken_port polytoken_credential caused_by fable_floor_override fable_floor_uncertain", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -7446,6 +7584,10 @@ preserve_relaunch_meta() {
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
   [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+  # The Fable quota floor's override reason or unmeasured warning, only when
+  # one applies, so every other task record stays byte-identical.
+  [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ] || printf 'fable_floor_override=%s\n' "$FABLE_FLOOR_OVERRIDE"
+  [ -z "$FABLE_FLOOR_UNCERTAIN" ] || printf 'fable_floor_uncertain=%s\n' "$FABLE_FLOOR_UNCERTAIN"
   [ -z "$SPAWN_CAUSE" ] || printf 'caused_by=%s\n' "$SPAWN_CAUSE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
@@ -7504,6 +7646,9 @@ preserve_relaunch_meta() {
   if [ "$BACKEND" = t3code ]; then
     echo "t3_thread_id=$T"
     echo "t3_project_id=$T3CODE_PROJECT_ID"
+    # The instance this one start was given (--t3-instance or the worker
+    # sizing pick), only when one was; a relaunch keeps the recorded line.
+    [ -z "$T3_INSTANCE_ARG" ] || echo "t3_instance=$T3_INSTANCE_ARG"
   fi
   if [ "$BACKEND" = tern ]; then
     echo "tern_session_id=$TERN_SESSION_ID"
@@ -8349,6 +8494,8 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
+# The task record now holds the cause, so the queued item's record is done.
+fm_t3_cause_queue_forget "$STATE" "$ID"
 
 if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
   echo "error: the launch brief for $ID may already have been delivered to T3 thread $T: its outcome is unproven (a lost reply or a T3 error that can follow a commit). The task record is kept; inspect the thread in T3 Code, and if the brief is absent resend only the identical brief text, which reuses its request id within the hour" >&2
@@ -8361,6 +8508,7 @@ SPAWN_ACCOUNT=
 [ -z "$WORKER_ACCOUNT" ] || SPAWN_ACCOUNT=" account=$WORKER_ACCOUNT_DECLARED"
 [ -z "$WORKER_ACCOUNT_PROVIDER" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT account_provider=$WORKER_ACCOUNT_PROVIDER"
 [ -z "$OMP_PROFILE_PIN" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT omp_profile=$OMP_PROFILE_PIN"
+[ -z "$T3_INSTANCE_ARG" ] || SPAWN_ACCOUNT="$SPAWN_ACCOUNT t3_instance=$T3_INSTANCE_ARG"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "$CONFIG/fleet-ledger" ] || [ "$RELAUNCH" -eq 1 ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "${PROJ_ABS##*/}" "$HARNESS" "$MODEL" || true
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the

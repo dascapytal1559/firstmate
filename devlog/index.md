@@ -1643,3 +1643,179 @@ The choices:
 
 The evidence is the touched suites on made-up records: the mirror suite gains cases for carrying the previous session's exchange and nothing older, the six-entry and 6,000-character bound with a cut entry, and missing, invalid, and unowned records; the session-start suite gains a case for the section's presence, placement, and absence.
 Both suites pass.
+
+## 60. Usage that had no recorded parent now names one (16 November 2026)
+
+T3's Usage page splits tokens between the phone and the computer by following each prompt's recorded cause.
+A day's investigation found a quarter of the last 24 hours with no recorded parent, almost all of it with a person behind it: FirstMate's own wake turns, workers launched from them, no-mistakes reviews run outside any T3 turn, and the supervision host's engine.
+T3 gained a way for an agent to claim such work; this change is FirstMate's side.
+
+The ask:
+
+> My intention is to arrive at nothing unknown in the past 24 hours. Only unknown would be prior to phone distinction which is I think November 12th or something
+>
+> (15 November 2026)
+
+On upkeep, such as recovering after a T3 restart: "Okay, both of these are desktop".
+On voice journals: "I would like jobs that originate from journal get labelled as phone".
+
+What was built:
+
+- **Wake turns.** The wake drain claims its turn for the worker the first wake is about, so the turn counts to the prompt behind that worker; a wake about no worker is upkeep and counts to the computer.
+  Turns no drain described, such as a background command finishing, are claimed for the computer afterwards.
+- **Launches from a wake.** A launch or steer from a wake turn names the wake itself as its cause, so the worker inherits whatever that turn was claimed for.
+- **Several prompts in one turn.** A launch names the latest prompt that arrived before it, instead of naming none.
+- **Pipelines and the engine.** A ship worker claims each no-mistakes run for its task, and the supervision host claims each engine conversation for the task it woke on.
+- **Restarts, recovery launches, journals.** A T3 restart names the latest landed task; a backlog item keeps the prompt that queued it, so a launch after a restart still names the request; the turn that files a voice journal claims the phone, and every worker it launches follows.
+
+Every claim is best effort: a claim that cannot be made is skipped or logged once, and nothing ever waits on its accounting.
+What stays Unknown by design: work before causes were recorded, a task launched without a cause until it ends, and work outside T3 that no claim covers.
+
+The evidence is the touched suites against the fake T3 server, never the live one: the T3 client gains cases for wake causes, the latest prompt, claims, and restart causes; a new claim suite covers each claim, the drain end to end, and failures; the restart, backlog, landing, and brief suites gain a case each.
+
+## 61. A delayed follow-up now counts to the message that set it up (16 November 2026)
+
+Some work waits before it starts: a timed follow-up holds until an account has room, then fires and launches the workers.
+On 15-16 November six promo films and the nightly review were set up this way from the phone, yet the follow-up's firing counted as upkeep on the computer, and so did every worker launched in that turn, about 806M tokens.
+
+The ask:
+
+> Yep, let's go with all three.
+>
+> (16 November 2026)
+
+This is the second of the three builds toward "We'll keep going until unknown is zero percent": phone work that waits and then starts automatically, so that when the job fires it counts to you, phone or computer.
+
+What was built, in two small edits:
+
+- **Arming remembers the cause.** Arming a follow-up records the prompt behind the arming turn in the follow-up's own record, before that record is sealed; with no cause available it records nothing, as before.
+- **The firing wake claims it.** When the wake for a fired follow-up arrives, its turn is claimed for the recorded prompt; a follow-up armed with no cause stays upkeep on the computer.
+
+Workers launched in that wake turn need no change: a launch from a wake turn already names the wake, and the wake now counts to the phone message that armed the follow-up, so the workers inherit it.
+
+The evidence is the touched suites, with no live T3: the follow-up suite covers a recorded cause, none, a malformed one refused, and a cause kept through an update; the claim suite covers a fired follow-up counting to its cause, one with none, one whose record is gone, and any other result staying upkeep.
+
+## 62. Settling or snoozing a thread in T3 now reaches FirstMate (16 November 2026)
+
+He had archived a worker's thread in T3, then decided that putting a thread away should be his own reversible move, separate from FirstMate's cleanup.
+
+The ask:
+
+> Thinking let's bring back settled for T3 code. I had just archived a thread, but I realized I think my action should only like settle it That way I can unsettle it. So I don't see archive. Archive is something you do, and what I do is I settle. And when I settle or when I snooze I expect I'm thinking to also send a message to first mate so that the records are in sync.
+>
+> (16 November 2026)
+
+The T3 fork's menus are being changed in parallel to offer Settle instead of Archive and to send FirstMate a message on each settle, un-settle, snooze, and un-snooze; this is FirstMate's half.
+
+What was built:
+
+- **The message is read.** The reader that already names the task behind a reply typed on a worker's thread now also reports the action line T3 adds, with a snooze's return time; a malformed or doubled action is refused, and an ordinary reply reads exactly as before.
+- **Settle closes finished work.** A settled thread whose worker has finished, landed, and waits on nothing is cleaned up and its item closed with a note saying it was settled in T3.
+  A thread with an open decision gets a one-line question instead, since FirstMate never closes a decision without his words, and a thread whose worker is still busy is left running with a word to him.
+- **Un-settle brings it back.** An item a settle closed is reopened; anything else is left alone.
+- **Snooze parks.** A snoozed thread parks its item until the snooze's date, or with no date for an open-ended snooze, the same as saying "snooze" in chat; un-snoozing lifts the park.
+- **Unknown threads are let go.** A message about a thread no task records is acknowledged and nothing changes.
+- **FirstMate's own moves stay quiet.** Its own snoozes and the archive at cleanup send nothing back.
+
+The evidence is the touched suites on made-up records: the reader suite gains cases for each action, a dated, quoted, and open-ended snooze, an unknown thread, and malformed or doubled actions; the supervision suite checks the rules reach only a session running in T3.
+
+## 63. A Fable worker never starts on a nearly-out account (16 November 2026)
+
+On 16 November the first Claude account's Fable weekly allowance fell to 2% and then ran out, while new workers were still being sent there.
+FirstMate's account rules already said such an account is no longer used, but nothing checked them when a worker started: FirstMate had to remember to read quota first.
+
+Asked whether to file a fix so starting a worker refuses a Fable start on a nearly-out account, his answer:
+
+> Yeah, do it.
+>
+> (16 November 2026)
+
+What was built:
+
+- **An opt-in floor.** A home sets `config/fable-quota-floor` with a weekly floor on an account's Fable allowance and on its all-models allowance, and a floor on its 5-hour window; this home uses 2% weekly and 50% for the 5-hour window.
+  Without the file nothing is read and nothing changes.
+- **The account the launch really uses.** On T3 Code that is the provider instance the launch runs on and that instance's own login folder, read from T3's provider settings rather than guessed from the instance's name; a settings file from a different T3 install is not trusted.
+  On a pane backend it is the pinned or chosen account, or the one the launch passes on.
+- **A refusal before anything starts.** At or below a floor, or with the allowance already exhausted, the start stops before a copy is leased or a thread opened, and says which account, the figure, the floor, and the two ways forward: another account, or an explicit override with a reason the task record keeps.
+- **Unknown is not a no.** An account that cannot be measured, such as a rate-limited read or a missing Fable window, does not block; the worker starts and the task record keeps a one-line warning.
+
+Checked against this home's three accounts at the time of writing, read-only: the first and third accounts were refused, with Fable at 0% and the third's 5-hour window at 0%, and the second passed.
+
+The evidence is the new suite on made-up quota readings: refusals at each floor and on an exhausted allowance, a pass above every floor, unmeasured accounts proceeding with their reason, the ordinary login read with its folder unset, T3 instance mapping from made-up provider settings, malformed floor files, and through the real spawn script a refusal before launch, a pass with an unchanged record, a recorded warning, and the recorded override.
+
+## 64. Every Claude worker is sized before it starts (16 November 2026)
+
+Until now FirstMate chose an account for each worker by hand: read every account's quota, weigh what was already running, pick one.
+The scout that measured what workers really cost showed fixed thresholds fail both ways, and a hand-run sizing costs a few thousand tokens that stay in FirstMate's context for the rest of the session.
+The captain's ask:
+
+> I think just recall the goal and make sure we size up each job before we start just take into consideration of quotas and how many workers we've already put on something.
+>
+> We should assess how costly this is because we're gonna be starting workers all day. We want this step to not cost too much.
+>
+> whatever you implement, make sure we have some way of like tracking how it's going.
+>
+> (16 November 2026)
+
+What was built:
+
+- **A sizing step inside every start.** With a cost table in the home's config, starting a Claude worker reads each account's quota once, sizes the job at its class's 90th percentile, and holds back what the workers and pipeline runs already on each account are still expected to spend: their 75th percentile less what their transcripts show they have spent.
+  It starts on the account where the job fits whose week resets soonest, keeping 10 points of the 5-hour window and 2 points of the week in reserve, and checks the Fable allowance for Fable work.
+- **One start, one account.** On T3 Code the pick rides that one start as its provider instance, so the home's standing account mapping is never rewritten; FirstMate can still name an account itself, and that choice wins and is recorded.
+- **Waiting instead of failing.** When no account has room the start is held, the backlog item stays queued, and FirstMate is woken at the soonest reset where the job would fit; a wait over an hour is reported to the captain.
+- **Tracking for the review.** Each start records the estimate, every account's reading, and why it chose; each cleanup records what the worker actually spent, how long it ran, and whether a usage limit cut it off.
+  A report sets estimates against actuals per kind of job and counts cut-offs, waits, and the sizing step's own cost; a refit updates the cost table from those records.
+- **Finding T3's own folder.** Both this and the Fable floor now find T3's settings in the folder whose environment id matches the signed-in server, such as a fork's own folder, instead of assuming the default one.
+
+The table was seeded from the scout's own data: for example a Fable ship's 90th percentile is about 82% of the smaller account's 5-hour window, and an Opus high ship's about 6%.
+
+A dry run against this home's three accounts, read-only and in a scratch copy of the home, took about 3 seconds and printed four lines per start.
+It placed the ten running workers on the accounts their transcripts are written to.
+An Opus ship went to the first account, whose week resets soonest and still had room for it at 7% left; Fable work skipped it (its Fable allowance at 0%) and went to the second, whose week resets before the third's.
+
+The evidence is the new suite on made-up quota readings: a fit on the soonest-resetting account, a queued start and its wake, running and moments-old work held back, the Fable allowance, an unmeasured account, an explicit override, a malformed table, T3 instances and their folders, cleanup records, the report and refit, and through the real spawn script a start on the picked account, a deferred start with nothing launched, and an unchanged start with sizing off.
+
+## 65. A nightly check finds unlabelled usage (16 November 2026)
+
+The usage attribution review set out "born labelled": every token on T3's Usage page should carry a reason for counting to the phone or the computer, and a gap should be found by the system rather than by someone noticing odd numbers.
+T3's side landed first: a read-only watchdog that tallies a day's tokens by reason and flags the ones that count to the computer only because nothing says otherwise.
+This is FirstMate's side of the plan's first step:
+
+> FirstMate's nightly check reads the watchdog figure and flags anything unlabelled, so a labelling gap is found by the system the same night instead of by eye.
+
+What was built:
+
+- **One more nightly step.** The nightly checks now run as one script, the clear check and then the usage-label check, each on its own so one failing never stops the other.
+- **The check itself.** It reads the watchdog for the previous day, with no model call, and raises one backlog item naming each unlabelled reason, provider, and token count, such as "unregisteredSession, claude: 500 tokens".
+  A fully labelled day raises nothing.
+- **Unknown is not zero.** When the figure cannot be read (an older T3 build without the watchdog, T3 down, no credential, or an answer that does not read as a figure), the item says so and why instead.
+- **No pile-up.** Later nights retitle and update the same item, reopening it if it was closed, so a gap that lasts a week is one item, not seven.
+
+The evidence is a new suite against the fake T3 server and a scratch backlog: a labelled day, a gap summed by reason and provider, later nights on an open, held, and closed item, each way the figure can be unreadable, a dry run, and the nightly runner going on past a failed clear check.
+A dry run against the live home read the installed T3 build, which does not yet have the watchdog, and would have raised the unreadable item.
+
+## 66. Reviews and the supervision engine register themselves at birth (16 November 2026)
+
+The usage-attribution review proposed that every agent session be born with its label instead of being labelled afterwards.
+The captain's ask behind it:
+
+> if going forward we would have a hundred percent coverage on the device attribution.
+>
+> (16 November 2026)
+
+T3 now keeps a session register: a small hook in each tool's settings writes one line when a session starts, naming the FirstMate task its environment carries.
+This step moves FirstMate's last outside-T3 sessions onto it and removes three manual labelling steps.
+
+What zero-token probes showed (each session pointed at a dead API address, writing to a scratch register):
+
+- **Reviews carried no task.** The review daemon runs under the system's service manager with a bare environment, so a review session registered as if someone had started it in a terminal.
+- **The engine fired no hooks at all.** It runs Claude in safe mode, which turns every hook off, including one passed on the command line.
+- **Codex skips a new hook silently until it is trusted.** It never prompts, so a worker never stalls; the hook simply does not run until a trust line is added.
+
+What was built:
+
+- **A review launcher wrapper.** `bin/fm-nm-agent-env.sh` sits in front of the review agent. In a pipeline run's folder it reads the run's branch and project from the review daemon's records, finds the one task recorded for them, and starts the agent under that task.
+- **The host registers the engine.** Before each engine turn the supervision host runs the register hook itself, under the woken task, or under nothing for upkeep, which counts to the computer.
+- **Removed:** the pipeline claim instruction in every no-mistakes brief, the engine's claim call, and the spawn's data-folder claim, with the claim script's three verbs they used.
+
+The evidence is two zero-token review sessions from the same fixture run folder, one started directly (registered with no task) and one through the wrapper (registered under its task), and the new suites for the wrapper and the host's registration.

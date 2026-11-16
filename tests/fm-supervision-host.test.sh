@@ -73,6 +73,40 @@ test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main() {
   pass "host: an attended wake the branch may take is handled on the engine, and its routine outcome never wakes main"
 }
 
+# The engine runs with every hook off, so the host runs the session-register
+# hook config/session-register names before each turn: under the woken task
+# and this home, never under the primary's own thread or task.
+test_engine_turn_registers_its_session_under_the_woken_task() {
+  local home register session
+  home=$(make_home register-session attended)
+  register="$home/register"
+  mkdir -p "$register"
+  cat > "$home/register-hook" <<'SH'
+#!/usr/bin/env bash
+{
+  printf 'args=%s\ncwd=%s\n' "$*" "$PWD"
+  printf 'task=%s\nhome=%s\nthread=%s\n' "${FM_TASK_ID-unset}" "${FM_HOME-unset}" "${T3CODE_THREAD_ID-unset}"
+  printf 'payload=%s\n' "$(cat)"
+} > "$2/call"
+SH
+  chmod +x "$home/register-hook"
+  printf '%s\n%s\n' "$home/register-hook" "$register" > "$home/config/session-register"
+  T3CODE_THREAD_ID=main-thread FM_TASK_ID=primary-task start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "register: the host never started a watcher cycle: $(cat "$home/host.out")"
+  append_status "$home" 'step one'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "register: the wake was not handled on the engine: $(cat "$home/state/.supervision-host.log")"
+  session=$(awk '/^arg=--(session-id|resume)$/ { getline; sub(/^arg=/, ""); print; exit }' "$home/engine-call.1")
+  [ -n "$session" ] || fail "register: the engine call named no session: $(cat "$home/engine-call.1")"
+  assert_grep "args=claude $register" "$register/call" "the hook is run as Claude's, into the configured register"
+  assert_grep "payload={\"session_id\":\"$session\"}" "$register/call" "the hook is handed the engine's session id"
+  assert_grep "task=demo" "$register/call" "the session registers under the woken task"
+  assert_grep "home=$home" "$register/call" "and under this home"
+  assert_grep "thread=unset" "$register/call" "never under the primary's own thread"
+  stop_home_processes "$home"
+  pass "host: each engine turn registers its session under the woken task through the configured hook"
+}
+
 
 # A TERM that lands just after a handled wake, while the host settles its
 # successor handoff under the queue and marker locks, must not leave the host
@@ -135,8 +169,8 @@ test_attended_captain_outcome_reaches_main_through_branch_outcomes() {
   append_status "$home" 'ready for review'
   wait_until_deadline 60 host_exited "$home" || fail "captain: the captain outcome did not wake main: $(cat "$home/state/.supervision-host.log")"
   expect_code 0 "$(cat "$home/host.rc")" "a captain-outcome exit must exit 0 for the owner to deliver"
-  assert_re '^supervision-host: branch-outcome: .*\(store rows 1\); run bin/fm-wake-drain.sh' "$home/host.out" \
-    "the exit must name the captain outcome's store row and send main to its drain"
+  assert_re '^supervision-host: branch-outcome: .*\(store rows 1, for demo\); run bin/fm-wake-drain.sh' "$home/host.out" \
+    "the exit must name the captain outcome's store row and task and send main to its drain"
   assert_no_re '^signal:' "$home/host.out" "the close the engine handled must not reach main as a wake"
   assert_grep 'MAIN processes it from its next drain' "$home/engine-report.log" "an attended captain report must say main processes it"
   assert_no_grep 'demo.status' "$home/state/.wake-queue" "the handled wake must stay acknowledged"
@@ -194,7 +228,7 @@ test_quiet_record_without_its_daemon_is_a_present_captain() {
   assert_no_re '^POSTURE: AWAY' "$home/engine-call.1" "a turn beside a quiet record must carry no away tail"
   assert_re 'MAIN DIALOG MIRROR' "$home/engine-call.1" "a turn beside a quiet record must carry the captain's dialog"
   assert_grep 'MAIN processes it from its next drain' "$home/engine-report.log" "a captain report beside a quiet record must say main processes it"
-  assert_re '^supervision-host: branch-outcome: .*\(store rows 1\); run bin/fm-wake-drain.sh' "$home/host.out" \
+  assert_re '^supervision-host: branch-outcome: .*\(store rows 1, for demo\); run bin/fm-wake-drain.sh' "$home/host.out" \
     "the exit must name the captain outcome's store row for the present captain"
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_contains "$drained" "BRANCH OUTCOMES (captain outcomes the supervision session recorded for you" "main's drain must present the captain outcome beside a quiet record"
@@ -980,6 +1014,7 @@ test_t3_thread_keyed_stale_row_is_offered_by_its_task_state() {
 fm_test_run \
   test_park_exit_probe_uses_half_second_child_sleeps \
   test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main \
+  test_engine_turn_registers_its_session_under_the_woken_task \
   test_host_stopped_right_after_a_handled_wake_exits_and_frees_the_queue \
   test_engine_in_another_time_zone_handles_its_granted_rows \
   test_attended_captain_outcome_reaches_main_through_branch_outcomes \

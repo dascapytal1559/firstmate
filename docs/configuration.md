@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [several Claude accounts](#several-claude-accounts-configclaude-accounts), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
+| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [several Claude accounts](#several-claude-accounts-configclaude-accounts), [Fable quota floor](#fable-quota-floor-configfable-quota-floor), [worker sizing](#worker-sizing-configworker-sizingjson), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), [record export](#record-export-configrecord-export-root), [startup memory budget](#startup-memory-budget-configstartup-memory-budget), and [stow guard](#stow-guard-configstow-guard) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [Codex native Stop park](#codex-native-stop-park-configcodex-stop-park), [warm-cache compaction](#warm-cache-compaction-configwarm-compact), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -427,6 +427,14 @@ The flag is off when absent, is not inherited, and has no effect on other primar
 The host reads its presence at each hand-back, so enabling it needs no session restart.
 Removing it stops further retries and leaves the current watcher for the ordinary next park.
 [Supervision host](supervision-host.md#acknowledged-hand-back) owns the acknowledgement, retry transport, and limits.
+
+### Session register (config/session-register)
+
+The optional, home-local `config/session-register` names the T3 fork's session-register hook for the host's engine, whose own hooks are off ([usage](t3code-backend.md#usage-claims)).
+Line 1 is the hook's absolute path and line 2 the register folder's absolute path, the same two values that hook's Claude install passes.
+Before each engine turn the host runs that hook as Claude's with the engine's session id, under the woken task.
+Absent, unreadable, or naming a hook that cannot run, it registers nothing and the turn runs as before.
+The file is read at every turn and is not inherited into secondmate homes.
 
 ## Codex native Stop park (config/codex-stop-park)
 
@@ -1772,6 +1780,97 @@ The list covers Claude ships and scouts only.
 A local secondmate's own agent never draws from it: under a list it needs its own [per-secondmate account pin](#per-secondmate-account-pins), and `--account` refuses for every secondmate, local or remote.
 Other runners ignore the list, and `--account` refuses for them.
 Like the single pin, the list is not inherited into secondmate homes.
+
+### Fable quota floor (config/fable-quota-floor)
+
+A home can refuse to start a Fable worker on a Claude account that is nearly out of allowance, so a launch never depends on remembering to read quota first.
+Create `config/fable-quota-floor` with one `key=value` per line; `#` starts a comment:
+
+```text
+fable_weekly=2
+weekly=2
+five_hour=50
+```
+
+| Key | Floor on, in whole percent left |
+| --- | --- |
+| `fable_weekly` | the account's Fable weekly allowance (quota-axi window `model:fable`) |
+| `weekly` | the account's all-models weekly allowance (`seven_day`) |
+| `five_hour` | the account's 5-hour window (`five_hour`), for accounts that have one |
+| `t3_home` | not a floor: T3 Code's data folder, holding `userdata/settings.json`, when it is not `$T3CODE_HOME` or the signed-in server's own folder (below) |
+
+Each floor is optional, but the file must set at least one; an unknown key or a value that is not a whole number from 0 to 100 refuses the Fable launch and names the line.
+The file is local, gitignored, and not inherited into secondmate homes; without it nothing is read and every launch behaves exactly as before.
+
+Only a Claude ship or scout launch with `--model claude-fable-*` is checked, after its account is resolved and before anything is leased or launched.
+The account is the one that launch uses.
+Under `backend=t3code` it is the instance that start was given (`--t3-instance`, or the [worker sizing](#worker-sizing-configworker-sizingjson) pick), else the provider instance `config/t3code-instances` names for `claude`, else the [default instance](t3code-backend.md#provider-instances-and-models), and that instance's login folder is its `config.homePath` in T3's own provider settings; an empty `homePath` is the ordinary login.
+Without `t3_home` or `$T3CODE_HOME`, T3's data folder is the first of `~/.t3` and `~/.t3-*` whose `userdata/environment-id` matches the environment id `config/t3code-token` records, so a T3 fork's own folder such as `~/.t3-fork` is found; with no match it is `~/.t3`.
+When `config/t3code-token` records an environment id, those settings are used only when T3's `userdata/environment-id` matches it.
+On a pane backend it is the `config/claude-account` pin or `--account` entry, else the `CLAUDE_CONFIG_DIR` the launch forwards.
+[`bin/fm-fable-floor.sh`](../bin/fm-fable-floor.sh) reads that one account with a read-only `quota-axi --provider claude --json`, with `CLAUDE_CONFIG_DIR` unset for the ordinary login.
+
+The launch refuses when a measured window is at or below its floor, or when quota-axi reports the Fable or all-models allowance `exhausted_now`.
+The refusal names the account, each figure and its floor, and the two ways forward:
+
+- point the spawn at another account: map `claude` to another instance in `config/t3code-instances` on T3 Code, or pass another `--account` entry or pin on a pane backend;
+- with the captain's word to start anyway, pass `--fable-floor-override <reason>`, which skips the check for that launch and records `fable_floor_override=<reason>` in the task record.
+
+An account quota-axi cannot measure, such as an unreadable credential, a vendor rate limit, a missing Fable or weekly window, or T3 settings that cannot be read, does not block.
+The launch proceeds, prints `warning: Fable quota floor not checked, starting anyway: <reason>`, and records that reason as `fable_floor_uncertain=` in the task record.
+quota-axi stays data-only and firstmate still judges eligibility at intake; this floor is a backstop for the case where that judgement was skipped or stale.
+
+### Worker sizing (config/worker-sizing.json)
+
+A home can size every Claude ship or scout before it starts and start it on the account where it fits, without firstmate reading quota by hand.
+The sizing runs as [`bin/fm-size.sh`](../bin/fm-size.sh) inside `bin/fm-spawn.sh`, prints one short line per account and one decision line, and costs no model reasoning.
+Without the file nothing is read or recorded and every start behaves exactly as before.
+The file is local, gitignored, and not inherited into secondmate homes.
+
+```json
+{
+  "accounts": [{"id": "claudeThird", "plan": "max5"}, {"id": "claudeAgent", "plan": "max"}],
+  "pipeline_account": "claudeAgent",
+  "reserve": {"five_hour": 10, "weekly": 2},
+  "plans": {
+    "max5": {"five_hour": {"fable": 2.106, "other": 0.785}, "weekly": {"fable": 0.274, "other": 0.102}},
+    "max": {"weekly": {"fable": 0.1346, "other": 0.069}}
+  },
+  "classes": [{"kind": "ship", "model": "opus", "effort": "high", "p75": 5.58, "p90": 7.31, "busy_p90": 93}],
+  "fallback": {"kind": "ship", "model": "opus", "effort": "high"}
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `accounts` | every Claude login a start may use: a T3 provider instance id under `backend=t3code`, else a `config/claude-accounts` entry; each names a plan |
+| `plans` | per plan, the percent of each limit one weight unit uses, by model family (`fable`, `opus`, `sonnet`) or `other`: `weekly` (required, with at least an `other` rate), `five_hour` (an account whose plan has none leaves its 5-hour window unsized), `fable_weekly` (the Fable allowance; without it the weekly rate is used) |
+| `classes` | per kind (`ship`, `scout`, `pipeline`), model family and effort: the 75th and 90th percentile cost in weight units (list-price dollars of everything but cache reads) and the 90th percentile busy minutes |
+| `fallback` | the class used when neither the exact class nor the same model and effort exists; default ship opus high, which must be listed |
+| `reserve` | points kept free on the 5-hour window (default 10) and the week and Fable allowance (default 2) |
+| `pipeline_account` | the account no-mistakes runs use; without it pipeline runs are not counted |
+| `max_age_seconds`, `read_seconds` | how old a reused quota reading may be (default 120) and how long one read may take (default 20) |
+| `queue_notice_minutes`, `pending_minutes` | the wait after which the captain hears of a queued start (default 60), and how long a just-picked start is counted before its task record exists (default 15) |
+| `default_model`, `default_effort`, `prices`, `t3_home` | the family and effort a `default` model or effort is sized as (opus, high), per-family list prices per million input and output tokens, and T3's data folder as for the [Fable quota floor](#fable-quota-floor-configfable-quota-floor) |
+
+A malformed file, an undefined plan, or a missing weekly rate refuses the start and names the problem.
+
+For each account, read once with quota-axi's cache, the new job is sized at its class's 90th percentile, its 5-hour share scaled by the minutes left to that window's reset over the class's busy minutes.
+Every live Claude worker on the account, every no-mistakes run executing for one of them, and every start picked moments ago is held at its class's 75th percentile less what its transcripts show it has spent.
+It fits when, on every limit the account reports, the percent left less what is held and the reserve is at least its size.
+The start goes to the fitting account whose week resets soonest; when none fits, to an account quota-axi could not measure, with a warning; otherwise it is queued.
+
+A queued start exits 76 with nothing leased or launched, so its backlog item stays queued, and names the soonest time a 5-hour or weekly reset would let it fit.
+`state/worker-sizing-retry.check.sh`, registered as a watcher check while any start is queued and retired once none is, then wakes firstmate at that time to dispatch it again, and a wait over `queue_notice_minutes` says to tell the captain.
+
+The pick becomes that one start's `--t3-instance` on T3 Code or its `--account` elsewhere; `config/t3code-instances` is never rewritten.
+An explicit `--t3-instance <id>` or `--account <entry>` from firstmate is still sized and recorded, and starts there even when it does not fit.
+`--t3-instance` also works without the file, for one start on another T3 instance, and is recorded as `t3_instance=` in the task record.
+
+Every start or queue decision appends a record to `data/worker-sizing/records.jsonl`, and cleanup appends the actual: duration, transcript tokens, weight and busy minutes, the account's reading then, and whether a usage limit cut the task off.
+`bin/fm-size.sh report [--since <date>]` sets estimates against actuals per class and counts cut-offs, queued starts and their waits, and the sizing step's own time and printed lines.
+`bin/fm-size.sh refit [--min <n>] [--write]` recomputes each class's percentiles from finished records, keeping classes with fewer than `--min` (default 5), and with `--write` saves them beside a backup.
+The [Fable quota floor](#fable-quota-floor-configfable-quota-floor) stays a backstop on the account sizing picked.
 
 ### Per-secondmate account pins
 

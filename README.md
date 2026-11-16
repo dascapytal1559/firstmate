@@ -20,6 +20,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Fresh sessions](FORK.md#a-fresh-firstmate-session-takes-over-cleanly): after `/clear`, the new FirstMate session takes over the same thread.
 - [Cold sessions](FORK.md#a-notification-never-reloads-a-cold-session): a worker notification rings FirstMate through T3 Code instead of reloading a session idle past its cache lifetime.
 - [Clear check](FORK.md#a-nightly-check-watches-every-clear): a nightly check lists every clear of FirstMate's session and puts a line in the morning briefing when one may have hurt.
+- [Usage labels check](FORK.md#a-nightly-check-finds-unlabelled-usage): a nightly check raises one backlog item when any of the day's T3 Code usage has no label, or when the figure cannot be read.
 - [Last exchange](FORK.md#a-fresh-session-starts-with-the-last-exchange): a fresh FirstMate session starts with the previous session's last exchange, so a bare "yes" after a clear lands next to its question.
 - [Alerts](FORK.md#a-wake-turn-alerts-only-when-it-needs-the-captain): a turn nobody typed into sounds only when it needs the captain.
 - [Work causes](FORK.md#work-records-the-prompt-that-caused-it): each worker records the prompt that started it, for T3's usage by origin.
@@ -39,6 +40,8 @@ Outside T3 Code:
 - [Live review boards](FORK.md#review-boards-that-keep-listening): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
 - [Rebased landings](FORK.md#rebased-local-only-work-still-lands): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes.
 - [Trusted review wakes](FORK.md#only-trusted-reviewers-wake-a-parked-worker): a worker parked on review restarts only for review activity from trusted people; anything else is reported to FirstMate.
+- [Fable quota floor](FORK.md#a-fable-worker-never-starts-on-a-nearly-out-account): a Fable worker never starts on a Claude account nearly out of its allowance.
+- [Sized worker starts](FORK.md#each-claude-worker-is-sized-before-it-starts): each Claude worker is sized against every account's quota and starts where it fits, or waits for the soonest reset.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

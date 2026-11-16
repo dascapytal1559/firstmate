@@ -1016,6 +1016,36 @@ health_record() {  # <engine-error 0|1> <reports>
   health_save
 }
 
+# register_engine_session <tasks>: the engine runs in --safe-mode, which turns
+# off every hook, so the session-register hook T3 Code installs never fires for
+# it. The host runs that hook itself, just before each turn, as the engine's
+# session start: the hook named by config/session-register
+# (docs/configuration.md "Session register") registers this session id under
+# the woken task (the first of <tasks>, space separated) or, for a wake about
+# no task, under nothing, which T3 counts to the computer. Each turn registers
+# again, so a resumed conversation splits across its turns' tasks, and a new
+# conversation's id is minted before its first turn (choose_conversation).
+# Bounded and best effort: the hook never holds up or fails the turn.
+register_engine_session() {  # <tasks>
+  local hook='' folder='' task=${1%% *}
+  local -a origin=()
+  [ "$FM_SUPERVISION_ENGINE" = claude ] && [ -n "$ENGINE_SESSION" ] || return 0
+  [ -f "$CONFIG/session-register" ] || return 0
+  { IFS= read -r hook; IFS= read -r folder; } < "$CONFIG/session-register" || true
+  case "$hook" in /*) ;; *) return 0 ;; esac
+  case "$folder" in /*) ;; *) return 0 ;; esac
+  [ -x "$hook" ] || return 0
+  [ -z "$task" ] || origin=("FM_TASK_ID=$task" "FM_HOME=$FM_HOME")
+  printf '{"session_id":"%s"}\n' "$ENGINE_SESSION" \
+    | (cd "$FM_ROOT" && fm_exec_timed 5 1 env -u T3CODE_THREAD_ID -u FM_TASK_ID -u FM_HOME \
+        "${origin[@]+"${origin[@]}"}" "$hook" claude "$folder") >/dev/null 2>&1 || true
+}
+
+# The tasks one turn recorded captain outcomes for, space separated.
+turn_captain_tasks() {  # <turn>
+  awk -F '\t' -v turn="$1" '$1 == turn && $3 == "captain" && !seen[$4]++ { printf "%s%s", sep, $4; sep = " " }' "$RECEIPTS" 2>/dev/null
+}
+
 # Handle one close on the engine, in the posture the record gives when the
 # turn starts (TURN_POSTURE). Returns 0 when the wake is handled (or held
 # nothing the branch may claim), 2 with ATTENDED_WHY set when the turn starts
@@ -1132,6 +1162,7 @@ handle_wake() {  # <reason-lines>
     "$SCRIPT_DIR/fm-wake-grant.sh" release "$GEN" >/dev/null 2>&1 || true
     boundary_exit
   fi
+  register_engine_session "$tasks"
   result=$(mktemp "$STATE/.supervision-host-result.XXXXXX") || result=/dev/null
   errors=$(mktemp "$STATE/.supervision-host-errors.XXXXXX") || errors=/dev/null
   TURN_RESULT=$result
@@ -1370,7 +1401,7 @@ while :; do
     CAPTAIN_SEQS=$(turn_captain_seqs "$LAST_TURN")
     if [ -n "$CAPTAIN_SEQS" ]; then
       ARM_TEXT=
-      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
+      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS, for $(turn_captain_tasks "$LAST_TURN")); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
         "$HEALTH_NOTE"
     fi
   fi

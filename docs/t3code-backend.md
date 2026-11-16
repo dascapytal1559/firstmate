@@ -121,14 +121,44 @@ Firstmate names that prompt at its durable boundaries, and [`bin/fm-t3-cause-lib
 - A spawn records it in the task record as `caused_by=` and sends it on the worker's launch and its brief; a relaunch keeps the recorded one.
 - A steer through `fm-send.sh` keeps it in the steer's inbox record, and every doorbell for that record carries it.
 - A note written with `fm-inbox.sh note` from inside a T3 turn keeps the prompt that made the agent write it, and `drain` shows it.
+- A condition-then-action follow-up armed with `fm-procevent-when.sh arm` keeps the prompt behind its arming turn in its spec as `caused_by=`, and the wake that reports its fired result claims that cause.
+- A backlog item added with `fm-tasks-axi.sh add` keeps the prompt that queued it, and its first spawn names that prompt, whatever turn launches it, such as a recovery wake after a restart.
+- A landing keeps the landed task's cause as the latest landed cause, and a [clean restart](#clean-restart) names it, since a restart installs landed work.
 
-The cause is the one prompt of the current T3 turn of the agent running the command, which T3 names in each agent's environment as `T3CODE_THREAD_ID`.
-Firstmate records nothing rather than guess: when that turn received more than one prompt (a steer or queued input joined it), when the command did not start inside that turn (a background job left over from an earlier turn), or when T3 cannot be read.
+The cause is the T3 turn that started the command, in the thread T3 names in each agent's environment as `T3CODE_THREAD_ID`: the message that started the turn, or, when the turn received more prompts (a steer or queued input), the latest one that arrived before the command began.
+That is usually the current turn, but a command that began in a turn that has since ended, such as a send made just after it, or a background job still running into a later turn, names the turn it began in.
+A wake turn starts from T3's notification rather than a prompt, so work launched in it names that notification, and counts wherever the wake turn's [usage claim](#usage-claims) puts it.
+Firstmate records nothing rather than guess: when no recent turn spans the command's start, or when T3 cannot be read.
 `bin/fm-t3-mcp.mjs cause` owns the exact rule, and it never reads message text.
-Set `FM_T3CODE_CAUSED_BY` to `off` for no cause, or to a cause JSON (`{"threadId", "runId"?, "messageId"}`) to name one explicitly, such as the prompt a note recorded or one of several prompts a turn received.
+Set `FM_T3CODE_CAUSED_BY` to `off` for no cause, or to a cause JSON (`{"threadId", "runId"?, "messageId"}`) to name one explicitly, such as the prompt a note recorded or an earlier prompt of a turn that received several.
 
 `causedBy` is sent only where T3's `tools/list` schema declares it, so an older T3 keeps working without it.
 A launch reads the thread back and refuses one that did not bind the cause; a cause T3 refuses fails the launch with nothing created, while a message whose cause T3 refuses is reported and sent again without it, so a steer never waits on its accounting.
+
+### Usage claims
+
+Some work has no prompt T3 can follow: FirstMate's own wake turns run outside any traced prompt.
+Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Usage by origin" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
+
+- **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
+- **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
+
+Upkeep needs no claim: T3 files a FirstMate coordinator turn that no claim names and no person typed as computer upkeep by itself, so a wake about no task (watcher recovery, scheduled checks, a follow-up armed with no cause), a wake about tasks that carry no cause, and a turn no drain describes (such as one a background command's notification started) all count to the computer with nothing sent.
+The drain's claim passes `bin/fm-t3-mcp.mjs usage-claim --if-unclaimed`, which sends T3's `ifUnclaimed`, so a turn that already has a claim keeps it against later drains, while an explicit `turn` claim replaces it.
+T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.
+Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, or restart.
+
+Agent sessions T3 does not run are not claimed: each registers itself when it starts, through the T3 fork's session-register hook, installed in each tool's settings (the fork's `docs/user/usage.md` "Count agent sessions T3 does not run" owns the hook, the register, and how Usage counts a registration).
+The hook records the `FM_TASK_ID` and `FM_HOME` the session inherited, so a worker's own probes, critics, and child agents register under its task by construction.
+Two kinds of session cannot inherit them, and Firstmate supplies them:
+
+- **Pipeline agents.** The no-mistakes daemon starts review and fix agents with its own environment, which names no task, so its Claude launcher runs the agent through [`bin/fm-nm-agent-env.sh`](../bin/fm-nm-agent-env.sh), which finds the task whose branch the run serves and starts the agent under it.
+  A launcher without it registers every pipeline session as a terminal session, which Usage counts to the computer.
+- **Engine sessions.** The supervision host's engine runs with every hook off, so the host runs the hook that `config/session-register` names ([configuration](configuration.md#session-register-configsession-register)) before each engine turn, under the woken task, or under nothing for a wake about no task, which Usage counts to the computer.
+  Each turn registers again, so a resumed conversation splits across its turns' tasks.
+
+A nightly check raises a backlog item for any of the previous day's usage still without device evidence: [`bin/fm-usage-labels-check.sh`](../bin/fm-usage-labels-check.sh).
+Work that still counts as Unknown by design: a task launched with no cause, until that task ends; and a session whose task T3 knows no thread for, such as a pane-backend worker's, whose panes carry the task but not the home.
 
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.
 
@@ -265,6 +295,12 @@ The message names its worker on its second line, in one of two forms:
 A blank line and then his words follow either form.
 [`bin/fm-t3-worker-reply.sh`](../bin/fm-t3-worker-reply.sh) reads the task from such a message and refuses one that names no worker or more than one.
 FirstMate treats his words as captain input on that task: an answer to one of its open calls is recorded through the `captain-hold-lifecycle` skill, and anything else is acted on or passed to the worker with `bin/fm-send.sh`.
+
+Settling, un-settling, snoozing, or un-snoozing a worker's thread is the captain's own action in the fork, while archiving is FirstMate's, done when it cleans a worker up.
+Each of his four actions sends the same kind of message, headed `**Settled · <thread title>**` (or `Un-settled`, `Snoozed`, `Un-snoozed`), with `kept-thread: <thread-id>` and then a `thread-action:` line naming the action and, for a dated snooze, its time.
+The reader prints that action after the task, and its header owns the line's exact form.
+FirstMate then brings the backlog in line: a settle cleans up finished, landed work that waits on nothing and closes its item, an un-settle reopens an item a settle closed, and a snooze or un-snooze parks or lifts the item's park; the supervision instruction below owns the full rules.
+FirstMate's own snooze and archive calls on a thread send no message back.
 The session-start supervision block of a session running as a T3 thread carries this instruction ([`supervision-protocols/t3-thread.md`](supervision-protocols/t3-thread.md)).
 
 ### Objectives
@@ -352,6 +388,7 @@ A restart Firstmate causes itself, such as installing a new T3 build, waits unti
 [`bin/fm-t3-restart-request.sh`](../bin/fm-t3-restart-request.sh) closes that gap through the T3 Code fork's restart registry:
 
 1. Once no worker is busy, `drain` requests the restart with a reason naming the build, so T3 shows the captain a notice that it will restart, holds every new message, and lets running turns finish.
+   The request names the latest landed task's [cause](#work-causes), which T3 stamps on the restart note, so the note's turn counts to that prompt's device.
 2. It returns 0 only when T3 reports drained, every turn finished, and the caller then restarts T3; the server start releases the held messages in order.
 3. When T3 has not drained within `--within` seconds, `drain` cancels the request, which releases the held messages, and reports it.
    A signal cancels it the same way, as when its watch is retired or replaced by a newer build, or its action times out.

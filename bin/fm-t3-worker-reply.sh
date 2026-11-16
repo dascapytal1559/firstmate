@@ -12,10 +12,20 @@
 #     needs-me-task: <task-id>     the task itself
 #   A leading `>` or spaces before the marker are ignored, so a quoted message
 #   still reads.
+#   A message T3 sends when the captain settles, un-settles, snoozes, or
+#   un-snoozes a worker's thread also carries one action line:
+#     thread-action: settled | unsettled | unsnoozed
+#     thread-action: snoozed [until <ISO 8601 UTC time>]
+#   and the reader prints it, normalized, on a second line after the task id,
+#   for example `thread-action: snoozed until 2026-11-20T09:00:00.000Z`. The
+#   time is `YYYY-MM-DDTHH:MM[:SS[.fraction]]Z`; `until` belongs only to a
+#   snooze, and a snooze without it is indefinite. A message without the line
+#   prints only the task id.
 #
 # Exit: 0 with the task id; 1 when the message names no worker, or a thread no
 # task records; 2 when it names more than one, both forms at once, a malformed
-# id, or a thread more than one task records. Read-only. Bash 3.2 compatible.
+# id, or a thread more than one task records, or carries more than one action
+# line or a malformed one. Read-only. Bash 3.2 compatible.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,7 +65,34 @@ thread_tasks() {
   return 0
 }
 
+# thread_action: the message's one action line, normalized, or nothing.
+thread_action() {
+  local lines action rest until
+  lines=$(printf '%s\n' "$message" | sed -n 's/^[[:space:]>]*thread-action:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' | sort -u)
+  [ -n "$lines" ] || return 0
+  [ "$(count "$lines")" = 1 ] || { echo "the message carries more than one thread action" >&2; return 2; }
+  action=${lines%% *}
+  rest=${lines#"$action"}
+  rest=$(printf '%s' "$rest" | sed 's/^[[:space:]]*//')
+  case "$action" in
+    settled|unsettled|unsnoozed)
+      [ -z "$rest" ] || { echo "the $action action takes no argument: $lines" >&2; return 2; }
+      printf 'thread-action: %s\n' "$action" ;;
+    snoozed)
+      if [ -z "$rest" ]; then
+        printf 'thread-action: snoozed\n'
+        return 0
+      fi
+      until=$(printf '%s\n' "$rest" | sed -n 's/^until[[:space:]][[:space:]]*\([^[:space:]]*\)$/\1/p')
+      printf '%s\n' "$until" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?Z$' \
+        || { echo "the snooze names a malformed time: $lines" >&2; return 2; }
+      printf 'thread-action: snoozed until %s\n' "$until" ;;
+    *) echo "the message names an unknown thread action: $lines" >&2; return 2 ;;
+  esac
+}
+
 message=$(cat ${1:+"$1"}) || exit 1
+action=$(thread_action) || exit 2
 ids=$(marker needs-me-task)
 threads=$(marker kept-thread)
 if [ -n "$threads" ]; then
@@ -70,3 +107,4 @@ fi
 [ "$(count "$ids")" = 1 ] || { echo "the message names more than one task: $(printf '%s' "$ids" | tr '\n' ' ')" >&2; exit 2; }
 slug_ok "$ids" || { echo "the message names a malformed task id: $ids" >&2; exit 2; }
 printf '%s\n' "$ids"
+[ -z "$action" ] || printf '%s\n' "$action"

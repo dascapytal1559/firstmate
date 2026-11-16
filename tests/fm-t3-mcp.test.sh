@@ -1554,23 +1554,30 @@ iso_in() {  # <seconds from now, negative for the past> -> ISO timestamp
   FM_IN="$1" node -e 'process.stdout.write(new Date(Date.now() + Number(process.env.FM_IN) * 1000).toISOString())'
 }
 
-# t3_coordinator <turn-start-iso> [steers]: thread `coord`, whose finished
-# turn run-old came from prompt msg-old and whose active turn run-c, started
-# at <turn-start-iso>, came from prompt msg-c, followed by 250 activity items
-# (so the prompt lies before the newest 200 positions) and <steers> more
-# prompts steered into run-c.
+# t3_coordinator <turn-start-iso> [steers] [steer-at-iso...]: thread `coord`,
+# whose finished turn run-old came from prompt msg-old and whose active turn
+# run-c, started at <turn-start-iso>, came from prompt msg-c (or, under
+# FM_WAKE=1, from notification msg-c, a wake), followed by 250 activity items
+# (so the start lies before the newest 200 positions) and <steers> more
+# prompts msg-steer-<i> steered into run-c, the i-th arriving at the i-th
+# <steer-at-iso> when given.
 # shellcheck disable=SC2016  # ${...} belongs to the JavaScript snippet.
 t3_coordinator() {
-  FM_AT="$1" FM_STEERS="${2:-0}" t3_fake_set '
-const prompt = (id, run) => ({ type: "user_message", status: "completed", text: "private words", runId: run, messageId: id });
-const items = [prompt("msg-old", "run-old"), { type: "assistant_message", status: "completed", text: "ok", runId: "run-old", messageId: "msg-old-reply" },
-  prompt("msg-c", "run-c")];
+  local at=$1 steers=${2:-0}
+  shift 2 2>/dev/null || shift $#
+  FM_AT="$at" FM_STEERS="$steers" FM_STEER_AT="$*" FM_WAKE="${FM_WAKE:-0}" t3_fake_set '
+const prompt = (id, run, at) => ({ type: "user_message", status: "completed", text: "private words", runId: run, messageId: id, ...(at ? { updatedAt: at } : {}) });
+const steerAt = process.env.FM_STEER_AT ? process.env.FM_STEER_AT.split(" ") : [];
+const start = process.env.FM_WAKE === "1"
+  ? { type: "notification", status: "completed", text: "Background activity updated", runId: "run-c", messageId: "msg-c" }
+  : prompt("msg-c", "run-c");
+const items = [prompt("msg-old", "run-old"), { type: "assistant_message", status: "completed", text: "ok", runId: "run-old", messageId: "msg-old-reply" }, start];
 for (let i = 0; i < 250; i++) items.push({ type: "command_execution", status: "completed", text: "ls", runId: "run-c" });
-for (let i = 0; i < Number(process.env.FM_STEERS); i++) items.push(prompt(`msg-steer-${i}`, "run-c"));
-const run = (runId, ordinal, status, at, done) => ({ runId, ordinal, status, requestedAt: at, startedAt: at, completedAt: done });
+for (let i = 0; i < Number(process.env.FM_STEERS); i++) items.push(prompt(`msg-steer-${i}`, "run-c", steerAt[i]));
+const run = (runId, ordinal, status, at, done, userMessageId) => ({ runId, userMessageId, ordinal, status, requestedAt: at, startedAt: at, completedAt: done });
 w.threads = { ...(w.threads || {}), coord: { threadId: "coord", projectId: "proj-c", title: "coord", status: "running", activeRunId: "run-c",
   latestRunId: "run-c", archived: false, worktreePath: null, pendingRequestCount: 0, providerInstanceId: "claudeAgent", runtimeMode: "full-access", items,
-  runs: [run("run-old", 1, "completed", "2026-11-12T00:00:00.000Z", "2026-11-12T00:01:00.000Z"), run("run-c", 2, "running", process.env.FM_AT, null)] } };'
+  runs: [run("run-old", 1, "completed", "2026-11-12T00:00:00.000Z", "2026-11-12T00:01:00.000Z", "msg-old"), run("run-c", 2, "running", process.env.FM_AT, null, "msg-c")] } };'
 }
 
 # in_agent <thread-id> <verb> [args...]: the helper run as a command that the
@@ -1609,11 +1616,11 @@ for (const l of require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean
 test_cause_answers_null_rather_than_guess() {
   local bg
   fresh_case cause-null '{"causedBy":true}'
-  t3_coordinator "$(iso_in -60)" 1
+  t3_wake_start_unnamed
   in_agent coord cause --thread coord
-  expect_code 0 "$RC" "an ambiguous turn is an answer, not a failure: $ERR"
-  assert_equals "" "$(field "$OUT" causedBy)" "a turn that received a steer has no single cause"
-  assert_contains "$(field "$OUT" reason)" "received 2 prompts" "the reason names the ambiguity"
+  expect_code 0 "$RC" "a turn without a start is an answer, not a failure: $ERR"
+  assert_equals "" "$(field "$OUT" causedBy)" "a turn that names no starting message and shows no prompt has no cause"
+  assert_contains "$(field "$OUT" reason)" "shows no prompt" "the reason says so"
   t3_coordinator "$(iso_in 60)"
   in_agent coord cause --thread coord
   assert_equals "" "$(field "$OUT" causedBy)" "a process older than the turn has no cause from it"
@@ -1636,7 +1643,156 @@ test_cause_answers_null_rather_than_guess() {
     _ "$HELPER" "$CRED" "$bg"
   assert_equals "" "$(field "$(cat "$bg")" causedBy)" "a job older than the turn borrows nothing from it"
   assert_contains "$(field "$(cat "$bg")" reason)" "started before the thread's current turn" "the reason says so"
-  pass "fm-t3-mcp cause: null with a reason for a steered turn, a stale or foreign process, an unknown thread, and an idle one"
+  pass "fm-t3-mcp cause: null with a reason for a turn with no start, a stale or foreign process, an unknown thread, and an idle one"
+}
+
+test_cause_counts_to_the_turn_that_started_the_process() {
+  fresh_case cause-ended '{"causedBy":true}'
+  # A send made just after the turn that started it ended: the thread is idle.
+  t3_coordinator "$(iso_in -60)"
+  FM_DONE="$(iso_in 30)" t3_fake_set 'const r = w.threads.coord.runs.find((x) => x.runId === "run-c");
+r.status = "completed"; r.completedAt = process.env.FM_DONE; w.threads.coord.activeRunId = null; w.threads.coord.status = "completed";'
+  in_agent coord cause --thread coord
+  expect_code 0 "$RC" "cause should answer: $ERR"
+  assert_equals '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' "$(field "$OUT" causedBy)" \
+    "with no turn active, the turn whose span holds the process's start is its cause"
+  # A process an earlier turn started, calling once a later turn is active.
+  t3_coordinator "$(iso_in 60)"
+  FM_BEGIN="$(iso_in -120)" FM_DONE="$(iso_in 30)" t3_fake_set 'const r = w.threads.coord.runs.find((x) => x.runId === "run-old");
+r.startedAt = r.requestedAt = process.env.FM_BEGIN; r.completedAt = process.env.FM_DONE;'
+  in_agent coord cause --thread coord
+  assert_equals '{"threadId":"coord","runId":"run-old","messageId":"msg-old"}' "$(field "$OUT" causedBy)" \
+    "a process older than the current turn counts to the earlier turn that started it"
+  pass "fm-t3-mcp cause: a process counts to the recent turn whose span holds its start, active or not"
+}
+
+# t3_wake_start_unnamed: coord's active wake turn, from a T3 that names no
+# run's starting message and shows no prompt in it.
+t3_wake_start_unnamed() {
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)"
+  t3_fake_set 'for (const r of w.threads.coord.runs) delete r.userMessageId;'
+}
+
+test_cause_names_a_wake_and_the_latest_prompt_before_the_command() {
+  fresh_case cause-wake '{"causedBy":true}'
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)"
+  in_agent coord cause --thread coord
+  expect_code 0 "$RC" "a wake turn has a cause: $ERR"
+  assert_equals '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' "$(field "$OUT" causedBy)" \
+    "a wake turn names the notification that started it, so work it launches inherits the turn's claim"
+  t3_coordinator "$(iso_in -60)" 2 "$(iso_in -30)" "$(iso_in -20)"
+  in_agent coord cause --thread coord
+  assert_equals msg-steer-1 "$(field "$OUT" causedBy.messageId)" "of several prompts, the latest received before the command began"
+  t3_coordinator "$(iso_in -60)" 2 "$(iso_in -30)" "$(iso_in 30)"
+  in_agent coord cause --thread coord
+  assert_equals msg-steer-0 "$(field "$OUT" causedBy.messageId)" "a prompt that arrived after the command began never caused it"
+  t3_coordinator "$(iso_in -60)" 2
+  in_agent coord cause --thread coord
+  assert_equals msg-c "$(field "$OUT" causedBy.messageId)" "prompts without a time never displace the turn's start"
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)" 1 "$(iso_in -30)"
+  in_agent coord cause --thread coord
+  assert_equals msg-steer-0 "$(field "$OUT" causedBy.messageId)" "a prompt steered into a wake turn before the command is its cause"
+  pass "fm-t3-mcp cause: a wake turn names its notification, and several prompts name the latest before the command"
+}
+
+test_usage_claim_targets_values_and_refusals() {
+  local cause='{"threadId":"coord","runId":"run-old","messageId":"msg-old"}'
+  fresh_case usage-claim '{"causedBy":true,"usageClaims":true}'
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)"
+  in_agent coord usage-claim --turn coord --device computer
+  expect_code 0 "$RC" "a turn claim succeeds: $ERR"
+  assert_equals true "$(field "$OUT" claimed)" "the caller's own turn is claimed"
+  assert_equals run-c "$(field "$OUT" runId)" "the claim names the active run"
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.run:coord:run-c)" "T3 holds the device claim on that run"
+  in_agent coord usage-claim --turn coord --if-unclaimed --caused-by "$cause"
+  expect_code 0 "$RC" "a kept claim is not a failure: $ERR"
+  assert_equals false "$(field "$OUT" claimed)" "a turn that already has a claim is left as claimed"
+  assert_equals "already claimed" "$(field "$OUT" reason)" "the reason says so"
+  assert_equals computer "$(field "$OUT" device)" "the answer names the kept claim, not the one asked"
+  assert_equals true "$(t3_fake_calls t3_usage_claim | tail -n 1 | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).ifUnclaimed))')" "T3 is asked with ifUnclaimed"
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.run:coord:run-c)" "the first claim stands"
+  mcp usage-claim --thread coord --run run-old --if-unclaimed --device phone
+  assert_equals true "$(field "$OUT" claimed)" "an unclaimed target takes the claim: $ERR"
+  assert_equals '{"device":"phone"}' "$(t3_fake_field usageClaims.run:coord:run-old)" "and T3 holds it"
+  mcp usage-claim --thread coord --run run-old --if-unclaimed --caused-by null
+  expect_code 2 "$RC" "--if-unclaimed with a removal is invalid use"
+  in_agent coord usage-claim --turn coord --caused-by "$cause"
+  assert_equals "$cause" "$(field "$OUT" causedBy)" "claiming again replaces"
+  mcp usage-claim --turn coord --device phone
+  assert_equals false "$(field "$OUT" claimed)" "a process outside the turn claims nothing"
+  mcp usage-claim --thread coord --run run-old --device phone
+  assert_equals '{"device":"phone"}' "$(t3_fake_field usageClaims.run:coord:run-old)" "a named run is claimed"
+  mcp usage-claim --thread coord --run run-old --caused-by null
+  assert_equals "" "$(t3_fake_field usageClaims.run:coord:run-old)" "causedBy null removes a claim"
+  assert_equals true "$(field "$OUT" claimed)" "the removal is answered as claimed with no value"
+  mcp usage-claim --session sess-1 --caused-by "$cause"
+  assert_equals "$cause" "$(field "$(t3_fake_field usageClaims.session:sess-1)" causedBy)" "a session claim carries the cause"
+  mcp usage-claim --directory /nm/run-1 --device computer
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.directory:/nm/run-1)" "a folder claim carries the device"
+  mcp usage-claim --directory /nm/run-1 --caused-by '{"threadId":"coord","messageId":"msg-nope"}'
+  expect_code 3 "$RC" "a cause T3 refuses fails the claim"
+  assert_equals cause_refused "$(field "$OUT" error.code)" "the refusal is typed as the cause's"
+  mcp usage-claim --directory nm/run-1 --device computer
+  expect_code 2 "$RC" "a relative folder is invalid use"
+  mcp usage-claim --session s --device tablet
+  expect_code 2 "$RC" "an unknown device is invalid use"
+  mcp usage-claim --session s --run r --device phone
+  expect_code 2 "$RC" "two targets are invalid use"
+  t3_fake_set 'w.usageClaimAnswer = { sessionId: "s", causedBy: null, device: "phone" }'
+  mcp usage-claim --session s --device computer
+  expect_code 1 "$RC" "an answer naming another value is unproven"
+  assert_equals usage_claim_unproven "$(field "$OUT" error.code)" "and typed so"
+  t3_fake_set 'delete w.usageClaimAnswer'
+  mcp usage-claim --session s --from 2026-11-16T09:00:00Z --device computer
+  expect_code 0 "$RC" "a start on a T3 whose claim takes none still claims: $ERR"
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.session:s)" "a T3 whose claim takes no start gets the whole-session claim"
+  assert_equals true "$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).from === null))' "$OUT")" "and the answer says no start was kept"
+  mcp usage-claim --directory /nm/run-1 --from 2026-11-16T09:00:00Z --device computer
+  expect_code 2 "$RC" "a start goes only with a session"
+  mcp usage-claim --session s --from 2026-11-16 --device computer
+  expect_code 2 "$RC" "a start without a time and zone is invalid use"
+  t3_fake_set 'w.usageClaimFrom = true'
+  mcp usage-claim --session s --from 2026-11-16T10:00:00+01:00 --caused-by "$cause"
+  expect_code 0 "$RC" "a session claim from a start succeeds: $ERR"
+  assert_equals 2026-11-16T09:00:00.000Z "$(field "$OUT" from)" "the start is sent and answered in UTC"
+  assert_equals "$cause" "$(field "$(t3_fake_field usageClaims.session:s@1794819600000)" causedBy)" "T3 keeps the claim under its start"
+  mcp usage-claim --session s --from 2026-11-16T09:05:00Z --device computer
+  assert_equals '{"device":"computer"}' "$(t3_fake_field usageClaims.session:s@1794819900000)" "a later start is kept beside it"
+  assert_equals "$cause" "$(field "$(t3_fake_field usageClaims.session:s@1794819600000)" causedBy)" "leaving the earlier start's claim in place"
+  t3_fake_set 'w.usageClaimAnswer = { sessionId: "s", from: "2026-11-16T08:00:00.000Z", causedBy: null, device: "computer" }'
+  mcp usage-claim --session s --from 2026-11-16T09:05:00Z --device computer
+  expect_code 1 "$RC" "an answer naming another start is unproven"
+  fresh_case usage-claim-absent '{"causedBy":true}'
+  mcp usage-claim --session s --device computer
+  expect_code 4 "$RC" "a T3 without usage claims is a local refusal"
+  assert_equals usage_claim_unsupported "$(field "$OUT" error.code)" "and typed so"
+  fresh_case usage-claim-no-keep '{"causedBy":true,"usageClaims":true,"noIfUnclaimed":true}'
+  mcp usage-claim --session s --if-unclaimed --device computer
+  expect_code 4 "$RC" "a T3 that cannot keep a claim refuses --if-unclaimed locally"
+  assert_equals usage_claim_unsupported "$(field "$OUT" error.code)" "and typed so"
+  assert_equals "" "$(t3_fake_field usageClaims.session:s)" "with nothing claimed"
+  pass "fm-t3-mcp usage-claim: turn, run, session, and folder targets; device, cause, and removal values; --if-unclaimed keeps a claim; refusals typed"
+}
+
+test_restart_request_names_its_cause() {
+  local cause='{"threadId":"coord","runId":"run-old","messageId":"msg-old"}'
+  fresh_case restart-cause '{"causedBy":true,"restartRegistry":true,"restartCause":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp restart-request --reason "install build x" --caused-by "$cause"
+  expect_code 0 "$RC" "a restart with a cause T3 takes is requested: $ERR"
+  assert_equals "$cause" "$(field "$OUT" causedBy)" "the answer names the cause sent"
+  assert_equals "$cause" "$(t3_fake_field restartRequest.causedBy)" "T3 holds the restart's cause"
+  t3_fake_set 'w.restartRequest = null'
+  mcp restart-request --reason "install build y" --caused-by '{"threadId":"coord","messageId":"msg-nope"}'
+  expect_code 0 "$RC" "a refused cause never holds up the restart: $ERR"
+  assert_equals "" "$(field "$OUT" causedBy)" "the restart went without the refused cause"
+  assert_contains "$(field "$OUT" causeDropped)" "refused the cause" "and says why"
+  assert_equals "install build y" "$(t3_fake_field restartRequest.reason)" "the restart is pending"
+  fresh_case restart-cause-undeclared '{"causedBy":true,"restartRegistry":true}'
+  mcp restart-request --reason "install build z" --caused-by "$cause"
+  expect_code 0 "$RC" "a T3 whose restart takes no cause is asked without one: $ERR"
+  assert_equals "" "$(field "$(t3_fake_calls t3_restart_request | tail -1)" causedBy)" "an undeclared cause is never sent"
+  pass "fm-t3-mcp restart-request: the cause rides where declared, and a refused one is dropped rather than block the restart"
 }
 
 test_launch_and_send_carry_the_cause() {
@@ -1700,6 +1856,10 @@ test_launch_and_send_carry_the_cause() {
 t3_fake_start "$TMP_ROOT/server"
 test_cause_names_the_one_prompt_of_the_callers_turn
 test_cause_answers_null_rather_than_guess
+test_cause_counts_to_the_turn_that_started_the_process
+test_cause_names_a_wake_and_the_latest_prompt_before_the_command
+test_usage_claim_targets_values_and_refusals
+test_restart_request_names_its_cause
 test_launch_and_send_carry_the_cause
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults

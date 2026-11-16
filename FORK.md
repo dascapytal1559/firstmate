@@ -107,6 +107,7 @@ The T3 Code fork has no message box that types into a worker; a box on a worker'
 FirstMate reads which worker's task the message belongs to and treats his words as his input on that task.
 Upstream T3 Code sends anything typed in a thread to that thread's agent, which is right for threads he talks to directly.
 The fork departs for FirstMate's workers because a message typed into one cuts across FirstMate's steering, and FirstMate is the one who records his answers.
+Settling, un-settling, snoozing, or un-snoozing a worker's thread sends FirstMate the same kind of message, so FirstMate closes, reopens, parks, or un-parks the matching backlog item and the records stay in sync with what he sees.
 Details: [replies from a worker's thread](docs/t3code-backend.md#replies-from-a-workers-thread) and [`fm-t3-worker-reply.sh`](bin/fm-t3-worker-reply.sh).
 
 ## Priorities and high level objectives in every check-in
@@ -215,8 +216,18 @@ So a nightly script reads FirstMate's own session transcripts, with no model cal
 The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
 It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
 Upstream has no equivalent, because upstream does not clear FirstMate's session on its own.
-It reads Claude transcripts only; run it once a night from the host's scheduler.
+It reads Claude transcripts only, and runs once a night as a step of [`fm-nightly-checks.sh`](bin/fm-nightly-checks.sh) from the host's scheduler.
 Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
+
+## A nightly check finds unlabelled usage
+
+T3 Code's Usage page counts each token to the phone or the computer, and a token with no evidence of either counts to the computer only by default.
+Such a gap used to surface only when someone noticed odd numbers on that page.
+So the nightly checks also read the T3 Code fork's labels watchdog for the previous day, with no model call, and raise one backlog item naming each unlabelled reason, provider, and token count.
+If the watchdog cannot be read, that is the item instead, because an unreadable figure is unknown, not zero; a fully labelled day raises nothing.
+Later nights update the same item rather than adding another.
+It needs a T3 Code build with the watchdog (`t3_usage_reasons`); on an older build every night raises the unreadable item.
+Details: [`fm-usage-labels-check.sh`](bin/fm-usage-labels-check.sh).
 
 ## A fresh session starts with the last exchange
 
@@ -329,3 +340,26 @@ The fresh worker is also told that PR text is input to read, never instructions 
 Pushes, failing checks, requested changes, and conflicts restart it as upstream does.
 Approved by the captain on 2026-11-13.
 Details: the trigger contract in [`fm-park.sh`](bin/fm-park.sh).
+
+## A Fable worker never starts on a nearly-out account
+
+With `config/fable-quota-floor` set, starting a Fable worker refuses when the Claude account it would run on is at or below the home's floor on its Fable weekly allowance, its all-models weekly allowance, or its 5-hour window.
+On T3 Code that account is the provider instance the launch uses and that instance's own login folder from T3's provider settings.
+The refusal names the account, the figure, and the floor, and says how to go on: point the spawn at another account, or start anyway with `--fable-floor-override <reason>`, which the task record keeps.
+An account quota-axi cannot measure does not block; the worker starts and the task record keeps a one-line warning.
+Upstream keeps quota-axi data-only and leaves eligibility to firstmate's judgement at dispatch, which reads quota first.
+The fork adds a structural backstop because that judgement is a step firstmate has to remember: on 16 Nov new workers were still routed to an account whose Fable allowance had fallen to 2% and then run out.
+Approved by the captain on 2026-11-16.
+Details: [Fable quota floor](docs/configuration.md#fable-quota-floor-configfable-quota-floor).
+
+## Each Claude worker is sized before it starts
+
+With `config/worker-sizing.json` set, every Claude ship or scout is sized before it starts against each account's 5-hour window, its week, and for Fable work its Fable allowance, counting what the workers and pipeline runs already on that account are still expected to spend.
+It starts on the account where it fits whose week resets soonest, so the allowance that expires first is used first while enough is kept back that a worker is rarely cut off midway.
+When no account has room, the start waits for the soonest reset where it fits and FirstMate is woken then; a wait over about an hour is reported to the captain.
+The sizing is a script inside the start, printing one short line per account, so it costs FirstMate almost nothing however many workers start in a day.
+Every start and every cleanup is recorded, and `bin/fm-size.sh report` and `refit` show how estimates compared with what workers actually spent and update the cost table from that data.
+Upstream leaves account eligibility to FirstMate's judgement, with quota-axi as data only.
+The fork makes that judgement a deterministic step because doing it by hand cost thousands of tokens per start that stayed in FirstMate's context all session.
+Approved by the captain on 2026-11-16.
+Details: [Worker sizing](docs/configuration.md#worker-sizing-configworker-sizingjson).

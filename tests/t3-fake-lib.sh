@@ -110,6 +110,16 @@ t3_fake_credential() {
   chmod "$mode" "$file"
 }
 
+# t3_fake_field <dotted.path>: the current world's value there, an object as
+# JSON and a string as itself; nothing when absent. Keys split on dots only.
+t3_fake_field() {
+  node -e '
+const w = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const v = process.argv[2].split(".").reduce((o, k) => (o == null ? o : o[k]), w);
+if (v != null) process.stdout.write(typeof v === "object" ? JSON.stringify(v) : String(v));
+' "$T3_FAKE_WORLD" "$1"
+}
+
 # t3_fake_calls <tool>: the logged arguments of every call to <tool>, one JSON
 # object per line.
 t3_fake_calls() {

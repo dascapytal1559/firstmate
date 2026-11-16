@@ -42,6 +42,10 @@
 #            needing judgment, and anything destructive, irreversible, or
 #            security-sensitive, keeps the ordinary wake-firstmate-and-decide
 #            flow; this primitive only automates the deterministic subset.
+#            The spec also records the T3 prompt behind the arming turn as
+#            caused_by= (bin/fm-t3-cause-lib.sh resolves it; none available
+#            means no line), so the wake that reports the fired result counts
+#            to that prompt's device (bin/fm-wake-drain.sh claim_wake_usage).
 #            The registered runner starts on the watcher's next cycle via
 #            `fm-procevent.sh reconcile`; arm never blocks on the condition.
 # classify   Print the captured outcome class a handler should act on:
@@ -107,12 +111,14 @@ FM_ROOT_REAL=$(cd "$FM_ROOT" 2>/dev/null && pwd -P) || FM_ROOT_REAL=$FM_ROOT
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-t3-cause-lib.sh
+. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
 
 WHEN_DIR="$STATE/when"
 OUTPUT_TAIL_BYTES=${FM_WHEN_OUTPUT_TAIL_BYTES:-8192}
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,84p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 spec_file()  { printf '%s/%s.spec\n' "$WHEN_DIR" "$1"; }
 trust_file() { printf '%s/%s.trust\n' "$WHEN_DIR" "$1"; }
@@ -158,7 +164,7 @@ action_executable() {  # <argv-zero>: print the executable's absolute path
 
 cmd_arm() {
   local name=${1-} sid interval=60 stable=2 deadline=604800
-  local condition_timeout=60 action_timeout=1800 error_budget=3 wake_on=
+  local condition_timeout=60 action_timeout=1800 error_budget=3 wake_on='' caused_by=''
   local -a cond=() act=()
   [ -n "$name" ] || usage
   shift
@@ -192,6 +198,9 @@ cmd_arm() {
   done
 
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || die "state directory is unavailable"
+  # The T3 prompt behind this arming turn, recorded before the spec is
+  # hash-bound; a malformed FM_T3CODE_CAUSED_BY is refused before anything is written.
+  caused_by=$(fm_t3_cause_resolve "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token") || exit 1
   fm_procevent_source_lock_acquire "$sid" || die "cannot lock the watch source"
   trap 'fm_procevent_source_lock_release "$sid"' EXIT
   local leftover
@@ -223,6 +232,7 @@ cmd_arm() {
     printf 'action_timeout=%s\n' "$action_timeout"
     printf 'error_budget=%s\n' "$error_budget"
     [ -z "$wake_on" ] || printf 'wake_on=%s\n' "$wake_on"
+    [ -z "$caused_by" ] || printf 'caused_by=%s\n' "$caused_by"
     printf 'action_sha256=%s\n' "$action_hash"
     printf 'condition_argc=%s\n' "${#cond[@]}"
     printf 'action_argc=%s\n' "${#act[@]}"
@@ -282,7 +292,7 @@ spec_load() {
 
   SPEC_ARMED='' SPEC_INTERVAL='' SPEC_STABLE='' SPEC_DEADLINE=''
   SPEC_CONDITION_TIMEOUT='' SPEC_ACTION_TIMEOUT='' SPEC_ERROR_BUDGET=''
-  SPEC_ACTION_SHA256='' SPEC_WAKE_ON=''
+  SPEC_ACTION_SHA256='' SPEC_WAKE_ON='' SPEC_CAUSED_BY=''
   local cond_argc='' act_argc='' in_argv=0 read_cond=0 read_act=0
   {
     IFS= read -r version || { SPEC_ERROR="spec is empty"; return 1; }
@@ -301,7 +311,8 @@ spec_load() {
           action_timeout)    SPEC_ACTION_TIMEOUT=$value ;;
           error_budget)      SPEC_ERROR_BUDGET=$value ;;
           wake_on)           SPEC_WAKE_ON=$value ;;
-          action_sha256)     SPEC_ACTION_SHA256=$value ;;
+          caused_by)         SPEC_CAUSED_BY=$value ;;
+          action_sha256)    SPEC_ACTION_SHA256=$value ;;
           condition_argc)    cond_argc=$value ;;
           action_argc)       act_argc=$value ;;
           *) SPEC_ERROR="spec carries an unknown field: $key"; return 1 ;;
@@ -558,6 +569,7 @@ publish_spec() {
     printf 'action_timeout=%s\n' "$SPEC_ACTION_TIMEOUT"
     printf 'error_budget=%s\n' "$SPEC_ERROR_BUDGET"
     [ -z "$SPEC_WAKE_ON" ] || printf 'wake_on=%s\n' "$SPEC_WAKE_ON"
+    [ -z "$SPEC_CAUSED_BY" ] || printf 'caused_by=%s\n' "$SPEC_CAUSED_BY"
     printf 'action_sha256=%s\n' "$action_hash"
     printf 'condition_argc=%s\n' "${#COND_ARGV[@]}"
     printf 'action_argc=%s\n' "${#ACT_ARGV[@]}"

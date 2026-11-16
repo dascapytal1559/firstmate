@@ -1612,7 +1612,7 @@ test_turn_start_carries_its_cause_and_never_drops_the_message() {
   pass "t3code turn_start: a handed cause rides the send, and a refused one is reported while the message goes out without it"
 }
 
-# A spawn from inside a T3 turn records that turn's prompt and names it on the
+# A spawn from inside a T3 turn records that turn's prompt, names it on the
 # worker's launch and its brief; a malformed explicit cause refuses first.
 test_spawn_records_and_sends_its_turns_cause() {
   local id out rc meta
@@ -1627,6 +1627,18 @@ test_spawn_records_and_sends_its_turns_cause() {
   [ "$(t3_launch_field 'JSON.stringify(a.causedBy)')" = "$T3_CAUSE" ] || fail "the worker's launch names its cause, got '$(t3_launch_field 'JSON.stringify(a.causedBy)')'"
   [ "$(t3_request "$(t3_log_line_of 'r.tool === "t3_thread_send"')" 'JSON.stringify(r.arguments.causedBy)')" = "$T3_CAUSE" ] \
     || fail "the brief names the same cause"
+  # A backlog item queued with a cause keeps it when launched from no turn,
+  # such as a recovery wake's background job; the spawn then drops the record.
+  id=$(t3_uid t3cause-queued)
+  t3_case spawn-cause-queued
+  t3_worker_setup "$id"
+  t3_cause_world
+  printf '%s\n' "$T3_CAUSE" > "$CASE_DIR/state/$id.queued-cause"
+  out=$(t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a spawn of a queued item should succeed"$'\n'"$out"
+  assert_grep "caused_by=$T3_CAUSE" "$CASE_DIR/state/$id.meta" "the task record keeps the prompt that queued it"
+  [ "$(t3_launch_field 'JSON.stringify(a.causedBy)')" = "$T3_CAUSE" ] || fail "the queued item's launch names the prompt that queued it"
+  assert_absent "$CASE_DIR/state/$id.queued-cause" "the spawn drops the queued item's record once the task record holds it"
   id=$(t3_uid t3cause-bad)
   t3_case spawn-cause-bad
   t3_worker_setup "$id"
@@ -1635,7 +1647,7 @@ test_spawn_records_and_sends_its_turns_cause() {
   assert_contains "$out" "FM_T3CODE_CAUSED_BY must be off or a JSON object" "the refusal names the variable"
   [ -z "$(t3_dispatch_types)" ] || fail "a refused cause launches nothing, got '$(t3_dispatch_types)'"
   assert_absent "$CASE_DIR/state/$id.meta" "a refused cause writes no task record"
-  pass "fm-spawn.sh --backend t3code: the turn's prompt is recorded and named on the launch and brief, and a malformed cause refuses first"
+  pass "fm-spawn.sh --backend t3code: the turn's prompt is recorded, named on the launch and brief, and a malformed cause refuses first"
 }
 
 # A steer from inside a T3 turn keeps that turn's prompt in its inbox record,

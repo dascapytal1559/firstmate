@@ -17,6 +17,11 @@
 #     then poll T3 every --interval seconds (default 5) until it reports
 #     drained. A request already pending with exactly this reason is adopted
 #     rather than requested again, so a rerun continues the same wait.
+#     The request names its cause, which T3 stamps on its restart note so the
+#     note's turn counts to that prompt's device: FM_T3CODE_CAUSED_BY when
+#     set (bin/fm-t3-cause-lib.sh; off for none), else the latest landed
+#     task's cause (fm_t3_cause_landed), since a restart installs landed
+#     work. A cause T3 refuses is dropped, never holding up the restart.
 #     Exit:
 #       0  drained: restart T3 now; the request stays pending, holding
 #          messages, until the new server starts, so a caller that then
@@ -51,7 +56,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 usage() {
-  sed -n '13,43p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+  sed -n '13,48p' "$SELF" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -81,6 +86,18 @@ REASON=$(node -e 'process.stdout.write(process.argv[1].trim())' "$REASON") || us
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 fm_backend_source t3code >/dev/null 2>&1 || { say "error: the t3code adapter did not load"; exit 2; }
+# shellcheck source=bin/fm-t3-cause-lib.sh
+. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+
+# The cause a new request names (header).
+CAUSE=
+if [ "$VERB" = drain ]; then
+  if [ -n "${FM_T3CODE_CAUSED_BY:-}" ]; then
+    CAUSE=$(fm_t3_cause_resolve /dev/null) || { say "error: FM_T3CODE_CAUSED_BY must be off or a cause JSON"; exit 2; }
+  else
+    CAUSE=$(fm_t3_cause_landed "${FM_STATE_OVERRIDE:-${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}/state}")
+  fi
+fi
 
 # registry <verb> [args...]: one restart-registry call. On success sets
 # PENDING (true|false), OURS (true when the pending reason is exactly
@@ -178,7 +195,7 @@ else
   # Ours from the moment it is sent: a stop or failure while T3 answers must
   # still cancel it, and cancel_ours touches only a request with this reason.
   MINE=1
-  registry restart-request --reason "$REASON" || give_up 2 "error: could not request the restart: $FAILURE"
+  registry restart-request --reason "$REASON" ${CAUSE:+--caused-by "$CAUSE"} || give_up 2 "error: could not request the restart: $FAILURE"
   say "requested the restart (\"$REASON\"); T3 now holds new messages"
 fi
 SERVER=$STARTED

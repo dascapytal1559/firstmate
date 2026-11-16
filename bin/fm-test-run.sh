@@ -396,7 +396,7 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|fm-t3-crew-status.test.sh|fm-t3-bridge.test.sh|fm-t3-worker-reply.test.sh|fm-t3-restart-request.test.sh|fm-tmux-agent-liveness.test.sh|\
+    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|fm-t3-crew-status.test.sh|fm-t3-bridge.test.sh|fm-t3-worker-reply.test.sh|fm-t3-restart-request.test.sh|fm-t3-usage-claim.test.sh|fm-tmux-agent-liveness.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
@@ -853,6 +853,7 @@ tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
 tests/fm-muse-harness.test.sh 46548
 tests/fm-muse-signals-live-e2e.test.sh 52
+tests/fm-nm-agent-env.test.sh 611
 tests/fm-nm-test-contract.test.sh 853
 tests/fm-no-mistakes-required.test.sh 270
 tests/fm-omp-harness.test.sh 63796
@@ -946,6 +947,7 @@ tests/fm-supervision-host.test.sh 435581
 tests/fm-t3-bridge.test.sh 20000
 tests/fm-t3-crew-status.test.sh 75000
 tests/fm-t3-restart-request.test.sh 50000
+tests/fm-t3-usage-claim.test.sh 14000
 tests/fm-t3-worker-reply.test.sh 2000
 tests/fm-tangle-guard.test.sh 8501
 tests/fm-task-delivery.test.sh 32789
