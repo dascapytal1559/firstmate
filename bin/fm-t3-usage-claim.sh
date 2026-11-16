@@ -8,8 +8,10 @@
 # a T3 without t3_usage_claim, no T3 turn, no recorded cause) is skipped
 # silently, and a call that fails is logged once, as one line in
 # state/t3-usage-claims.log, and never retried by this run. Every verb exits
-# 0 except invalid use (2), so no wake, launch, restart, or pipeline ever
-# waits on its accounting.
+# 0 except invalid use (2), so no wake or turn ever waits on its accounting.
+# Sessions T3 does not run - pipeline reviews, the supervision engine, a
+# worker's own probes - are not claimed: they register themselves when they
+# start (docs/t3code-backend.md "Usage claims").
 #
 # Usage:
 #   fm-t3-usage-claim.sh turn (--device phone|computer | --task <id> | --caused-by <cause-json>)
@@ -31,26 +33,6 @@
 #     no drain described, such as a background command finishing. T3 counts
 #     a claimed turn only when its own prompt does not trace, so claiming a
 #     prompted turn changes nothing.
-#   fm-t3-usage-claim.sh pipeline --task <id> [--worktree <dir>]
-#     A worker's claim on the no-mistakes run of its branch in <dir> (default
-#     the current directory): the run's own working folder counts to <id>'s
-#     recorded cause. The run is the one `no-mistakes axi status` reports for
-#     that branch, and its folder comes from no-mistakes' state database,
-#     read only.
-#   fm-t3-usage-claim.sh folder <abs-dir> --task <id>
-#     Work run in <abs-dir> with no T3 thread owning that folder, such as the
-#     critics, probes, and scratch sessions a worker runs in its task's data
-#     folder, counts to <id>'s recorded cause; with none recorded, nothing.
-#     bin/fm-spawn.sh claims each task's data folder this way at launch.
-#   fm-t3-usage-claim.sh session <session-id> [--from <iso-time>] [--task <id>]...
-#     A Claude session run outside T3 (the supervision host's engine) counts
-#     to the first named task's cause, else, with no task named, to the
-#     computer; with tasks named but none caused, nothing. With --from (a
-#     zoned ISO time, such as a turn's start) the claim covers the session
-#     from then until a later claim's start, so a session resumed for
-#     another task's turn splits between them; without it, or on a T3 whose
-#     claim takes no start, it covers the whole session and replaces the
-#     session's earlier claim.
 #
 # Records, both trimmed as they grow:
 #   state/.t3-usage-claimed-runs  "<thread> TAB <run>" of every turn this home
@@ -79,8 +61,6 @@ export FM_HOME
 . "$SCRIPT_DIR/fm-t3-cause-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
-# shellcheck source=bin/fm-nm-run-lib.sh
-. "$SCRIPT_DIR/fm-nm-run-lib.sh"
 
 usage() {
   sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//' >&2
@@ -256,110 +236,12 @@ verb_wake() {
   ( exec "$SCRIPT_DIR/fm-t3-usage-claim.sh" _sweep "$T3CODE_THREAD_ID" </dev/null >/dev/null 2>&1 & )
 }
 
-# The current branch's no-mistakes run folder in <dir>, or nothing.
-pipeline_dir() {
-  local dir=$1 status id branch here db wt
-  here=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null) || return 0
-  status=$(fm_nm_run_bounded "$dir" "$TIMEOUT" axi status 2>/dev/null) || return 0
-  # Only a run of this branch: axi status also reports another branch's run
-  # when this one has none.
-  case "$status" in *other_branch_run:*) return 0 ;; esac
-  id=$(fm_nm_strip_quotes "$(fm_nm_field "$status" id)")
-  branch=$(fm_nm_strip_quotes "$(fm_nm_field "$status" branch)")
-  [ -n "$id" ] && [ "$branch" = "$here" ] || return 0
-  case "$id" in *[!A-Za-z0-9_-]*) return 0 ;; esac
-  db=$(fm_nm_state_db "$dir")
-  wt=''
-  if [ -f "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
-    wt=$(sqlite3 "file:$db?mode=ro" "select worktree_dir from runs where id = '$id'" 2>/dev/null | head -n 1)
-  fi
-  if [ -z "$wt" ]; then
-    for wt in "${db%/state.sqlite}"/worktrees/*/"$id"; do
-      [ -d "$wt" ] && break
-      wt=''
-    done
-  fi
-  case "$wt" in /*) printf '%s' "$wt" ;; esac
-}
-
-verb_pipeline() {
-  local task='' dir=$PWD cause wt
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --task) [ "$#" -ge 2 ] || usage; task=$2; shift 2 ;;
-      --worktree) [ "$#" -ge 2 ] || usage; dir=$2; shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  [ -n "$task" ] || usage
-  t3_ready || return 0
-  cause=$(fm_t3_cause_of_task "$STATE" "$task")
-  if [ -z "$cause" ]; then
-    echo "fm-t3-usage-claim: task $task has no recorded cause; nothing claimed" >&2
-    return 0
-  fi
-  wt=$(pipeline_dir "$dir")
-  if [ -z "$wt" ]; then
-    echo "fm-t3-usage-claim: no no-mistakes run of this branch was found; nothing claimed" >&2
-    return 0
-  fi
-  if claim "pipeline $task" --directory "$wt" --caused-by "$cause" >/dev/null; then
-    echo "fm-t3-usage-claim: claimed $wt for $task"
-  fi
-  return 0
-}
-
-verb_folder() {
-  local dir=${1:-} task='' cause
-  case "$dir" in /*) ;; *) usage ;; esac
-  shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --task) [ "$#" -ge 2 ] || usage; task=$2; shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  [ -n "$task" ] || usage
-  t3_ready || return 0
-  cause=$(fm_t3_cause_of_task "$STATE" "$task")
-  [ -n "$cause" ] || return 0
-  claim "folder $task" --directory "$dir" --caused-by "$cause" >/dev/null || true
-  return 0
-}
-
-verb_session() {
-  local session=${1:-} value rc=0 line
-  local -a candidates=() vargs=() from=()
-  [ -n "$session" ] || usage
-  shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --task) [ "$#" -ge 2 ] || usage; candidates+=("task:$2"); shift 2 ;;
-      --from) [ "$#" -ge 2 ] && [ -n "$2" ] || usage; from=(--from "$2"); shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  t3_ready || return 0
-  value=$(first_cause "${candidates[@]+"${candidates[@]}"}") || rc=$?
-  case "$rc" in
-    0) ;;
-    1) value=computer ;;
-    *) return 0 ;;
-  esac
-  while IFS= read -r line; do vargs+=("$line"); done < <(value_args "$value")
-  claim "session $session" --session "$session" "${from[@]+"${from[@]}"}" "${vargs[@]}" >/dev/null || true
-  return 0
-}
-
 [ "$#" -ge 1 ] || usage
 VERB=$1
 shift
 case "$VERB" in
   turn) verb_turn "$@" ;;
   wake) verb_wake "$@" ;;
-  pipeline) verb_pipeline "$@" ;;
-  folder) verb_folder "$@" ;;
-  session) verb_session "$@" ;;
   # wake's detached sweep (header); not a public verb.
   _sweep) [ "$#" -eq 1 ] || usage; t3_ready && sweep "$1" ;;
   -h|--help) usage ;;

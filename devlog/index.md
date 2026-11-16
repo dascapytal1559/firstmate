@@ -1793,3 +1793,29 @@ What was built:
 
 The evidence is a new suite against the fake T3 server and a scratch backlog: a labelled day, a gap summed by reason and provider, later nights on an open, held, and closed item, each way the figure can be unreadable, a dry run, and the nightly runner going on past a failed clear check.
 A dry run against the live home read the installed T3 build, which does not yet have the watchdog, and would have raised the unreadable item.
+
+## 66. Reviews and the supervision engine register themselves at birth (16 November 2026)
+
+The usage-attribution review proposed that every agent session be born with its label instead of being labelled afterwards.
+The captain's ask behind it:
+
+> if going forward we would have a hundred percent coverage on the device attribution.
+>
+> (16 November 2026)
+
+T3 now keeps a session register: a small hook in each tool's settings writes one line when a session starts, naming the FirstMate task its environment carries.
+This step moves FirstMate's last outside-T3 sessions onto it and removes three manual labelling steps.
+
+What zero-token probes showed (each session pointed at a dead API address, writing to a scratch register):
+
+- **Reviews carried no task.** The review daemon runs under the system's service manager with a bare environment, so a review session registered as if someone had started it in a terminal.
+- **The engine fired no hooks at all.** It runs Claude in safe mode, which turns every hook off, including one passed on the command line.
+- **Codex skips a new hook silently until it is trusted.** It never prompts, so a worker never stalls; the hook simply does not run until a trust line is added.
+
+What was built:
+
+- **A review launcher wrapper.** `bin/fm-nm-agent-env.sh` sits in front of the review agent. In a pipeline run's folder it reads the run's branch and project from the review daemon's records, finds the one task recorded for them, and starts the agent under that task.
+- **The host registers the engine.** Before each engine turn the supervision host runs the register hook itself, under the woken task, or under nothing for upkeep, which counts to the computer.
+- **Removed:** the pipeline claim instruction in every no-mistakes brief, the engine's claim call, and the spawn's data-folder claim, with the claim script's three verbs they used.
+
+The evidence is two zero-token review sessions from the same fixture run folder, one started directly (registered with no task) and one through the wrapper (registered under its task), and the new suites for the wrapper and the host's registration.

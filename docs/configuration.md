@@ -428,6 +428,14 @@ The host reads its presence at each hand-back, so enabling it needs no session r
 Removing it stops further retries and leaves the current watcher for the ordinary next park.
 [Supervision host](supervision-host.md#acknowledged-hand-back) owns the acknowledgement, retry transport, and limits.
 
+### Session register (config/session-register)
+
+The optional, home-local `config/session-register` names the T3 fork's session-register hook for the host's engine, whose own hooks are off ([usage](t3code-backend.md#usage-claims)).
+Line 1 is the hook's absolute path and line 2 the register folder's absolute path, the same two values that hook's Claude install passes.
+Before each engine turn the host runs that hook as Claude's with the engine's session id, under the woken task.
+Absent, unreadable, or naming a hook that cannot run, it registers nothing and the turn runs as before.
+The file is read at every turn and is not inherited into secondmate homes.
+
 ## Codex native Stop park (config/codex-stop-park)
 
 Create the empty, home-local `config/codex-stop-park` file to let a Codex primary wait for watcher wakes outside the model between turns.

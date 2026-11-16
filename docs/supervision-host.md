@@ -401,6 +401,7 @@ Today the only verified engine is Claude's print mode, measured on Claude Code 2
 
 - `--safe-mode` loads none of the home's hooks, `CLAUDE.md`, skills, plugins, or MCP servers.
   So the engine can never fire the home's own Stop or SessionStart hooks.
+  It cannot fire T3's session-register hook either, and a hook passed with `--settings` stays off too (checked on Claude Code 2.1.325), so the host runs that hook itself before each turn ([session register](configuration.md#session-register-configsession-register)).
   A home's own rules reach the engine only through the optional `config/branch-prompt-include.md` ([configuration](configuration.md#home-branch-prompt-include-configbranch-prompt-includemd)).
 - `--bare` is unusable because it never reads claude.ai OAuth.
 - From inside the engine's shell the primary is not in the harness ancestry, so the engine can never act as the session-lock owner.

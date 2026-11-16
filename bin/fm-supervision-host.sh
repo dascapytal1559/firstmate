@@ -1016,22 +1016,29 @@ health_record() {  # <engine-error 0|1> <reports>
   health_save
 }
 
-# claim_engine_usage <tasks>: the engine's session runs outside T3, so T3's
-# Usage counts it to the woken task's cause (the first of <tasks>, space
-# separated) or, for a wake about no task, the computer, through
-# bin/fm-t3-usage-claim.sh session. The claim starts at this turn's start and
-# runs just before the engine does, so a resumed conversation splits across
-# its turns' tasks, and a host that dies mid-turn still leaves the turn
-# claimed. A new conversation's session id is minted before its first turn
-# (choose_conversation), so that turn is covered the same way. Detached and
-# best effort: the claim never holds up or fails the turn.
-claim_engine_usage() {  # <tasks>
-  local task
-  local -a args
+# register_engine_session <tasks>: the engine runs in --safe-mode, which turns
+# off every hook, so the session-register hook T3 Code installs never fires for
+# it. The host runs that hook itself, just before each turn, as the engine's
+# session start: the hook named by config/session-register
+# (docs/configuration.md "Session register") registers this session id under
+# the woken task (the first of <tasks>, space separated) or, for a wake about
+# no task, under nothing, which T3 counts to the computer. Each turn registers
+# again, so a resumed conversation splits across its turns' tasks, and a new
+# conversation's id is minted before its first turn (choose_conversation).
+# Bounded and best effort: the hook never holds up or fails the turn.
+register_engine_session() {  # <tasks>
+  local hook='' folder='' task=${1%% *}
+  local -a origin=()
   [ "$FM_SUPERVISION_ENGINE" = claude ] && [ -n "$ENGINE_SESSION" ] || return 0
-  args=(session "$ENGINE_SESSION" --from "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
-  for task in $1; do args+=(--task "$task"); done
-  ( "$SCRIPT_DIR/fm-t3-usage-claim.sh" "${args[@]}" </dev/null >/dev/null 2>&1 & )
+  [ -f "$CONFIG/session-register" ] || return 0
+  { IFS= read -r hook; IFS= read -r folder; } < "$CONFIG/session-register" || true
+  case "$hook" in /*) ;; *) return 0 ;; esac
+  case "$folder" in /*) ;; *) return 0 ;; esac
+  [ -x "$hook" ] || return 0
+  [ -z "$task" ] || origin=("FM_TASK_ID=$task" "FM_HOME=$FM_HOME")
+  printf '{"session_id":"%s"}\n' "$ENGINE_SESSION" \
+    | (cd "$FM_ROOT" && fm_exec_timed 5 1 env -u T3CODE_THREAD_ID -u FM_TASK_ID -u FM_HOME \
+        "${origin[@]+"${origin[@]}"}" "$hook" claude "$folder") >/dev/null 2>&1 || true
 }
 
 # The tasks one turn recorded captain outcomes for, space separated.
@@ -1155,7 +1162,7 @@ handle_wake() {  # <reason-lines>
     "$SCRIPT_DIR/fm-wake-grant.sh" release "$GEN" >/dev/null 2>&1 || true
     boundary_exit
   fi
-  claim_engine_usage "$tasks"
+  register_engine_session "$tasks"
   result=$(mktemp "$STATE/.supervision-host-result.XXXXXX") || result=/dev/null
   errors=$(mktemp "$STATE/.supervision-host-errors.XXXXXX") || errors=/dev/null
   TURN_RESULT=$result

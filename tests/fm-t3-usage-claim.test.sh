@@ -182,82 +182,6 @@ test_claims_are_best_effort_and_logged_once() {
   pass "fm-t3-usage-claim: failures are logged once and never fail the caller; no credential or turn claims nothing"
 }
 
-test_session_claims_the_engine_conversation() {
-  fresh_case session
-  meta_with_cause tk "$CAUSE_T"
-  "$CLAIM" session sess-1 --task tk
-  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims session:sess-1)" "an engine session counts to the woken task's cause"
-  "$CLAIM" session sess-2
-  assert_equals '{"device":"computer"}' "$(claims session:sess-2)" "an engine session about no task counts to the computer"
-  meta_with_cause old ''
-  "$CLAIM" session sess-3 --task old
-  assert_equals "" "$(claims session:sess-3)" "an engine session about an uncaused task is left alone"
-  pass "fm-t3-usage-claim session: the engine's conversation counts to its task's cause, or the computer for no task"
-}
-
-test_session_claims_split_a_resumed_conversation_by_turn() {
-  fresh_case session-from '{"causedBy":true,"usageClaims":true,"usageClaimFrom":true}'
-  meta_with_cause tk "$CAUSE_T"
-  "$CLAIM" session sess-1 --from 2026-11-16T09:00:00Z --task tk
-  "$CLAIM" session sess-1 --from 2026-11-16T09:05:00Z
-  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims session:sess-1@1794819600000)" "the first turn's claim stands from its start"
-  assert_equals '{"device":"computer"}' "$(claims session:sess-1@1794819900000)" "the next turn's claim is kept beside it from its own start"
-  assert_equals "" "$(claims session:sess-1)" "no whole-session claim is made"
-  fresh_case session-from-absent
-  "$CLAIM" session sess-1 --from 2026-11-16T09:00:00Z
-  assert_equals '{"device":"computer"}' "$(claims session:sess-1)" "a T3 whose claim takes no start gets the whole-session claim"
-  "$CLAIM" session sess-1 --from not-a-time
-  assert_equals 0 "$?" "a start T3 cannot read never fails the caller"
-  assert_contains "$(cat "$STATE_DIR/t3-usage-claims.log" 2>/dev/null)" "session sess-1" "and is logged once"
-  pass "fm-t3-usage-claim session --from: a resumed conversation splits by turn start, and an older T3 keeps the whole-session claim"
-}
-
-# make_nm <dir> <run-id> <branch> [db]: a git worktree on <branch>, a stub
-# no-mistakes reporting run <run-id> on it, and an NM_HOME whose run folder is
-# found through the state database ("db") or the folder layout.
-make_nm() {
-  local dir=$1 id=$2 branch=$3
-  mkdir -p "$dir/wt" "$dir/bin" "$dir/nm/worktrees/repohash/$id"
-  git -C "$dir/wt" init -q -b "$branch"
-  git -C "$dir/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
-  cat > "$dir/bin/no-mistakes" <<SH
-#!/usr/bin/env bash
-[ "\$1 \$2" = "axi status" ] || exit 1
-printf 'current_branch: %s\n' "\$(git rev-parse --abbrev-ref HEAD)"
-printf '%s\n  id: "%s"\n  branch: %s\n  status: running\n' "\${NM_STUB_KEY:-run:}" "$id" "\${NM_STUB_BRANCH:-$branch}"
-SH
-  chmod +x "$dir/bin/no-mistakes"
-  if [ "${4:-}" = db ]; then
-    sqlite3 "$dir/nm/state.sqlite" "create table runs (id text primary key, worktree_dir text); insert into runs values ('$id', '/db/says/$id');"
-  fi
-}
-
-test_pipeline_claims_the_branch_run_folder() {
-  local dir="$TMP_ROOT/nm" before
-  fresh_case pipeline
-  meta_with_cause tk "$CAUSE_T"
-  make_nm "$dir" 01RUNA fm/tk
-  OUT=$(PATH="$dir/bin:$PATH" NM_HOME="$dir/nm" "$CLAIM" pipeline --task tk --worktree "$dir/wt" 2>&1)
-  assert_contains "$OUT" "claimed $dir/nm/worktrees/repohash/01RUNA for tk" "the run's folder is claimed: $OUT"
-  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims "directory:$dir/nm/worktrees/repohash/01RUNA")" "it counts to the task's cause"
-  if command -v sqlite3 >/dev/null 2>&1; then
-    rm -rf "$dir"
-    make_nm "$dir" 01RUNB fm/tk db
-    PATH="$dir/bin:$PATH" NM_HOME="$dir/nm" "$CLAIM" pipeline --task tk --worktree "$dir/wt" >/dev/null 2>&1
-    assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims directory:/db/says/01RUNB)" "no-mistakes' own record of the folder wins"
-  fi
-  rm -rf "$dir"
-  make_nm "$dir" 01RUNC fm/tk
-  before=$(t3_fake_calls t3_usage_claim | awk 'END { print NR }')
-  OUT=$(PATH="$dir/bin:$PATH" NM_HOME="$dir/nm" NM_STUB_KEY=other_branch_run: NM_STUB_BRANCH=fm/other "$CLAIM" pipeline --task tk --worktree "$dir/wt" 2>&1)
-  assert_contains "$OUT" "no no-mistakes run of this branch" "another branch's run is never claimed"
-  meta_with_cause none ''
-  OUT=$(PATH="$dir/bin:$PATH" NM_HOME="$dir/nm" "$CLAIM" pipeline --task none --worktree "$dir/wt" 2>&1)
-  assert_contains "$OUT" "has no recorded cause" "a task with no cause claims nothing"
-  assert_equals "$before" "$(t3_fake_calls t3_usage_claim | awk 'END { print NR }')" "neither of those reached T3"
-  pass "fm-t3-usage-claim pipeline: the branch's no-mistakes run folder counts to the task's cause, and nothing else is claimed"
-}
-
 test_drain_claims_the_wake_turn() {
   local out="$TMP_ROOT/drain.out"
   fresh_case drain
@@ -343,29 +267,12 @@ test_drain_claims_a_voice_journal_note_for_the_phone() {
   pass "fm-wake-drain: a voice journal's inbox note claims its wake turn for the phone"
 }
 
-test_folder_claims_a_tasks_data_folder() {
-  fresh_case folder
-  meta_with_cause tk "$CAUSE_T"
-  "$CLAIM" folder "$HOME_DIR/data/tk" --task tk
-  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims "directory:$HOME_DIR/data/tk")" "the folder counts to the task's cause"
-  meta_with_cause none ''
-  "$CLAIM" folder "$HOME_DIR/data/none" --task none
-  assert_equals "" "$(claims "directory:$HOME_DIR/data/none")" "a task with no cause claims nothing"
-  "$CLAIM" folder data/tk --task tk 2>/dev/null
-  expect_code 2 "$?" "a relative folder is invalid use"
-  pass "fm-t3-usage-claim folder: a task's folder counts to its cause, and nothing without one"
-}
-
 t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
   test_cause_records \
   test_wake_claims_the_first_caused_task_and_keeps_it \
   test_wake_about_nothing_is_upkeep_and_uncaused_tasks_count_to_the_computer \
-  test_folder_claims_a_tasks_data_folder \
   test_drain_claims_a_voice_journal_note_for_the_phone \
   test_claims_are_best_effort_and_logged_once \
-  test_session_claims_the_engine_conversation \
-  test_session_claims_split_a_resumed_conversation_by_turn \
-  test_pipeline_claims_the_branch_run_folder \
   test_drain_claims_the_wake_turn \
   test_drain_claims_a_followups_arming_cause

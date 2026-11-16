@@ -8496,9 +8496,6 @@ fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 # The task record now holds the cause, so the queued item's record is done.
 fm_t3_cause_queue_forget "$STATE" "$ID"
-# Sessions the worker runs in its data folder count to that cause
-# (bin/fm-t3-usage-claim.sh folder), detached so the spawn never waits on T3.
-[ -z "$SPAWN_CAUSE" ] || (FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG exec "$SCRIPT_DIR/fm-t3-usage-claim.sh" folder "$DATA/$ID" --task "$ID" </dev/null >/dev/null 2>&1 &)
 
 if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
   echo "error: the launch brief for $ID may already have been delivered to T3 thread $T: its outcome is unproven (a lost reply or a T3 error that can follow a commit). The task record is kept; inspect the thread in T3 Code, and if the brief is absent resend only the identical brief text, which reuses its request id within the hour" >&2
