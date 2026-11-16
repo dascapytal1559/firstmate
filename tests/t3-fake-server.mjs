@@ -111,7 +111,8 @@
 //     usageClaims (true or a map) keyed session:<id>, directory:<path>, or
 //     run:<thread>:<run> (world usageClaimFrom adds a session claim's from,
 //     keyed session:<id>@<from-epoch-ms>); world restartCause declares t3_restart_request's
-//     causedBy, checked like a launch's and stored on world restartRequest.
+//     causedBy, checked like a launch's and stored on world restartRequest;
+//     world usageReasons ({rows}) offers the fork's read-only t3_usage_reasons.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -166,7 +167,7 @@ const ALL_TOOLS = [
 ];
 const offeredTools = (w) => w.tools ?? ALL_TOOLS.concat(w.objectivesTool ? ["t3_objectives_set"] : [], w.routingTool ? ["t3_routing_set"] : [],
   w.restartStatus || w.restartRegistry ? ["t3_restart_status"] : [], w.restartRegistry ? ["t3_restart_request", "t3_restart_cancel"] : [],
-  w.usageClaims ? ["t3_usage_claim"] : []);
+  w.usageClaims ? ["t3_usage_claim"] : [], w.usageReasons ? ["t3_usage_reasons"] : []);
 const STARTED_AT = new Date().toISOString();
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
@@ -469,6 +470,20 @@ async function callTool(w, name, a) {
       else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : { causedBy: a.causedBy };
       const target = a.sessionId !== undefined ? { sessionId: a.sessionId, ...(from === undefined ? {} : { from: new Date(from).toISOString() }) } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
       return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null }), true];
+    }
+    case "t3_usage_reasons": {
+      // The fork's read-only watchdog over world usageReasons.rows: the day
+      // window ends untilDay (default today, UTC here) and the totals are
+      // summed as the fork's handler sums them; world usageReasonsAnswer
+      // answers another figure.
+      const days = a.days ?? 7;
+      const until = a.untilDay ?? new Date().toISOString().slice(0, 10);
+      const since = new Date(Date.parse(`${until}T00:00:00Z`) - (days - 1) * 86400000).toISOString().slice(0, 10);
+      const rows = w.usageReasons.rows ?? [];
+      return [ok(w.usageReasonsAnswer ?? {
+        sinceDay: since, untilDay: until, timeZone: a.timeZone ?? "Australia/Melbourne",
+        tokens: rows.reduce((n, r) => n + r.tokens, 0), byDefaultTokens: rows.reduce((n, r) => n + (r.byDefault ? r.tokens : 0), 0), rows,
+      }), false];
     }
     case "t3_restart_cancel":
       w.restartRequest = null;

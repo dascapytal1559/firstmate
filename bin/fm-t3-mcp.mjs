@@ -157,6 +157,17 @@
 //     them, which must be what was asked, else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
 //     T3 refuses, with nothing claimed; exit 4 (usage_claim_unsupported)
 //     where T3 has no t3_usage_claim.
+//   fm-t3-mcp.mjs usage-reasons [--days <n>] [--until-day <YYYY-MM-DD>] [--time-zone <iana>]
+//     The T3 Code fork's read-only t3_usage_reasons, the labels watchdog:
+//     Usage tokens over <n> days (T3's default 7, at most 366) ending
+//     <until-day> (T3's default today) in <time-zone> (T3's default its
+//     own), as {sinceDay, untilDay, timeZone, tokens, byDefaultTokens,
+//     rows}. Each row is one origin, reason, and provider with its tokens;
+//     byDefault rows have no device evidence and count to the computer only
+//     by default. A figure that does not read as one, or answers for another
+//     day than --until-day, exits 1 (usage_reasons_malformed), never an
+//     empty figure; exit 4 (usage_reasons_unsupported) where T3 has no
+//     t3_usage_reasons. Changes nothing.
 //   fm-t3-mcp.mjs recent-runs --thread <id> [--limit <n>]
 //     The thread's latest runs, newest first (default 10, at most 20): each
 //     {runId, status, userMessageId, startedAt, completedAt}. Changes
@@ -1755,6 +1766,49 @@ async function usageClaim(flags) {
   return { ok: true, claimed: true, ...target, causedBy, device };
 }
 
+// --- usage reasons ----------------------------------------------------------
+// The T3 Code fork's read-only t3_usage_reasons: Usage tokens by why each
+// record counts to the phone or the computer.
+const USAGE_REASONS_TOOL = "t3_usage_reasons";
+const USAGE_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+// A row the fork's UsageOriginReasonUsage would decode: the fields a reader
+// sums and flags on.
+function usageReasonRow(row) {
+  return row !== null && typeof row === "object"
+    && typeof row.reason === "string" && row.reason !== ""
+    && typeof row.provider === "string" && row.provider !== ""
+    && typeof row.byDefault === "boolean"
+    && Number.isInteger(row.tokens) && row.tokens >= 0;
+}
+
+async function usageReasons(flags) {
+  const args = {};
+  if (flags.days !== undefined) args.days = positiveInt(flags, "days", 7, 366);
+  if (flags["until-day"] !== undefined) {
+    if (!USAGE_DAY.test(flags["until-day"])) usage("--until-day must be a day, such as 2026-11-16");
+    args.untilDay = flags["until-day"];
+  }
+  if (flags["time-zone"] !== undefined) args.timeZone = need(flags, "time-zone");
+  const { session } = await verifiedSession(flags);
+  if (!session.toolSchemas.has(USAGE_REASONS_TOOL)) {
+    throw new Refusal("usage_reasons_unsupported", `this T3 cannot report usage reasons (${USAGE_REASONS_TOOL} absent)`, 4);
+  }
+  const out = await session.call(USAGE_REASONS_TOOL, args);
+  const shaped = out !== null && typeof out === "object"
+    && USAGE_DAY.test(out.sinceDay ?? "") && USAGE_DAY.test(out.untilDay ?? "") && typeof out.timeZone === "string"
+    && Number.isFinite(out.tokens) && Number.isFinite(out.byDefaultTokens)
+    && Array.isArray(out.rows) && out.rows.every(usageReasonRow);
+  if (!shaped) throw new Refusal("usage_reasons_malformed", `T3 answered ${USAGE_REASONS_TOOL} with a figure that does not read as one`, 1);
+  if (args.untilDay !== undefined && out.untilDay !== args.untilDay) {
+    throw new Refusal("usage_reasons_malformed", `T3 answered for ${out.untilDay}, not the ${args.untilDay} asked`, 1);
+  }
+  return {
+    ok: true, sinceDay: out.sinceDay, untilDay: out.untilDay, timeZone: out.timeZone,
+    tokens: out.tokens, byDefaultTokens: out.byDefaultTokens, rows: out.rows,
+  };
+}
+
 async function recentRuns(flags) {
   const threadId = need(flags, "thread");
   const { session } = await verifiedSession(flags);
@@ -2765,6 +2819,7 @@ const VERBS = {
   send,
   cause: causeVerb,
   "usage-claim": usageClaim,
+  "usage-reasons": usageReasons,
   "recent-runs": recentRuns,
   "cause-check": (flags) => ({ ok: true, causedBy: causeFlag({ "caused-by": need(flags, "json") }) }),
   read,

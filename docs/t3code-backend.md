@@ -152,6 +152,7 @@ Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's
 A turn this home already claimed keeps its first claim against later drains, while an explicit `turn` claim replaces it.
 T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.
 Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, restart, or pipeline.
+A nightly check raises a backlog item for any of the previous day's usage still without device evidence: [`bin/fm-usage-labels-check.sh`](../bin/fm-usage-labels-check.sh).
 Work that still counts as Unknown by design: a task launched with no cause and its pipelines, until that task ends; and work outside T3 that no claim covers, such as a CLI run with no working folder.
 
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.

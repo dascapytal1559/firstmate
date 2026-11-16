@@ -1774,3 +1774,22 @@ It placed the ten running workers on the accounts their transcripts are written 
 An Opus ship went to the first account, whose week resets soonest and still had room for it at 7% left; Fable work skipped it (its Fable allowance at 0%) and went to the second, whose week resets before the third's.
 
 The evidence is the new suite on made-up quota readings: a fit on the soonest-resetting account, a queued start and its wake, running and moments-old work held back, the Fable allowance, an unmeasured account, an explicit override, a malformed table, T3 instances and their folders, cleanup records, the report and refit, and through the real spawn script a start on the picked account, a deferred start with nothing launched, and an unchanged start with sizing off.
+
+## 65. A nightly check finds unlabelled usage (16 November 2026)
+
+The usage attribution review set out "born labelled": every token on T3's Usage page should carry a reason for counting to the phone or the computer, and a gap should be found by the system rather than by someone noticing odd numbers.
+T3's side landed first: a read-only watchdog that tallies a day's tokens by reason and flags the ones that count to the computer only because nothing says otherwise.
+This is FirstMate's side of the plan's first step:
+
+> FirstMate's nightly check reads the watchdog figure and flags anything unlabelled, so a labelling gap is found by the system the same night instead of by eye.
+
+What was built:
+
+- **One more nightly step.** The nightly checks now run as one script, the clear check and then the usage-label check, each on its own so one failing never stops the other.
+- **The check itself.** It reads the watchdog for the previous day, with no model call, and raises one backlog item naming each unlabelled reason, provider, and token count, such as "unregisteredSession, claude: 500 tokens".
+  A fully labelled day raises nothing.
+- **Unknown is not zero.** When the figure cannot be read (an older T3 build without the watchdog, T3 down, no credential, or an answer that does not read as a figure), the item says so and why instead.
+- **No pile-up.** Later nights retitle and update the same item, reopening it if it was closed, so a gap that lasts a week is one item, not seven.
+
+The evidence is a new suite against the fake T3 server and a scratch backlog: a labelled day, a gap summed by reason and provider, later nights on an open, held, and closed item, each way the figure can be unreadable, a dry run, and the nightly runner going on past a failed clear check.
+A dry run against the live home read the installed T3 build, which does not yet have the watchdog, and would have raised the unreadable item.

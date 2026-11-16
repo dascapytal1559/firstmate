@@ -8,7 +8,7 @@
 # bin/fm-clear-watch.py, whose header owns the whole contract: which
 # transcripts it reads, how each clear's cause, saving, and signs of harm are
 # judged, and what it writes into data/clear-watch/ and the morning briefing.
-# No model is called. Meant to run once a night from a scheduler.
+# No model is called. Runs once a night as a step of bin/fm-nightly-checks.sh.
 #
 # Requires python3.
 set -u

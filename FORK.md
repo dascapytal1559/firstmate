@@ -216,8 +216,18 @@ So a nightly script reads FirstMate's own session transcripts, with no model cal
 The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
 It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
 Upstream has no equivalent, because upstream does not clear FirstMate's session on its own.
-It reads Claude transcripts only; run it once a night from the host's scheduler.
+It reads Claude transcripts only, and runs once a night as a step of [`fm-nightly-checks.sh`](bin/fm-nightly-checks.sh) from the host's scheduler.
 Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
+
+## A nightly check finds unlabelled usage
+
+T3 Code's Usage page counts each token to the phone or the computer, and a token with no evidence of either counts to the computer only by default.
+Such a gap used to surface only when someone noticed odd numbers on that page.
+So the nightly checks also read the T3 Code fork's labels watchdog for the previous day, with no model call, and raise one backlog item naming each unlabelled reason, provider, and token count.
+If the watchdog cannot be read, that is the item instead, because an unreadable figure is unknown, not zero; a fully labelled day raises nothing.
+Later nights update the same item rather than adding another.
+It needs a T3 Code build with the watchdog (`t3_usage_reasons`); on an older build every night raises the unreadable item.
+Details: [`fm-usage-labels-check.sh`](bin/fm-usage-labels-check.sh).
 
 ## A fresh session starts with the last exchange
 
