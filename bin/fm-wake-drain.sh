@@ -891,7 +891,7 @@ claim_wake_usage() {
     task=
     cause=
     case "$kind" in
-      signal) task=${key%.status} ;;
+      signal) task=${key%.status}; task=${task%.turn-ended} ;;
       stale) task=$(window_to_task "$key" "$STATE" 2>/dev/null) || task= ;;
       check)
         case "$key" in

@@ -273,6 +273,11 @@ test_drain_claims_the_wake_turn() {
   append_wake "$STATE_DIR" check "inactive-outcome:abc" "inactive terminal outcome awaiting captain presentation: child=child-1 state=done"
   as_agent "$DRAIN"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "an inactive outcome claims for its child"
+  fresh_case drain-turn-ended
+  meta_with_cause tk "$CAUSE_T"
+  append_wake "$STATE_DIR" signal tk.turn-ended "signal: tk.turn-ended"
+  as_agent "$DRAIN"
+  assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a lone turn-ended row claims for its task, not the computer or an empty claim"
   fresh_case drain-empty
   as_agent "$DRAIN"
   assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "a drain with nothing about a task claims the computer"
