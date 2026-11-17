@@ -173,6 +173,7 @@ ENTRIES='if . == "" or endswith("\n") then .[:-1] else error("unterminated mirro
       and (map(.seq) | [.[:-1], .[1:]] | transpose | all(.[0] < .[1]))
     then . else error("invalid mirror entry") end'
 # A session's dialog: its entries without MAIN's no-op replies. Needs --arg noop.
+# shellcheck disable=SC2016  # $k and $noop are jq variables.
 DIALOG='def dialog($k): map(select(.key == $k and ((.tag == "main" and .text == $noop) | not)));'
 
 # A writer records only the lock-owning primary session's dialog.
