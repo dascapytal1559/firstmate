@@ -62,6 +62,7 @@ Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 A T3 Code worker is refused unless it runs with full access, because a worker stuck waiting on an approval FirstMate cannot give would stall silently.
 A setting T3 Code cannot honour, such as a narrower permission mode or a tool exclusion list, is refused the same way, before anything starts.
 Cleanup uses T3 Code's own Stop, which also stops any tasks the worker started itself, instead of leaving them running after the worker is gone.
+Full access and refusing settings T3 Code cannot honour are upstream's ([#7518](https://github.com/kunchenguid/firstmate/pull/7518); the tool exclusion refusal is [#8223](https://github.com/kunchenguid/firstmate/pull/8223)); the clean stop is this fork's, since upstream refuses to stop a T3 Code worker.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 ## Approvals reach FirstMate at once
@@ -98,7 +99,7 @@ While the worker works, the card shows T3 Code's own Working, except that Testin
 The words change when the worker's state does and go when the worker is cleaned up.
 FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
 Only T3 Code workers show this, and it needs a T3 Code with the crew card status; on an older one the card shows none of these words and nothing else changes.
-Upstream now reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but it never runs on T3 Code, so the two do not meet.
+Upstream shows similar FirstMate-derived status on Herdr's project groups ([#7434](https://github.com/kunchenguid/firstmate/pull/7434)) and reports worker status to terminals that understand it ([#8011](https://github.com/kunchenguid/firstmate/pull/8011), [`fm-osc7501.sh`](bin/fm-osc7501.sh)), including a blocked state for a captain hold, but neither runs on T3 Code, so they do not meet; the T3 Code card, the Testing label, and working the label out from current state are this fork's.
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
 ## A reply on a worker's thread reaches FirstMate
@@ -152,6 +153,7 @@ Which account to move to stays FirstMate's choice under the captain's account ru
 When the captain says an account was reset early, `bin/fm-usage-limit.sh resume <account>` rings every worker still stopped on it; nothing detects such a reset on its own.
 T3 Code's own "Resume after usage limits" setting stays the backstop for the natural reset, when no account has room or FirstMate itself was down.
 Moving across accounts hands the conversation over trimmed, so a worker deep in an investigation can lose some of its thread; its brief, status, and files are untouched.
+Upstream is heading the same way with an open PR that relaunches a fresh worker on the next profile ([#7748](https://github.com/kunchenguid/firstmate/pull/7748)); moving the same T3 Code thread without losing its conversation is this fork's.
 Approved by the captain on 2026-11-15.
 Details: [usage-limit stops](docs/t3code-backend.md#usage-limit-stops).
 
@@ -164,6 +166,7 @@ The watcher rings a doorbell on every worker status write or turn-end it sees, i
 `bin/fm-fleet-idle.sh` is the check: no worker of this home is inside a turn or still has its own work running in its worktree, such as a background test run, with an unreadable worker counted as busy.
 The action still fires at most once, and FirstMate gets the outcome as an ordinary wake.
 The watch's interval stays as the backstop for a worker whose agent does not mark turn ends.
+The condition-then-action watch itself is upstream's ([`fm-procevent-when.sh`](bin/fm-procevent-when.sh), [#2200](https://github.com/kunchenguid/firstmate/pull/2200)); firing on a worker's turn end and the fleet-idle check are this fork's.
 Details: [the fleet-idle pattern](docs/configuration.md#process-to-event-sources-stateprocevent).
 
 ## Clean T3 restarts
@@ -179,7 +182,7 @@ Details: [clean restart](docs/t3code-backend.md#clean-restart).
 A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker watches its output for up to nine minutes, so T3 shows the command and its output as upstream does and the worker reads as working.
 If the job is still running when the watch ends by itself, the worker declares a wait and ends its turn, and the result comes back to it as an instruction that starts its next turn when the job finishes.
 If a restart cuts the watch, the job keeps running and the restart recovery tells the worker to re-attach from the log's last lines.
-Upstream has a worker run such a command in its own turn or a background shell and declare the wait.
+Upstream has a worker run such a command in its own turn or a background shell and declare the wait, sets that wait to the job's timeout ([#7240](https://github.com/kunchenguid/firstmate/pull/7240)), and has open PRs that wake a worker when its job finishes ([#7098](https://github.com/kunchenguid/firstmate/pull/7098), [#7849](https://github.com/kunchenguid/firstmate/pull/7849)); surviving a restart is this fork's.
 The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
 The job itself is left out of the busy count, but a worker watching it is a running turn, so a clean restart waits for the watch to end, which is never more than about nine minutes.
 A plain cleanup refuses while a job runs and only an explicit discard stops it.
@@ -190,14 +193,14 @@ Details: [`fm-job.sh`](bin/fm-job.sh) and [server restart](docs/t3code-backend.m
 
 `/clear` in T3 Code starts FirstMate's next message in a fresh session on the same thread.
 The new session takes the helm through the ordinary session start: it reclaims the ended session's lock instead of coming up read-only, and keeps the same thread on record.
-Upstream has no equivalent, because its FirstMate does not yet run as a T3 Code thread.
+Reclaiming a dead session's lock is upstream's own [`fm-lock.sh`](bin/fm-lock.sh); the T3 Code side and the thread record are this fork's, since upstream's FirstMate does not yet run as a T3 Code thread.
 If the old process is somehow still running, the new session says so and names the remedy instead of taking over beside it.
 Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-clear).
 
 ## A notification never reloads a cold session
 
 Upstream wakes the main session in place when a worker needs it and treats that session as long-lived.
-For the cost of an idle one it offers warm-cache compaction, because where upstream runs FirstMate there is no way to restart the main session from a script ([#7755](https://github.com/kunchenguid/firstmate/issues/7755)).
+For the cost of an idle one it compacts the session while its cache is still warm ([#7807](https://github.com/kunchenguid/firstmate/pull/7807)), because where upstream runs FirstMate there is no way to restart the main session from a script ([#7755](https://github.com/kunchenguid/firstmate/issues/7755)).
 In a T3 Code thread there is: a fresh session on the same thread, which this fork already hands over cleanly.
 So when a notification would wake a session that has sat idle past the cache lifetime, the fork rings it through T3 Code instead, and T3 Code starts a fresh session.
 Any failure falls back to upstream's wake, and outside a T3 Code thread nothing changes.
@@ -232,7 +235,7 @@ Details: [`fm-usage-labels-check.sh`](bin/fm-usage-labels-check.sh).
 ## A fresh session points at the previous dialog
 
 A fresh FirstMate session, after an automatic clear or the captain's own `/clear`, starts with no earlier context.
-Upstream already records the captain's prompts and FirstMate's final replies for its supervision host, and treats a restart as a non-event.
+Upstream already records the captain's prompts and FirstMate's final replies for its supervision host ([#5707](https://github.com/kunchenguid/firstmate/pull/5707)), and treats a restart as a non-event; that dialog record is upstream's, and the pointer below is this fork's.
 The fork's session start adds one short `PREVIOUS DIALOG` section that names that saved dialog and the command that prints it, and says to read it only when the captain's first message seems to answer or refer to something it does not quote.
 It does not carry the dialog itself: the captain usually replies by quoting a message, and T3 Code puts the quoted text into his message, so the dialog is rarely needed, and carrying it cost about 1,900 tokens at every session start.
 It prints nothing when no earlier session was recorded, so it needs a primary whose dialog upstream records, Claude or Cursor, with the supervision host on.
@@ -260,6 +263,7 @@ Which reasoning efforts a Codex model offers is read from the catalog the Codex 
 Upstream forwards `max` for one named model.
 The fork departs because new models that offer `max` were refused until their name was added by hand.
 An effort the catalog cannot vouch for is refused, never swapped for the nearest one.
+Upstream's maintainer has an open PR doing the same ([#8107](https://github.com/kunchenguid/firstmate/pull/8107)).
 Details: [`fm-harness.sh`](bin/fm-harness.sh) `codex-effort-check`.
 
 ## The live FirstMate's thread on record
@@ -327,12 +331,14 @@ The fork departs because it runs many `local-only` workers on one project at onc
 The fork keeps upstream's intent by landing a rebased branch only when its commits match the approved ones one for one by exact content, in the same order, with no merge commit; commit messages may differ.
 An added, amended, reordered, or squashed commit is still refused, and the refusal names the commits that differ.
 The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
+Upstream has an open PR that proves a rebase identical by comparing trees instead ([#8281](https://github.com/kunchenguid/firstmate/pull/8281)).
 Approved by the captain on 2026-11-08.
 Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
 
 ## Only trusted reviewers wake a parked worker
 
 With park on review switched on, a worker whose PR waits for review is stopped, and a fresh one starts when the PR gets new review activity.
+Parking on review is upstream's ([#7965](https://github.com/kunchenguid/firstmate/pull/7965)); the trust filter below is this fork's.
 Upstream starts it on a new comment or an unresolved review thread from anyone, and tells it to address that activity on the branch.
 On a public repository that lets any passer-by start an agent that acts on their words.
 The fork starts it only for comments and threads from the repository's owners, members, or collaborators, or from a bot the home already trusts in `config/contribution-review-bots`, the same trust the contribution watcher uses.
@@ -348,7 +354,7 @@ With `config/fable-quota-floor` set, starting a Fable worker refuses when the Cl
 On T3 Code that account is the provider instance the launch uses and that instance's own login folder from T3's provider settings.
 The refusal names the account, the figure, and the floor, and says how to go on: point the spawn at another account, or start anyway with `--fable-floor-override <reason>`, which the task record keeps.
 An account quota-axi cannot measure does not block; the worker starts and the task record keeps a one-line warning.
-Upstream keeps quota-axi data-only and leaves eligibility to firstmate's judgement at dispatch, which reads quota first.
+Upstream measures each declared Claude account and leaves choosing among them to firstmate's judgement at dispatch, with quota-axi data-only ([#8121](https://github.com/kunchenguid/firstmate/pull/8121), [`fm-claude-account-quota.sh`](bin/fm-claude-account-quota.sh)); the refusal floor is this fork's.
 The fork adds a structural backstop because that judgement is a step firstmate has to remember: on 16 Nov new workers were still routed to an account whose Fable allowance had fallen to 2% and then run out.
 Approved by the captain on 2026-11-16.
 Details: [Fable quota floor](docs/configuration.md#fable-quota-floor-configfable-quota-floor).
@@ -360,7 +366,7 @@ It starts on the account where it fits whose week resets soonest, so the allowan
 When no account has room, the start waits for the soonest reset where it fits and FirstMate is woken then; a wait over about an hour is reported to the captain.
 The sizing is a script inside the start, printing one short line per account, so it costs FirstMate almost nothing however many workers start in a day.
 Every start and every cleanup is recorded, and `bin/fm-size.sh report` and `refit` show how estimates compared with what workers actually spent and update the cost table from that data.
-Upstream leaves account eligibility to FirstMate's judgement, with quota-axi as data only.
+The multi-account list and measuring each account are upstream's ([#8121](https://github.com/kunchenguid/firstmate/pull/8121)), with an optional mid-task quota watch, but upstream leaves account eligibility to FirstMate's judgement, with quota-axi as data only; deterministic sizing and choosing the account whose week resets soonest are this fork's.
 The fork makes that judgement a deterministic step because doing it by hand cost thousands of tokens per start that stayed in FirstMate's context all session.
 Approved by the captain on 2026-11-16.
 Details: [Worker sizing](docs/configuration.md#worker-sizing-configworker-sizingjson).
