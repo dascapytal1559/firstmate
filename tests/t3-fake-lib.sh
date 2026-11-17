@@ -65,7 +65,10 @@ t3_fake_case() {
   T3_FAKE_LOG="$1/requests.jsonl"
   printf '%s\n' "$world" > "$T3_FAKE_WORLD"
   : > "$T3_FAKE_LOG"
-  printf '%s' "$1" > "$T3_FAKE_CASE_FILE"
+  # Replaced atomically: the server reads this file on every request, and a
+  # read between truncate and write would resolve the case dir to "" and log
+  # into the server's working directory.
+  printf '%s' "$1" > "$T3_FAKE_CASE_FILE.tmp" && mv "$T3_FAKE_CASE_FILE.tmp" "$T3_FAKE_CASE_FILE"
 }
 
 # t3_fake_set <js>: run <js> against the current world as `w` and save it

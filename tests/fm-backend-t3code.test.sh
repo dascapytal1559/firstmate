@@ -3522,14 +3522,18 @@ test_t3_main_guard_keeps_the_token_out_of_the_transcript() {
   home=$(t3_main_home token)
   for cmd in 'cat config/*' 'head -40 config/*' 'cat config/t3code-token' "cat '$home/config/t3code-token'" \
     'jq . config/t3code-token' 'grep -r origin config' 'cat < config/t3code-token' 'for f in config/*; do cat "$f"; done' \
-    'x=$(cat config/t3code-token)' 'tail -n 5 ./config/t3*'; do
+    'x=$(cat config/t3code-token)' 'tail -n 5 ./config/t3*' \
+    'grep -rn x ./config' 'grep --recursive x config' 'grep -d recurse x config' "grep -rn x \"$home/config\"" \
+    'grep -rn x config; ls'; do
     t3_guard "$home" "$(t3_bash_payload "$cmd")"
     expect_code 2 "$GUARD_RC" "a command that prints the credential is denied: $cmd"
     assert_contains "$GUARD_ERR" "t3-token" "the denial names the credential: $cmd"
     assert_not_contains "$GUARD_ERR" "tok-secret-value" "the denial never echoes the secret"
   done
   for cmd in 'cat config/backend' 'ls config/*' 'ls -l config/t3code-token' 'chmod 600 config/t3code-token' \
-    'bin/fm-t3-mcp.mjs status' 'grep -r origin bin' 'git status'; do
+    'bin/fm-t3-mcp.mjs status' 'grep -r origin bin' 'git status' \
+    'grep -rn x .git/config' 'grep -rn Host ~/.ssh/config' 'grep -rn x projects/p/config' \
+    'git config --get user.name && grep -rn x bin' 'grep --color=auto x a; ls config'; do
     t3_guard "$home" "$(t3_bash_payload "$cmd")"
     expect_code 0 "$GUARD_RC" "an ordinary command is allowed: $cmd ($GUARD_ERR)"
   done

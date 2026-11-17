@@ -106,9 +106,17 @@ if printf '%s' "$PLAIN" | grep -Eq "$READER_RE"; then
   if printf '%s' "$PLAIN" | grep -Eq '(^|[[:space:]=])([^[:space:]]*/)?config/[^[:space:]]*[]*?[]'; then
     deny t3-token "$TOKEN_REASON"
   fi
-  if printf '%s' "$PLAIN" | grep -Eq '(^|[[:space:]])(grep|egrep|fgrep)[[:space:]].*-[[:alnum:]]*[rR]' \
-    && printf '%s' "$PLAIN" | grep -Eq '(^|[[:space:]])([^[:space:]]*/)?config/?([[:space:]]|$)'; then
-    deny t3-token "$TOKEN_REASON"
+  if printf '%s' "$PLAIN" | grep -Eq '(^|[[:space:];|&(`])(grep|egrep|fgrep)([[:space:]][^;|&]*)?[[:space:]](-[[:alnum:]]*[rR][[:alnum:]]*|--recursive|--dereference-recursive|--directories=recurse|-d[[:space:]]*recurse)([[:space:]]|$)'; then
+    # A recursive grep is denied only over this home's own config folder, named
+    # by a spelling of the home (the home is derived here, never hard-coded);
+    # git's own "config" subcommand and other folders named config pass.
+    NO_GIT_CONFIG=$(printf '%s' "$PLAIN" | sed -E 's/(^|[^[:alnum:]_.-])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+config([[:space:]]|$)/\1 /g')
+    HOME_RE=$(printf '%s' "$FM_HOME" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')
+    PREFIX_RE="\\./|\\\$\\{?FM_HOME\\}?/|$HOME_RE/"
+    case "$FM_HOME" in "${HOME:-/nonexistent}"/*) PREFIX_RE="$PREFIX_RE|(~|\\\$\\{?HOME\\}?)/$(printf '%s' "${FM_HOME#"$HOME"/}" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')/" ;; esac
+    if printf '%s' "$NO_GIT_CONFIG" | grep -Eq "(^|[[:space:]=])($PREFIX_RE)?config/?([[:space:];|&)]|\$)"; then
+      deny t3-token "$TOKEN_REASON"
+    fi
   fi
 fi
 exit 0
