@@ -824,12 +824,13 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
-# A fresh session's digest carries the previous session's last exchange from
-# the dialog mirror, after the network checks and before curated memory, and
-# carries nothing when no earlier session was recorded or after a compaction.
-test_last_exchange_carries_the_previous_session() {
-  local rec root home fakebin out
-  rec=$(new_world last-exchange)
+# A fresh session's digest points at the previous session's saved dialog
+# instead of carrying it, after the network checks and before curated memory,
+# and carries nothing when no earlier session was recorded or after a compaction.
+# The world's path holds a space and a quote, so the printed command must quote it.
+test_previous_dialog_points_at_the_saved_dialog() {
+  local rec root home fakebin out cmd n
+  rec=$(new_world "previous dialog's")
   IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
@@ -844,27 +845,63 @@ EOF
   run_last() { FM_PROC_ROOT_OVERRIDE="$home/proc" run_named_harness_session_start claude "$home" "$root" "$fakebin:$BASE_PATH" "$@"; }
 
   out=$(run_last)
-  assert_not_contains "$out" "LAST EXCHANGE" "a digest with no dialog mirror must carry no last exchange"
+  assert_not_contains "$out" "PREVIOUS DIALOG" "a digest with no dialog mirror must carry no pointer"
 
   {
-    jq -cn '{seq: 1, epoch: 1763170000, key: "an-ended-session", id: "p1", tag: "captain", text: "shall I merge the fix?"}'
-    jq -cn '{seq: 2, epoch: 1763170060, key: "an-ended-session", id: "p1", tag: "main", text: "Captain, the fix is ready. Merge it?"}'
+    jq -cn '{seq: 1, epoch: 1763170000, key: "an-older-session", id: "p0", tag: "captain", text: "an ask from long ago"}'
+    for n in 1 2 3; do
+      jq -cn --argjson n "$n" '{seq: (1 + $n), epoch: 1763170000, key: "an-ended-session", id: "o\($n)", tag: "main", text: "older note \($n)"}'
+    done
+    jq -cn '{seq: 5, epoch: 1763170000, key: "an-ended-session", id: "p1", tag: "captain", text: "shall I merge the fix?"}'
+    jq -cn '{seq: 6, epoch: 1763170060, key: "an-ended-session", id: "p1", tag: "main", text: "Captain, the fix is ready. Merge it?"}'
+    for n in 7 8 9; do
+      jq -cn --argjson n "$n" '{seq: $n, epoch: 1763170060, key: "an-ended-session", id: "w\($n)", tag: "main", text: "Captain, shipshape."}'
+    done
   } > "$home/state/.host-mirror.jsonl"
   out=$(run_last)
-  assert_contains "$out" "LAST EXCHANGE" "a fresh session's digest must carry the previous session's last exchange"
-  assert_contains "$out" "the last 2 entries of the session before this one." "the last exchange must say what it carries"
-  assert_contains "$out" "[captain] shall I merge the fix?
-[main] Captain, the fix is ready. Merge it?" "the last exchange must carry the recorded dialog, oldest first"
+  assert_contains "$out" "PREVIOUS DIALOG" "a fresh session's digest must point at the previous session's dialog"
+  assert_contains "$out" "$home/state/.host-mirror.jsonl" "the pointer must name the saved dialog file"
+  assert_contains "$out" "only when the captain's first message seems to answer or refer to something it does not quote" \
+    "the pointer must say when to read the dialog"
+  assert_not_contains "$out" "shall I merge the fix?" "the digest must not carry the dialog itself"
+  assert_not_contains "$out" "the fix is ready" "the digest must not carry the dialog itself"
+  # The command the pointer prints must print that session's newest six real
+  # entries, oldest first, skipping no-op replies and other sessions.
+  cmd=$(printf '%s\n' "$out" | sed -n 's/^  \(FM_HOME=.*\)$/\1/p')
+  assert_equals "[main] older note 1
+[main] older note 2
+[main] older note 3
+[captain] shall I merge the fix?
+[main] Captain, the fix is ready. Merge it?" "$(bash -c "$cmd")" "the pointer's command must print the previous session's dialog"
+  for n in 4 5 6 7 8; do
+    jq -cn --argjson n "$n" '{seq: (6 + $n), epoch: 1763170060, key: "an-ended-session", id: "n\($n)", tag: "main", text: "later note \($n)"}'
+  done >> "$home/state/.host-mirror.jsonl"
+  assert_equals "[main] Captain, the fix is ready. Merge it?
+[main] later note 4
+[main] later note 5
+[main] later note 6
+[main] later note 7
+[main] later note 8" "$(bash -c "$cmd")" "the pointer's command must stop at the newest six entries"
+  assert_equals "[main] older note 1
+[main] older note 2
+[main] older note 3
+[captain] shall I merge the fix?
+[main] Captain, the fix is ready. Merge it?
+[main] later note 4
+[main] later note 5
+[main] later note 6
+[main] later note 7
+[main] later note 8" "$(bash -c "$cmd 20")" "a larger count after the pointer's command must read further back"
   printf '%s\n' "$out" | awk '
     /^NETWORK CHECKS$/ { network = NR }
-    /^LAST EXCHANGE$/ { last = NR }
+    /^PREVIOUS DIALOG$/ { prev = NR }
     /^CONTEXT$/ { context = NR }
-    END { exit !(network && last && context && network < last && last < context) }
-  ' || fail "the last exchange must print after the network checks and before curated memory: $out"
+    END { exit !(network && prev && context && network < prev && prev < context) }
+  ' || fail "the pointer must print after the network checks and before curated memory: $out"
   out=$(run_last --reemit --source compact)
   assert_contains "$out" "SESSION START (CONTEXT RE-EMIT)" "the compaction digest must still run"
-  assert_not_contains "$out" "LAST EXCHANGE" "a compaction's digest must carry no last exchange"
-  pass "session start carries the previous session's last exchange, and nothing without a recorded one or after a compaction"
+  assert_not_contains "$out" "PREVIOUS DIALOG" "a compaction's digest must carry no pointer"
+  pass "session start points at the previous session's saved dialog, and not at all without a recorded one or after a compaction"
 }
 
 # --- lock refusal: read-only path --------------------------------------------
@@ -1747,7 +1784,7 @@ SH
   assert_contains "$out" 'stopped during the "lock" stage' \
     "the abnormal-death banner did not name the stage that never finished"
   assert_contains "$out" \
-    "wake-queue supervision-instructions read-once fleet-state network-checks last-exchange context next-step" \
+    "wake-queue supervision-instructions read-once fleet-state network-checks previous-dialog context next-step" \
     "the abnormal-death banner did not list every stage that never ran"
   assert_not_contains "$out" "RUNTIME BOUND" \
     "an abnormal death was misreported as the runtime bound firing"
@@ -2419,7 +2456,7 @@ EOF
   assert_contains "$out" "RUNTIME BOUND" "the truncation banner did not name the bound it hit"
   assert_contains "$out" 'stopped during the "bootstrap" stage' "the truncation banner did not name the incomplete stage"
   assert_contains "$out" "RECONCILE these stages" "the truncation banner did not tell the agent what to reconcile"
-  assert_contains "$out" "wake-queue supervision-instructions read-once fleet-state network-checks last-exchange context next-step" \
+  assert_contains "$out" "wake-queue supervision-instructions read-once fleet-state network-checks previous-dialog context next-step" \
     "the truncation banner did not list every stage that never ran"
   assert_not_contains "$out" "NEXT STEP" "a truncated digest claimed to have reached its closing reminder"
   assert_absent "$home/state/.session-start-complete" \
@@ -3256,7 +3293,7 @@ EOF
 }
 
 test_context_digest_absent_empty_present
-test_last_exchange_carries_the_previous_session
+test_previous_dialog_points_at_the_saved_dialog
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_t3_main_thread_recorded_by_locked_t3_session
