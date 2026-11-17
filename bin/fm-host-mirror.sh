@@ -82,7 +82,9 @@
 # prints nothing too when the current main session cannot be identified or
 # the mirror is missing, unreadable, invalid, or holds no earlier session.
 # It reads without the lock, because every append replaces the file whole by
-# rename. bin/fm-session-start.sh prints it as its LAST EXCHANGE section.
+# rename. bin/fm-session-start.sh no longer prints it: it asks `last` only
+# whether an earlier session exists, and prints a PREVIOUS DIALOG pointer at
+# the mirror file instead, because the captain usually quotes what he answers.
 #
 # VERIFIED WRITERS. `verified <harness>` exits 0 for a primary whose writers
 # were proven against the real harness to record a session's dialog from its

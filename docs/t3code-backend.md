@@ -408,7 +408,7 @@ The script's header owns its exit codes and the reason and adoption rules; `bin/
 
 ### Fresh session with /clear
 
-T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context except the previous session's last exchange, which its start digest carries from the [dialog mirror](supervision-host.md#the-dialog-mirror).
+T3 Code's `/clear` keeps the Firstmate thread and starts the next message in a fresh agent session, so the captain sees one chat with a divider while the new session starts with no earlier context except a pointer, in its start digest, at the previous session's saved dialog in the [dialog mirror](supervision-host.md#the-dialog-mirror).
 The thread id does not change, so records keyed by it stay valid.
 Run `/stow` first when the session holds anything worth keeping; `/clear` itself saves nothing.
 

@@ -64,12 +64,14 @@
 #                       can itself reach the digest's runtime bound.
 #   7. network checks - the result of the deferred network stage started back at
 #                       step 1, harvested WITHOUT waiting for it.
-#   7b. last exchange - the session before this one's newest dialog entries,
-#                       as bin/fm-host-mirror.sh `last` prints them (that
-#                       command owns when there are any and their bound), so
-#                       the captain's first message after a clear lands next
-#                       to what it answers. Absent when it prints nothing
-#                       and after a compaction, whose summary carries its own.
+#   7b. previous dialog - one line pointing at where the session before this
+#                       one's dialog is saved (the dialog mirror), for a first
+#                       captain message that answers or cites something it
+#                       does not quote. Never the dialog itself. Present only
+#                       when bin/fm-host-mirror.sh `last` finds an earlier
+#                       session (that command owns when there is one), and
+#                       absent after a compaction, whose summary carries its
+#                       own.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
 #                       data/captain-shared.md, data/learnings.md: read-only,
 #                       always safe, always runs.
@@ -290,7 +292,7 @@ done
 # The ordered stage list is the contract behind the truncation banner: the child
 # names the stage it is entering, and the parent reports every stage at or after
 # that one as never emitted. Keep it in the exact order the digest prints.
-SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks last-exchange context next-step'
+SESSION_START_STAGES='lock role bootstrap wake-queue supervision-instructions read-once fleet-state network-checks previous-dialog context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
@@ -948,8 +950,8 @@ section "READ-ONCE CONTRACT"
 cat <<'EOF'
 Everything below is printed in full for this session start: every state/*.meta,
 a compact data/backlog.md listing, a bounded tail of every state/*.status,
-the previous session's last exchange when one was recorded, data/projects.md,
-data/secondmates.md, data/captain.md, data/captain-shared.md, and
+a pointer to the previous session's saved dialog when one was recorded,
+data/projects.md, data/secondmates.md, data/captain.md, data/captain-shared.md, and
 data/learnings.md.
 Do NOT re-read any of them after reading this digest, and do NOT bulk-read
 data/backlog.md or state/*.status: re-reading everything defeats the entire
@@ -1098,26 +1100,27 @@ else
   "$SCRIPT_DIR/fm-startup-network.sh" harvest --pid $$ 2>&1 || true
 fi
 
-# --- 7b. last exchange ------------------------------------------------------
-# After the actionable sections and before curated memory: it is volatile, so
-# it outranks memory, but a truncated tail costs only one rerun of the command.
-# A compaction's own summary already carries its conversation, whatever
-# session id the harness keeps across it.
-stage last-exchange
-LAST_EXCHANGE=
-if [ "$SESSION_SOURCE" != compact ]; then
-  LAST_EXCHANGE=$("$SCRIPT_DIR/fm-host-mirror.sh" last 2>/dev/null) || LAST_EXCHANGE=
+# --- 7b. previous dialog -----------------------------------------------------
+# After the actionable sections and before curated memory. Only a pointer: the
+# captain usually quotes what he answers, and T3 puts the quoted text into his
+# message, so the dialog is read on demand. `last` is kept as the one owner of
+# when an earlier session exists (it prints nothing mid-session, once this
+# session has mirrored dialog of its own), so it is asked here at session start
+# and its text discarded; the pointer's own command reads the mirror directly
+# because `last` could no longer answer by the time it is needed. A compaction's
+# own summary already carries its conversation, whatever session id the harness
+# keeps across it.
+stage previous-dialog
+PREV_KEY=
+if [ "$SESSION_SOURCE" != compact ] \
+  && [ -n "$("$SCRIPT_DIR/fm-host-mirror.sh" last 2>/dev/null)" ]; then
+  PREV_KEY=$(jq -rs 'last.key // empty' "$STATE/.host-mirror.jsonl" 2>/dev/null) || PREV_KEY=
 fi
-if [ -n "$LAST_EXCHANGE" ]; then
-  section "LAST EXCHANGE"
-  cat <<'EOF'
-The dialog from the session before this one, as the dialog mirror recorded it:
-the captain's prompts and FirstMate's final replies, never worker or tool output.
-These turns were already handled. They are context for reading the captain's
-next message, which may answer the last question below, and never a new request.
-
-EOF
-  printf '%s\n' "$LAST_EXCHANGE"
+if [ -n "$PREV_KEY" ]; then
+  section "PREVIOUS DIALOG"
+  printf 'The session before this one saved its dialog (the captain'"'"'s prompts and your final replies) in %s/.host-mirror.jsonl.\n' "$STATE"
+  printf 'Read it only when the captain'"'"'s first message seems to answer or refer to something it does not quote:\n'
+  printf '  jq -r '"'"'select(.key=="%s") | "[\(.tag)] \(.text)"'"'"' %s/.host-mirror.jsonl\n' "$PREV_KEY" "$STATE"
 fi
 
 # --- 8. context digest -----------------------------------------------------
