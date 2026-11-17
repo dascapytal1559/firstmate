@@ -62,9 +62,11 @@ deny() {  # <code> <reason>
 }
 
 TOKEN_REASON="config/t3code-token is the T3 credential; printing it would keep a full-access credential in this thread's transcript. Read the config files you need by their own names, and check the credential with bin/fm-t3-mcp.mjs status, which never prints it."
-is_config_dir() {  # <path>
+CONFIG_P=$(CDPATH='' cd -P -- "$CONFIG" 2>/dev/null && pwd -P) || CONFIG_P=
+is_config_dir() {  # <path>: this home's config folder, an absolute path compared physically
   case "${1%/}" in
     config|./config|"$CONFIG"|"$FM_HOME/config") return 0 ;;
+    /*/config) [ -n "$CONFIG_P" ] && [ "$(CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P)" = "$CONFIG_P" ] && return 0 ;;
   esac
   return 1
 }
@@ -113,12 +115,18 @@ if printf '%s' "$PLAIN" | grep -Eq "$READER_RE"; then
     # cannot resolve; git's own "config" subcommand and other folders named
     # config pass.
     NO_GIT_CONFIG=$(printf '%s' "$PLAIN" | sed -E 's/(^|[^[:alnum:]_.-])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+config([[:space:]]|$)/\1 /g')
-    HOME_RE=$(printf '%s' "$FM_HOME" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')
-    PREFIX_RE="\\./|([^[:space:]]*/)?\\.\\./|\\\$\\{?(FM_HOME|PWD)\\}?/|\\\$\\(pwd\\)/|$HOME_RE/"
+    PREFIX_RE="\\./|([^[:space:]]*/)?\\.\\./|\\\$\\{?(FM_HOME|PWD)\\}?/|\\\$\\(pwd\\)/"
     case "$FM_HOME" in "${HOME:-/nonexistent}"/*) PREFIX_RE="$PREFIX_RE|(~|\\\$\\{?HOME\\}?)/$(printf '%s' "${FM_HOME#"$HOME"/}" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')/" ;; esac
     if printf '%s' "$NO_GIT_CONFIG" | grep -Eq "(^|[[:space:]])($PREFIX_RE)?config/?([[:space:];|&)]|\$)"; then
       deny t3-token "$TOKEN_REASON"
     fi
+    # An absolute path is resolved, so any spelling of the home (a symlinked
+    # parent, the logical or the physical path) is recognised.
+    while IFS= read -r WORD; do
+      case "$WORD" in /*) is_config_dir "$WORD" && deny t3-token "$TOKEN_REASON" ;; esac
+    done <<EOF_WORDS
+$(printf '%s' "$NO_GIT_CONFIG" | tr -s ' \t;|&)' '\n')
+EOF_WORDS
   fi
 fi
 exit 0
