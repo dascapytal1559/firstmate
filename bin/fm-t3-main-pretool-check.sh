@@ -116,7 +116,7 @@ if printf '%s' "$PLAIN" | grep -Eq "$READER_RE"; then
     HOME_RE=$(printf '%s' "$FM_HOME" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')
     PREFIX_RE="\\./|([^[:space:]]*/)?\\.\\./|\\\$\\{?(FM_HOME|PWD)\\}?/|\\\$\\(pwd\\)/|$HOME_RE/"
     case "$FM_HOME" in "${HOME:-/nonexistent}"/*) PREFIX_RE="$PREFIX_RE|(~|\\\$\\{?HOME\\}?)/$(printf '%s' "${FM_HOME#"$HOME"/}" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')/" ;; esac
-    if printf '%s' "$NO_GIT_CONFIG" | grep -Eq "(^|[[:space:]=])($PREFIX_RE)?config/?([[:space:];|&)]|\$)"; then
+    if printf '%s' "$NO_GIT_CONFIG" | grep -Eq "(^|[[:space:]])($PREFIX_RE)?config/?([[:space:];|&)]|\$)"; then
       deny t3-token "$TOKEN_REASON"
     fi
   fi

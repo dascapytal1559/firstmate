@@ -158,7 +158,7 @@ A wake's entries count as delivered only once its engine turn is accepted with i
 An attended wake whose mirror is missing, unreadable, or fails the feed's validation reaches main with `the dialog mirror could not be read` before any engine turn; an away wake never reads the mirror or moves its cursor.
 A captain message typed while an engine turn is already running reaches the engine at its next wake.
 A captain prompt whose hook write fails is not mirrored, so the engine may judge the next attended wake without it; Claude and Cursor have no later source for it.
-Main reads the mirror too: a fresh main session's start digest points at the saved dialog of the session before it in its `PREVIOUS DIALOG` section, to be read only when the captain's first message answers something it does not quote; `bin/fm-host-mirror.sh` `previous` owns which session came before it.
+Main reads the mirror too: a fresh main session's start digest points at the saved dialog of the session before it in its `PREVIOUS DIALOG` section, to be read only when the captain's first message answers something it does not quote; `bin/fm-host-mirror.sh` owns which session came before it (`previous`) and prints its newest entries (`dialog`).
 
 Claude and Cursor have writers, proven against the real harness to record the session's dialog from its first captain prompt, so only they run the attended posture.
 Codex has no verified dialog-mirror writer yet, including on its native Stop-park path, so attended host handling remains pass-through.

@@ -865,10 +865,9 @@ EOF
     "the pointer must say when to read the dialog"
   assert_not_contains "$out" "shall I merge the fix?" "the digest must not carry the dialog itself"
   assert_not_contains "$out" "the fix is ready" "the digest must not carry the dialog itself"
-  assert_contains "$out" "newest 6 entries" "the pointer must say how much its command prints"
   # The command the pointer prints must print that session's newest six real
   # entries, oldest first, skipping no-op replies and other sessions.
-  cmd=$(printf '%s\n' "$out" | sed -n 's/^  \(jq .*\)$/\1/p')
+  cmd=$(printf '%s\n' "$out" | sed -n 's/^  \(FM_HOME=.*\)$/\1/p')
   assert_equals "[main] older note 1
 [main] older note 2
 [main] older note 3
@@ -883,6 +882,16 @@ EOF
 [main] later note 6
 [main] later note 7
 [main] later note 8" "$(bash -c "$cmd")" "the pointer's command must stop at the newest six entries"
+  assert_equals "[main] older note 1
+[main] older note 2
+[main] older note 3
+[captain] shall I merge the fix?
+[main] Captain, the fix is ready. Merge it?
+[main] later note 4
+[main] later note 5
+[main] later note 6
+[main] later note 7
+[main] later note 8" "$(bash -c "$cmd 20")" "a larger count after the pointer's command must read further back"
   printf '%s\n' "$out" | awk '
     /^NETWORK CHECKS$/ { network = NR }
     /^PREVIOUS DIALOG$/ { prev = NR }

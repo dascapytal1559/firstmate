@@ -3534,7 +3534,8 @@ test_t3_main_guard_keeps_the_token_out_of_the_transcript() {
   for cmd in 'cat config/backend' 'ls config/*' 'ls -l config/t3code-token' 'chmod 600 config/t3code-token' \
     'bin/fm-t3-mcp.mjs status' 'grep -r origin bin' 'git status' \
     'grep -rn x .git/config' 'grep -rn Host ~/.ssh/config' 'grep -rn x projects/p/config' \
-    'git config --get user.name && grep -rn x bin' 'grep --color=auto x a; ls config'; do
+    'git config --get user.name && grep -rn x bin' 'grep --color=auto x a; ls config' \
+    'grep -rn x . --exclude-dir=config' 'grep -rn x bin --include=config'; do
     t3_guard "$home" "$(t3_bash_payload "$cmd")"
     expect_code 0 "$GUARD_RC" "an ordinary command is allowed: $cmd ($GUARD_ERR)"
   done

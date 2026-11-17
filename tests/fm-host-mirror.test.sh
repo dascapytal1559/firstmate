@@ -579,6 +579,42 @@ test_previous_names_nothing_without_sound_records() {
   pass "mirror: previous names nothing from a missing or invalid mirror, or into a session without the fleet lock"
 }
 
+# `dialog` prints a session's newest entries, oldest first, without MAIN's
+# no-op replies (AGENTS.md section 9's "Captain, shipshape.") and without
+# other sessions' entries.
+test_dialog_prints_a_sessions_newest_entries() {
+  local home n
+  home=$(make_home dialog)
+  {
+    jq -cn '{seq: 1, epoch: 1, key: "other", id: "", tag: "captain", text: "another session"}'
+    for n in 1 2 3 4 5 6 7; do
+      jq -cn --argjson n "$n" '{seq: (1 + $n), epoch: 1, key: "s", id: "", tag: "main", text: "note \($n)"}'
+    done
+    jq -cn '{seq: 9, epoch: 1, key: "s", id: "", tag: "captain", text: "Captain, shipshape."}'
+    jq -cn '{seq: 10, epoch: 1, key: "s", id: "", tag: "main", text: "Captain, shipshape."}'
+    jq -cn '{seq: 11, epoch: 1, key: "other", id: "", tag: "main", text: "another reply"}'
+  } > "$home/state/.host-mirror.jsonl"
+  assert_equals "[main] note 3
+[main] note 4
+[main] note 5
+[main] note 6
+[main] note 7
+[captain] Captain, shipshape." "$(FM_HOME="$home" "$MIRROR" dialog s)" \
+    "dialog must print the session's newest six entries, keeping a captain entry and skipping a no-op reply"
+  assert_equals "[main] note 7
+[captain] Captain, shipshape." "$(FM_HOME="$home" "$MIRROR" dialog s 2)" "a count must bound what dialog prints"
+  assert_equals "8" "$(FM_HOME="$home" "$MIRROR" dialog s 50 | wc -l | tr -d ' ')" \
+    "a larger count must read further back, to the session's first entry"
+  assert_equals "" "$(FM_HOME="$home" "$MIRROR" dialog unknown)" "a session with no entries must print nothing"
+  expect_code 2 "$(FM_HOME="$home" "$MIRROR" dialog s 0 2>/dev/null; echo $?)" "a zero count must be a usage error"
+  expect_code 2 "$(FM_HOME="$home" "$MIRROR" dialog 2>/dev/null; echo $?)" "dialog without a key must be a usage error"
+  printf '%s\n' '{"seq":0}' >> "$home/state/.host-mirror.jsonl"
+  expect_code 1 "$(FM_HOME="$home" "$MIRROR" dialog s >/dev/null; echo $?)" "an invalid mirror must fail"
+  rm -f "$home/state/.host-mirror.jsonl"
+  expect_code 1 "$(FM_HOME="$home" "$MIRROR" dialog s >/dev/null; echo $?)" "a missing mirror must fail"
+  pass "mirror: dialog prints a session's newest entries without no-op replies, and fails on an unreadable mirror"
+}
+
 # The host runs the attended posture only beside a primary whose writers were
 # proven to record the session's dialog from its first captain prompt.
 test_only_proven_writers_are_verified() {
@@ -618,3 +654,4 @@ test_recreated_mirror_continues_past_both_cursors
 test_previous_names_the_session_before_this_one
 test_previous_skips_a_session_of_no_op_replies
 test_previous_names_nothing_without_sound_records
+test_dialog_prints_a_sessions_newest_entries

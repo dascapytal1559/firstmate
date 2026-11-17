@@ -77,6 +77,13 @@
 # nothing but MAIN replies that are exactly "Captain, shipshape.". It reads
 # without the lock, because every append replaces the file whole by rename.
 #
+# DIALOG. `dialog <key> [<count>]` prints the newest <count> entries (default
+# 6) of the main session recorded under <key>, oldest first, one "[captain]
+# ..." or "[main] ..." entry after another, leaving out MAIN's no-op replies as
+# `previous` does; the PREVIOUS DIALOG pointer prints it with the previous
+# session's key. It reads without the lock, as `previous` does, and prints
+# nothing when that session recorded no dialog.
+#
 # VERIFIED WRITERS. `verified <harness>` exits 0 for a primary whose writers
 # were proven against the real harness to record a session's dialog from its
 # first captain prompt (docs/supervision-host.md "The dialog mirror"): Claude
@@ -90,8 +97,11 @@
 #   fm-host-mirror.sh commit
 #   fm-host-mirror.sh check
 #   fm-host-mirror.sh previous
+#   fm-host-mirror.sh dialog <key> [<count>]
 #   fm-host-mirror.sh verified <harness>
-# hook and commit always exit 0 and print nothing; previous always exits 0; feed exits 1 when
+# hook and commit always exit 0 and print nothing; previous always exits 0;
+# dialog exits 1 when the mirror is missing, could not be read, or holds an
+# invalid entry, and otherwise 0; feed exits 1 when
 # the mirror is missing, could not be read, or holds an invalid entry, or the
 # main session cannot be identified, and prints nothing when there is nothing
 # to feed; check (bin/fm-afk-launch.sh quiet-check's mirror test) exits 1 when
@@ -110,6 +120,7 @@ FM_HOST_MIRROR_VERIFIED='claude cursor'
 MIRROR_CAP=4000
 MIRROR_KEEP=200
 FEED_CAP=16000
+DIALOG_ENTRIES=6
 # MAIN's whole reply when there is nothing to say (AGENTS.md section 9).
 NOOP_REPLY='Captain, shipshape.'
 
@@ -132,13 +143,13 @@ case "${1:-}" in
     # home that does not run the host stays inert.
     fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0
     ;;
-  feed|commit|check|previous) ;;
+  feed|commit|check|previous|dialog) ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
 
 if ! command -v jq >/dev/null 2>&1 || [ ! -d "$STATE" ]; then
-  case "$1" in feed|check) exit 1 ;; esac
+  case "$1" in feed|check|dialog) exit 1 ;; esac
   exit 0
 fi
 
@@ -161,6 +172,8 @@ ENTRIES='if . == "" or endswith("\n") then .[:-1] else error("unterminated mirro
       and (.key | type) == "string" and (.tag == "captain" or .tag == "main") and (.text | type) == "string")
       and (map(.seq) | [.[:-1], .[1:]] | transpose | all(.[0] < .[1]))
     then . else error("invalid mirror entry") end'
+# A session's dialog: its entries without MAIN's no-op replies. Needs --arg noop.
+DIALOG='def dialog($k): map(select(.key == $k and ((.tag == "main" and .text == $noop) | not)));'
 
 # A writer records only the lock-owning primary session's dialog.
 writer_in_scope() {
@@ -310,11 +323,20 @@ case "$1" in
     . "$SCRIPT_DIR/fm-session-lock-lib.sh"
     fm_session_lock_owned_by_self "$STATE" || exit 0
     KEY=$(fm_supervision_host_main_key "$STATE") || exit 0
-    jq -Rrs --arg key "$KEY" --arg noop "$NOOP_REPLY" "$ENTRIES"'
+    jq -Rrs --arg key "$KEY" --arg noop "$NOOP_REPLY" "$DIALOG$ENTRIES"'
       | if length == 0 or any(.key == $key) then empty else . end
       | last.key as $prev
-      | if any(.key == $prev and ((.tag == "main" and .text == $noop) | not)) then $prev else empty end' \
+      | if (dialog($prev) | length) > 0 then $prev else empty end' \
       "$MIRROR" 2>/dev/null || true
+    exit 0
+    ;;
+  dialog)
+    { [ "$#" -eq 2 ] || [ "$#" -eq 3 ]; } && [ -n "$2" ] || usage
+    COUNT=${3:-$DIALOG_ENTRIES}
+    case "$COUNT" in ''|*[!0-9]*|0*) usage ;; esac
+    [ -f "$MIRROR" ] || exit 1
+    jq -Rrs --arg k "$2" --arg noop "$NOOP_REPLY" --argjson n "$COUNT" "$DIALOG$ENTRIES"'
+      | dialog($k)[-$n:][] | "[\(.tag)] \(.text)"' "$MIRROR" 2>/dev/null || exit 1
     exit 0
     ;;
 esac

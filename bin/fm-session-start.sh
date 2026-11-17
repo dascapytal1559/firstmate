@@ -1104,12 +1104,12 @@ fi
 # --- 7b. previous dialog -----------------------------------------------------
 # After the actionable sections and before curated memory. Only a pointer: the
 # captain usually quotes what he answers, and T3 puts the quoted text into his
-# message, so the dialog is read on demand. bin/fm-host-mirror.sh `previous`
-# owns which session came before this one; the pointer's command reads that
-# session's entries from the mirror itself, because `previous` stops answering
-# once this session has mirrored dialog of its own. A compaction's own summary
-# already carries its conversation, whatever session id the harness keeps
-# across it.
+# message, so the dialog is read on demand. bin/fm-host-mirror.sh owns which
+# session came before this one (`previous`) and how its dialog is read
+# (`dialog`); the pointer names that session's key, because `previous` stops
+# answering once this session has mirrored dialog of its own. A compaction's
+# own summary already carries its conversation, whatever session id the
+# harness keeps across it.
 stage previous-dialog
 PREV_KEY=
 if [ "$SESSION_SOURCE" != compact ]; then
@@ -1117,15 +1117,12 @@ if [ "$SESSION_SOURCE" != compact ]; then
 fi
 if [ -n "$PREV_KEY" ]; then
   shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-  PREV_DIALOG="$STATE/.host-mirror.jsonl"
   section "PREVIOUS DIALOG"
-  printf "The session before this one saved its dialog (the captain's prompts and your final replies) in %s.\n" "$PREV_DIALOG"
+  printf "The session before this one saved its dialog (the captain's prompts and your final replies) in %s/.host-mirror.jsonl.\n" "$STATE"
   printf "Read it only when the captain's first message seems to answer or refer to something it does not quote.\n"
-  printf "This prints that session's newest 6 entries, oldest first, without no-op replies; raise the 6 to read further back:\n"
-  # shellcheck disable=SC2016 # the jq program is printed, not expanded
-  printf '  jq -rs --arg k %s %s %s\n' "$(shell_quote "$PREV_KEY")" \
-    "$(shell_quote 'map(select(.key == $k and .text != "Captain, shipshape."))[-6:][] | "[\(.tag)] \(.text)"')" \
-    "$(shell_quote "$PREV_DIALOG")"
+  printf "This prints that session's newest entries, oldest first; add a larger count after it to read further back:\n"
+  printf '  FM_HOME=%s %s dialog %s\n' "$(shell_quote "$FM_HOME")" \
+    "$(shell_quote "$SCRIPT_DIR/fm-host-mirror.sh")" "$(shell_quote "$PREV_KEY")"
 fi
 
 # --- 8. context digest -----------------------------------------------------
