@@ -522,137 +522,61 @@ test_recreated_mirror_continues_past_both_cursors() {
   pass "mirror: a recreated mirror continues past the committed and staged cursors, so a resumed conversation still gets new dialog"
 }
 
-# A fresh main session carries the session before it's newest exchange, and
-# only until it has dialog of its own.
-test_last_carries_the_previous_sessions_exchange() {
-  local home out
-  home=$(make_home last)
-  as_session "$home" "$SAY"'"$MIRROR" last > "$FM_HOME/last.first"; say captain "an ask from long ago"' \
+# `previous` names the main session before this one by the key its entries
+# were recorded under, and only until this session has dialog of its own.
+test_previous_names_the_session_before_this_one() {
+  local home prev
+  home=$(make_home previous)
+  as_session "$home" "$SAY"'"$MIRROR" previous > "$FM_HOME/previous.first"; say captain "an ask from long ago"' \
     || fail "the first session failed"
   as_session "$home" "$SAY"'
     say captain "shall I merge the fix?" p1
     say main "Captain, the fix is ready. Merge it?" p1
   ' || fail "the second session failed"
   as_session "$home" "$SAY"'
-    "$MIRROR" last > "$FM_HOME/last.fresh"; printf "%s\n" "$?" > "$FM_HOME/last.rc"
+    "$MIRROR" previous > "$FM_HOME/previous.fresh"; printf "%s\n" "$?" > "$FM_HOME/previous.rc"
     say captain "yes" p2
-    "$MIRROR" last > "$FM_HOME/last.after"
+    "$MIRROR" previous > "$FM_HOME/previous.after"
   ' || fail "the third session failed"
-  assert_equals "" "$(cat "$home/last.first")" "a session with no earlier session must carry nothing"
-  assert_equals "0" "$(cat "$home/last.rc")" "last must exit 0"
-  out=$(cat "$home/last.fresh")
-  assert_contains "$(head -n 1 "$home/last.fresh")" "the last 2 entries of the session before this one." \
-    "the opening line must count what it carries"
-  assert_contains "$(head -n 1 "$home/last.fresh")" "Recorded up to 20" "the opening line must name when the newest entry was recorded"
-  assert_equals "[captain] shall I merge the fix?
-[main] Captain, the fix is ready. Merge it?" "$(sed '1d' "$home/last.fresh")" \
-    "a fresh session must carry the previous session's newest exchange, oldest first"
-  assert_not_contains "$out" "an ask from long ago" "only the session just before this one may be carried"
-  assert_equals "" "$(cat "$home/last.after")" "a session with dialog of its own must carry nothing"
-  pass "mirror: last carries the previous session's newest exchange into a fresh session, and nothing once it has its own dialog"
+  prev=$(jq -r 'select(.text == "shall I merge the fix?") | .key' "$home/state/.host-mirror.jsonl")
+  [ -n "$prev" ] || fail "the second session's dialog was not recorded"
+  assert_equals "" "$(cat "$home/previous.first")" "a session with no earlier session must name none"
+  assert_equals "0" "$(cat "$home/previous.rc")" "previous must exit 0"
+  assert_equals "$prev" "$(cat "$home/previous.fresh")" "a fresh session must name the session just before it"
+  assert_equals "" "$(cat "$home/previous.after")" "a session with dialog of its own must name none"
+  pass "mirror: previous names the session before a fresh one, and none once it has its own dialog"
 }
 
-test_last_is_bounded() {
-  local home out
-  home=$(make_home last-bound)
-  as_session "$home" "$SAY"'
-    for n in 1 2 3 4 5 6 7 8; do say captain "short ask $n"; done
-  ' || fail "the counted session failed"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.count"' || fail "the counting session failed"
-  assert_contains "$(head -n 1 "$home/last.count")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
-    "the carry must stop at six entries and count the rest"
-  assert_contains "$(sed -n 2p "$home/last.count")" "[captain] short ask 3" "the carry must keep the newest six"
-  assert_contains "$(tail -n 1 "$home/last.count")" "[captain] short ask 8" "the carry must end with the newest entry"
-
-  as_session "$home" "$SAY"'
-    big=$(awk "BEGIN { for (i = 0; i < 3900; i++) printf \"y\" }")
-    say captain "the oldest ask"
-    say captain "HEAD-of-the-question $big TAIL-of-the-question"
-    say main "the answer $big"
-  ' || fail "the bounded session failed"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.big"' || fail "the bounding session failed"
-  out=$(cat "$home/last.big")
-  [ "$(wc -c < "$home/last.big")" -le 6000 ] || fail "the carry must fit 6000 characters, got $(wc -c < "$home/last.big")"
-  assert_contains "$(head -n 1 "$home/last.big")" "the last 2 entries of the session before this one; 1 entry before them not shown." \
-    "a carry that cuts an entry must still count what it left out"
-  assert_contains "$out" "[main] the answer yyy" "the newest entry must be carried whole"
-  assert_contains "$out" "[captain] HEAD-of-the-question" "a cut entry must keep its head"
-  assert_contains "$out" "TAIL-of-the-question" "a cut entry must keep its tail"
-  assert_contains "$out" "characters omitted]" "a cut entry must say it was cut"
-  assert_not_contains "$out" "the oldest ask" "an entry with no room left must not be carried"
-  pass "mirror: last carries at most six entries in 6000 characters, newest kept, cutting one entry head and tail when only part fits"
-}
-
-# No-op replies take no slot, and the captain's newest message with MAIN's reply
-# to it is carried even when later entries would have pushed it out.
-test_last_skips_no_op_replies_and_keeps_the_last_exchange() {
-  local home out
-  home=$(make_home last-noop)
-  as_session "$home" "$SAY"'
-    say captain "which colour for the badge?"
-    say main "Captain, the badge can be teal or amber. Which one?"
-    say captain "ping 1"
-    say main "Captain, shipshape."
-    say captain "ping 2"
-    say main "Captain, shipshape."
-    say main "Captain, shipshape."
-    say main "Captain, shipshape."
-    say main "Captain, shipshape."
-    say main "Captain, shipshape."
-    say main "Captain, shipshape."
-  ' || fail "the noisy session failed"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.noop"' || fail "the fresh session failed"
-  out=$(cat "$home/last.noop")
-  assert_not_contains "$out" "shipshape" "a no-op reply must never be carried"
-  assert_contains "$(head -n 1 "$home/last.noop")" "the last 4 entries of the session before this one." \
-    "the opening line must count only real entries, and name none as left out"
-  assert_contains "$out" "[main] Captain, the badge can be teal or amber. Which one?" "the real reply must survive the no-op replies"
-  assert_equals "[captain] which colour for the badge?
-[main] Captain, the badge can be teal or amber. Which one?
-[captain] ping 1
-[captain] ping 2" "$(sed '1d' "$home/last.noop")" "the carry must be oldest first with no no-op reply in it"
-
-  # The newest captain message and its reply are kept even when six newer
-  # entries would otherwise push them out.
-  as_session "$home" "$SAY"'
-    say captain "the question that matters"
-    say main "Captain, here is the answer that matters."
-    for n in 1 2 3 4 5 6; do say main "later note $n"; done
-  ' || fail "the crowded session failed"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.crowded"' || fail "the second fresh session failed"
-  out=$(cat "$home/last.crowded")
-  assert_contains "$(head -n 1 "$home/last.crowded")" "the last 6 entries of the session before this one; 2 entries before them not shown." \
-    "the carry must stay at six entries"
-  assert_equals "[captain] the question that matters
-[main] Captain, here is the answer that matters.
-[main] later note 3
-[main] later note 4
-[main] later note 5
-[main] later note 6" "$(sed '1d' "$home/last.crowded")" "the newest captain message and its reply must be carried, then the newest others"
-
-  # A session of nothing but no-op replies carries nothing.
-  as_session "$home" "$SAY"'say main "Captain, shipshape."' || fail "the quiet session failed"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.quiet"' || fail "the third fresh session failed"
-  assert_equals "" "$(cat "$home/last.quiet")" "a session with only no-op replies must carry nothing"
-  pass "mirror: last skips no-op replies and always carries the captain's newest message and the reply to it"
-}
-
-test_last_carries_nothing_without_sound_records() {
+# A session that recorded nothing but no-op replies has no dialog to point at.
+test_previous_skips_a_session_of_no_op_replies() {
   local home
-  home=$(make_home last-nothing)
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.missing"' || fail "last failed without a mirror"
-  assert_equals "" "$(cat "$home/last.missing")" "a missing mirror must carry nothing"
+  home=$(make_home previous-noop)
+  as_session "$home" "$SAY"'say main "Captain, shipshape."; say main "Captain, shipshape."' || fail "the quiet session failed"
+  as_session "$home" '"$MIRROR" previous > "$FM_HOME/previous.quiet"' || fail "the fresh session failed"
+  assert_equals "" "$(cat "$home/previous.quiet")" "a session with only no-op replies must be named by none"
+  as_session "$home" "$SAY"'say main "Captain, shipshape."; say captain "ping"' || fail "the asked session failed"
+  as_session "$home" '"$MIRROR" previous > "$FM_HOME/previous.asked"' || fail "the second fresh session failed"
+  [ -n "$(cat "$home/previous.asked")" ] || fail "a session with a captain entry must be named"
+  pass "mirror: previous names no session that recorded only no-op replies"
+}
+
+test_previous_names_nothing_without_sound_records() {
+  local home
+  home=$(make_home previous-nothing)
+  as_session "$home" '"$MIRROR" previous > "$FM_HOME/previous.missing"' || fail "previous failed without a mirror"
+  assert_equals "" "$(cat "$home/previous.missing")" "a missing mirror must name nothing"
   as_session "$home" "$SAY"'say captain "an earlier ask"' || fail "the earlier session failed"
   printf '%s\n' "$(cat "$home/state/.host-mirror.jsonl")" '{"seq":0}' > "$home/state/.host-mirror.jsonl"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.invalid"' || fail "last failed on an invalid mirror"
-  assert_equals "" "$(cat "$home/last.invalid")" "an invalid mirror must carry nothing"
+  as_session "$home" '"$MIRROR" previous > "$FM_HOME/previous.invalid"' || fail "previous failed on an invalid mirror"
+  assert_equals "" "$(cat "$home/previous.invalid")" "an invalid mirror must name nothing"
   sed -i.bak '$d' "$home/state/.host-mirror.jsonl"
   printf '%s\n' "$$" > "$home/state/.lock"
-  expect_code 0 "$(FM_HOME="$home" "$MIRROR" last > "$home/last.unowned"; echo $?)" "last must exit 0 without the lock"
-  assert_equals "" "$(cat "$home/last.unowned")" "a session that does not hold the fleet lock must carry nothing"
-  as_session "$home" '"$MIRROR" last > "$FM_HOME/last.sound"' || fail "last failed on a sound mirror"
-  assert_contains "$(cat "$home/last.sound")" "[captain] an earlier ask" "the repaired mirror must carry the earlier exchange"
-  pass "mirror: last carries nothing from a missing or invalid mirror, or into a session without the fleet lock"
+  expect_code 0 "$(FM_HOME="$home" "$MIRROR" previous > "$home/previous.unowned"; echo $?)" "previous must exit 0 without the lock"
+  assert_equals "" "$(cat "$home/previous.unowned")" "a session that does not hold the fleet lock must name nothing"
+  as_session "$home" '"$MIRROR" previous > "$FM_HOME/previous.sound"' || fail "previous failed on a sound mirror"
+  assert_equals "$(jq -r .key "$home/state/.host-mirror.jsonl")" "$(cat "$home/previous.sound")" \
+    "the repaired mirror must name the earlier session"
+  pass "mirror: previous names nothing from a missing or invalid mirror, or into a session without the fleet lock"
 }
 
 # The host runs the attended posture only beside a primary whose writers were
@@ -691,7 +615,6 @@ test_feed_bound_includes_its_omitted_note
 test_recycled_lock_pid_is_a_new_main_session
 test_feed_refuses_unfeedable_sequences_and_unterminated_records
 test_recreated_mirror_continues_past_both_cursors
-test_last_carries_the_previous_sessions_exchange
-test_last_is_bounded
-test_last_skips_no_op_replies_and_keeps_the_last_exchange
-test_last_carries_nothing_without_sound_records
+test_previous_names_the_session_before_this_one
+test_previous_skips_a_session_of_no_op_replies
+test_previous_names_nothing_without_sound_records

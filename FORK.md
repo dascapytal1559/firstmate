@@ -236,7 +236,7 @@ Details: [`fm-usage-labels-check.sh`](bin/fm-usage-labels-check.sh).
 
 A fresh FirstMate session, after an automatic clear or the captain's own `/clear`, starts with no earlier context.
 Upstream already records the captain's prompts and FirstMate's final replies for its supervision host ([#5707](https://github.com/kunchenguid/firstmate/pull/5707)), and treats a restart as a non-event; that dialog record is upstream's, and the pointer below is this fork's.
-The fork's session start adds one short `PREVIOUS DIALOG` section that names that saved dialog and the command that prints it, and says to read it only when the captain's first message seems to answer or refer to something it does not quote.
+The fork's session start adds one short `PREVIOUS DIALOG` section that names that saved dialog and a command that prints its newest entries, and says to read it only when the captain's first message seems to answer or refer to something it does not quote.
 It does not carry the dialog itself: the captain usually replies by quoting a message, and T3 Code puts the quoted text into his message, so the dialog is rarely needed, and carrying it cost about 1,900 tokens at every session start.
 It prints nothing when no earlier session was recorded, so it needs a primary whose dialog upstream records, Claude or Cursor, with the supervision host on.
 Approved by the captain on 2026-11-15, with the automatic clearing above, and changed from carrying the last exchange to this pointer on 2026-11-17 at his request.

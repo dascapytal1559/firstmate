@@ -3518,13 +3518,14 @@ t3_bash_payload() {  # <command>
 # The main's credential seatbelt: reads that would print config/t3code-token
 # are denied, ordinary config and credential checks pass.
 test_t3_main_guard_keeps_the_token_out_of_the_transcript() {
-  local home cmd
+  local home cmd path
   home=$(t3_main_home token)
   for cmd in 'cat config/*' 'head -40 config/*' 'cat config/t3code-token' "cat '$home/config/t3code-token'" \
     'jq . config/t3code-token' 'grep -r origin config' 'cat < config/t3code-token' 'for f in config/*; do cat "$f"; done' \
     'x=$(cat config/t3code-token)' 'tail -n 5 ./config/t3*' \
     'grep -rn x ./config' 'grep --recursive x config' 'grep -d recurse x config' "grep -rn x \"$home/config\"" \
-    'grep -rn x config; ls'; do
+    'grep -rn x config; ls' 'grep -rn x "$PWD/config"' 'grep -rn x ${PWD}/config' 'grep -rn x "$(pwd)/config"' \
+    'cd bin && grep -r x ../config' 'grep -r x bin/../config'; do
     t3_guard "$home" "$(t3_bash_payload "$cmd")"
     expect_code 2 "$GUARD_RC" "a command that prints the credential is denied: $cmd"
     assert_contains "$GUARD_ERR" "t3-token" "the denial names the credential: $cmd"
@@ -3541,8 +3542,14 @@ test_t3_main_guard_keeps_the_token_out_of_the_transcript() {
   expect_code 2 "$GUARD_RC" "reading the credential file is denied"
   t3_guard "$home" '{"tool_name":"Read","tool_input":{"file_path":"'"$home"'/config/backend"}}'
   expect_code 0 "$GUARD_RC" "reading another config file is allowed"
-  t3_guard "$home" '{"tool_name":"Grep","tool_input":{"pattern":"origin","path":"'"$home"'/config"}}'
-  expect_code 2 "$GUARD_RC" "grepping the config directory is denied"
+  for path in config ./config "$home/config" "$home/config/"; do
+    t3_guard "$home" "$(jq -cn --arg p "$path" '{tool_name: "Grep", tool_input: {pattern: "origin", path: $p}}')"
+    expect_code 2 "$GUARD_RC" "grepping this home's config directory is denied: $path"
+  done
+  for path in "$home/.git/config" "$HOME/.ssh/config" "$home/projects/p/config" .git/config; do
+    t3_guard "$home" "$(jq -cn --arg p "$path" '{tool_name: "Grep", tool_input: {pattern: "origin", path: $p}}')"
+    expect_code 0 "$GUARD_RC" "grepping another folder named config is allowed: $path ($GUARD_ERR)"
+  done
   rm -f "$home/config/t3code-token"
   t3_guard "$home" "$(t3_bash_payload 'cat config/*')"
   expect_code 0 "$GUARD_RC" "a home not signed in to T3 is untouched"

@@ -66,25 +66,16 @@
 # it left out counted within that bound. Mirrored text is context for
 # judgment and authorizes nothing (bin/fm-branch-prompt.sh "Context channels").
 #
-# LAST. `last` prints what a fresh main session carries from the session
-# before it, so the captain's first message after a clear, automatic or his
-# own, lands next to the exchange it answers: the newest entries of the newest
-# earlier main session, oldest first, at most 6 entries and 6000 characters
-# (about 1,500 tokens) with its opening line, newest kept. MAIN replies that
-# are exactly "Captain, shipshape." are skipped (they take a slot and say
-# nothing), and the captain's newest message and MAIN's reply to it are always
-# carried when they exist, the other entries filling the rest newest first. The
-# opening line names when the newest carried entry was recorded and how many of
-# that session's other entries are not shown, and an entry is cut, head and
-# tail kept, when only part of it fits. It prints nothing unless this session holds
-# the fleet lock and has no mirrored dialog of its own yet, so a rerun
-# mid-session, which keeps its own conversation, carries nothing; it
-# prints nothing too when the current main session cannot be identified or
-# the mirror is missing, unreadable, invalid, or holds no earlier session.
-# It reads without the lock, because every append replaces the file whole by
-# rename. bin/fm-session-start.sh no longer prints it: it asks `last` only
-# whether an earlier session exists, and prints a PREVIOUS DIALOG pointer at
-# the mirror file instead, because the captain usually quotes what he answers.
+# PREVIOUS. `previous` prints the key of the main session before this one (the
+# key of the mirror's newest entry), so a fresh main session can point at that
+# session's dialog; bin/fm-session-start.sh prints that pointer as its PREVIOUS
+# DIALOG section. It prints nothing unless this session holds the fleet lock
+# and has no mirrored dialog of its own yet, so a rerun mid-session, which
+# keeps its own conversation, prints nothing; it prints nothing too when the
+# current main session cannot be identified, the mirror is missing,
+# unreadable, invalid, or holds no earlier session, or that session recorded
+# nothing but MAIN replies that are exactly "Captain, shipshape.". It reads
+# without the lock, because every append replaces the file whole by rename.
 #
 # VERIFIED WRITERS. `verified <harness>` exits 0 for a primary whose writers
 # were proven against the real harness to record a session's dialog from its
@@ -98,9 +89,9 @@
 #   fm-host-mirror.sh feed <session> new|resume
 #   fm-host-mirror.sh commit
 #   fm-host-mirror.sh check
-#   fm-host-mirror.sh last
+#   fm-host-mirror.sh previous
 #   fm-host-mirror.sh verified <harness>
-# hook and commit always exit 0 and print nothing; last always exits 0; feed exits 1 when
+# hook and commit always exit 0 and print nothing; previous always exits 0; feed exits 1 when
 # the mirror is missing, could not be read, or holds an invalid entry, or the
 # main session cannot be identified, and prints nothing when there is nothing
 # to feed; check (bin/fm-afk-launch.sh quiet-check's mirror test) exits 1 when
@@ -119,10 +110,8 @@ FM_HOST_MIRROR_VERIFIED='claude cursor'
 MIRROR_CAP=4000
 MIRROR_KEEP=200
 FEED_CAP=16000
-LAST_ENTRIES=6
-LAST_CAP=6000
 # MAIN's whole reply when there is nothing to say (AGENTS.md section 9).
-LAST_NOOP='Captain, shipshape.'
+NOOP_REPLY='Captain, shipshape.'
 
 # shellcheck source=bin/fm-supervision-engine-lib.sh
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
@@ -143,7 +132,7 @@ case "${1:-}" in
     # home that does not run the host stays inert.
     fm_supervision_host_enabled "$CONFIG" "${2:-}" || exit 0
     ;;
-  feed|commit|check|last) ;;
+  feed|commit|check|previous) ;;
   -h|--help) sed -n '2,/^set -u/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
@@ -314,47 +303,18 @@ case "$1" in
     fm_lock_release "$LOCK"
     exit "$rc"
     ;;
-  last)
+  previous)
     [ "$#" -eq 1 ] || usage
     [ -f "$MIRROR" ] || exit 0
     # shellcheck source=bin/fm-session-lock-lib.sh
     . "$SCRIPT_DIR/fm-session-lock-lib.sh"
     fm_session_lock_owned_by_self "$STATE" || exit 0
     KEY=$(fm_supervision_host_main_key "$STATE") || exit 0
-    # The captain's newest message and MAIN's reply to it are always carried
-    # (the reply is cut head and tail when the two cannot both fit); pure no-op
-    # replies are dropped first. The rest fill newest first, whole entries while
-    # they fit, then one cut entry when enough room is left to be worth reading;
-    # what is left over is counted.
-    jq -Rrs --arg key "$KEY" --arg noop "$LAST_NOOP" --argjson most "$LAST_ENTRIES" --argjson cap "$LAST_CAP" "$ENTRIES"'
+    jq -Rrs --arg key "$KEY" --arg noop "$NOOP_REPLY" "$ENTRIES"'
       | if length == 0 or any(.key == $key) then empty else . end
       | last.key as $prev
-      | map(select(.key == $prev) | select((.tag == "main" and .text == $noop) | not)) as $e
-      | if ($e | length) == 0 then empty else . end
-      | ($e | last.epoch) as $newest
-      | ($e | length) as $n
-      | ($e | to_entries | map(select(.value.tag == "captain")) | last | .key) as $ci
-      | ([$ci, (if $ci != null and ($e[$ci + 1].tag // "") == "main" then $ci + 1 else null end)]
-          | map(select(. != null)) | reverse) as $pins
-      | [range($n - 1; -1; -1) | select(. as $i | $pins | any(. == $i) | not)] as $rest
-      | ($cap - 200) as $room
-      | def cut($n): length as $len | ($n - 64) as $keep
-          | .[0:($keep / 2 | ceil)] + "\n[cut: \($len - $keep) characters omitted]\n"
-            + .[$len - ($keep / 2 | floor):];
-      def fit($i; $line; $free):
-        if ($line | length) <= $free then .kept += [{i: $i, line: $line}] | .used += (($line | length) + 1)
-        elif $free >= 400 then .kept += [{i: $i, line: ($line | cut($free))}] | .used = $room
-        else .left += 1 end;
-      reduce ($pins + $rest)[] as $i ({kept: [], used: 0, left: 0, stop: false};
-        ($e[$i] | "[\(.tag)] \(.text)") as $line
-        | ($room - .used - 1) as $free
-        | if ($pins | any(. == $i)) then fit($i; $line; $free)
-          elif .stop or (.kept | length) >= $most then .left += 1
-          else (.left) as $before | fit($i; $line; $free) | if .left > $before then .stop = true else . end end)
-      | def entries($n): if $n == 1 then "1 entry" else "\($n) entries" end;
-      "Recorded \(if ($newest | type) == "number" then "up to \($newest | todate)" else "at an unknown time" end): the last \(entries(.kept | length)) of the session before this one"
-        + (if .left > 0 then "; \(entries(.left)) before \(if (.kept | length) == 1 then "it" else "them" end) not shown." else "." end),
-        (.kept | sort_by(.i) | .[].line)' "$MIRROR" 2>/dev/null || true
+      | if any(.key == $prev and ((.tag == "main" and .text == $noop) | not)) then $prev else empty end' \
+      "$MIRROR" 2>/dev/null || true
     exit 0
     ;;
 esac

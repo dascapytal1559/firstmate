@@ -3,8 +3,8 @@
 # T3 Code (docs/t3code-backend.md "Sign-in"), inert outside such a home.
 #
 # config/t3code-token is a full-access T3 credential that a T3 thread's
-# transcript would keep. A Read or Grep naming that file, a Grep over the
-# config directory, and a Bash command that names the file (except a lone ls,
+# transcript would keep. A Read or Grep naming that file, a Grep over this
+# home's config directory, and a Bash command that names the file (except a lone ls,
 # stat, test, chmod, rm, or file), or that hands a glob over config/ to a
 # command that prints file contents (cat, head, tail, grep, and the like), is
 # denied with the reason. This is a guard against an agent's mistake, not a
@@ -64,7 +64,7 @@ deny() {  # <code> <reason>
 TOKEN_REASON="config/t3code-token is the T3 credential; printing it would keep a full-access credential in this thread's transcript. Read the config files you need by their own names, and check the credential with bin/fm-t3-mcp.mjs status, which never prints it."
 is_config_dir() {  # <path>
   case "${1%/}" in
-    config|./config|"$CONFIG"|"$FM_HOME/config"|*/config) return 0 ;;
+    config|./config|"$CONFIG"|"$FM_HOME/config") return 0 ;;
   esac
   return 1
 }
@@ -108,11 +108,13 @@ if printf '%s' "$PLAIN" | grep -Eq "$READER_RE"; then
   fi
   if printf '%s' "$PLAIN" | grep -Eq '(^|[[:space:];|&(`])(grep|egrep|fgrep)([[:space:]][^;|&]*)?[[:space:]](-[[:alnum:]]*[rR][[:alnum:]]*|--recursive|--dereference-recursive|--directories=recurse|-d[[:space:]]*recurse)([[:space:]]|$)'; then
     # A recursive grep is denied only over this home's own config folder, named
-    # by a spelling of the home (the home is derived here, never hard-coded);
-    # git's own "config" subcommand and other folders named config pass.
+    # by a spelling of the home or of the working directory (the home is
+    # derived here, never hard-coded), or through a parent step this guard
+    # cannot resolve; git's own "config" subcommand and other folders named
+    # config pass.
     NO_GIT_CONFIG=$(printf '%s' "$PLAIN" | sed -E 's/(^|[^[:alnum:]_.-])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+config([[:space:]]|$)/\1 /g')
     HOME_RE=$(printf '%s' "$FM_HOME" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')
-    PREFIX_RE="\\./|\\\$\\{?FM_HOME\\}?/|$HOME_RE/"
+    PREFIX_RE="\\./|([^[:space:]]*/)?\\.\\./|\\\$\\{?(FM_HOME|PWD)\\}?/|\\\$\\(pwd\\)/|$HOME_RE/"
     case "$FM_HOME" in "${HOME:-/nonexistent}"/*) PREFIX_RE="$PREFIX_RE|(~|\\\$\\{?HOME\\}?)/$(printf '%s' "${FM_HOME#"$HOME"/}" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')/" ;; esac
     if printf '%s' "$NO_GIT_CONFIG" | grep -Eq "(^|[[:space:]=])($PREFIX_RE)?config/?([[:space:];|&)]|\$)"; then
       deny t3-token "$TOKEN_REASON"

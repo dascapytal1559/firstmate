@@ -64,11 +64,12 @@
 #                       can itself reach the digest's runtime bound.
 #   7. network checks - the result of the deferred network stage started back at
 #                       step 1, harvested WITHOUT waiting for it.
-#   7b. previous dialog - one line pointing at where the session before this
-#                       one's dialog is saved (the dialog mirror), for a first
-#                       captain message that answers or cites something it
-#                       does not quote. Never the dialog itself. Present only
-#                       when bin/fm-host-mirror.sh `last` finds an earlier
+#   7b. previous dialog - a pointer at where the session before this one's
+#                       dialog is saved (the dialog mirror), with a command
+#                       that prints its newest entries, for a first captain
+#                       message that answers or cites something it does not
+#                       quote. Never the dialog itself. Present only when
+#                       bin/fm-host-mirror.sh `previous` names an earlier
 #                       session (that command owns when there is one), and
 #                       absent after a compaction, whose summary carries its
 #                       own.
@@ -1103,24 +1104,28 @@ fi
 # --- 7b. previous dialog -----------------------------------------------------
 # After the actionable sections and before curated memory. Only a pointer: the
 # captain usually quotes what he answers, and T3 puts the quoted text into his
-# message, so the dialog is read on demand. `last` is kept as the one owner of
-# when an earlier session exists (it prints nothing mid-session, once this
-# session has mirrored dialog of its own), so it is asked here at session start
-# and its text discarded; the pointer's own command reads the mirror directly
-# because `last` could no longer answer by the time it is needed. A compaction's
-# own summary already carries its conversation, whatever session id the harness
-# keeps across it.
+# message, so the dialog is read on demand. bin/fm-host-mirror.sh `previous`
+# owns which session came before this one; the pointer's command reads that
+# session's entries from the mirror itself, because `previous` stops answering
+# once this session has mirrored dialog of its own. A compaction's own summary
+# already carries its conversation, whatever session id the harness keeps
+# across it.
 stage previous-dialog
 PREV_KEY=
-if [ "$SESSION_SOURCE" != compact ] \
-  && [ -n "$("$SCRIPT_DIR/fm-host-mirror.sh" last 2>/dev/null)" ]; then
-  PREV_KEY=$(jq -rs 'last.key // empty' "$STATE/.host-mirror.jsonl" 2>/dev/null) || PREV_KEY=
+if [ "$SESSION_SOURCE" != compact ]; then
+  PREV_KEY=$("$SCRIPT_DIR/fm-host-mirror.sh" previous 2>/dev/null) || PREV_KEY=
 fi
 if [ -n "$PREV_KEY" ]; then
+  shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  PREV_DIALOG="$STATE/.host-mirror.jsonl"
   section "PREVIOUS DIALOG"
-  printf 'The session before this one saved its dialog (the captain'"'"'s prompts and your final replies) in %s/.host-mirror.jsonl.\n' "$STATE"
-  printf 'Read it only when the captain'"'"'s first message seems to answer or refer to something it does not quote:\n'
-  printf '  jq -r '"'"'select(.key=="%s") | "[\(.tag)] \(.text)"'"'"' %s/.host-mirror.jsonl\n' "$PREV_KEY" "$STATE"
+  printf "The session before this one saved its dialog (the captain's prompts and your final replies) in %s.\n" "$PREV_DIALOG"
+  printf "Read it only when the captain's first message seems to answer or refer to something it does not quote.\n"
+  printf "This prints that session's newest 6 entries, oldest first, without no-op replies; raise the 6 to read further back:\n"
+  # shellcheck disable=SC2016 # the jq program is printed, not expanded
+  printf '  jq -rs --arg k %s %s %s\n' "$(shell_quote "$PREV_KEY")" \
+    "$(shell_quote 'map(select(.key == $k and .text != "Captain, shipshape."))[-6:][] | "[\(.tag)] \(.text)"')" \
+    "$(shell_quote "$PREV_DIALOG")"
 fi
 
 # --- 8. context digest -----------------------------------------------------
