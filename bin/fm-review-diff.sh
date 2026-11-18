@@ -31,9 +31,16 @@
 # neither PR head can be resolved, fall back to the local branch with a warning.
 # A GitLab merge request and a Gerrit change expose no comparable ref and record
 # no pr_head, so a task recording one always takes that warning path;
-# docs/architecture.md owns that fallback. Without pr=, compare the task's
-# immutable ship branch recorded in state/<id>.meta ("fm/<id>" for records
-# created before that field existed), or the worktree's checked-out branch when
+# docs/architecture.md owns that fallback. A local-only task without pr=
+# compares the commit its newest ready report names, which is the commit
+# bin/fm-merge-local.sh lands, read through the same bin/fm-dod-lib.sh calls,
+# and counts the later commits on its ship branch that the review leaves out
+# because they do not land. A task with no usable ready report, or one whose
+# reported commit is not on the ship branch, has its branch tip reviewed under a
+# warning that nothing can land until a ready report names a commit on it.
+# Otherwise, without pr=, compare the task's immutable ship branch recorded in
+# state/<id>.meta ("fm/<id>" for records created before that field existed),
+# or the worktree's checked-out branch when
 # that branch does not exist in the worktree. A recorded branch that is not a
 # valid git branch name is refused instead of taking that fallback, the same
 # refusal fm-merge-local.sh applies, so a corrupt meta record can never turn a
@@ -48,6 +55,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 "$FM_ROOT/bin/fm-guard.sh" || true
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
 
 usage() {
   echo "usage: fm-review-diff.sh <task-id> [--stat]" >&2
@@ -98,16 +107,16 @@ RECORDED_BASE=$(grep '^base_branch=' "$META" | cut -d= -f2- || true)
 DEFAULT=$RECORDED_BASE
 [ -n "$DEFAULT" ] || DEFAULT=$(default_branch) || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
-BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
-[ -n "$BRANCH" ] || BRANCH="fm/$ID"
-if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
-  echo "error: task $ID has an invalid recorded ship branch '$BRANCH'" >&2
+SHIP_BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
+[ -n "$SHIP_BRANCH" ] || SHIP_BRANCH="fm/$ID"
+if ! git check-ref-format --branch "$SHIP_BRANCH" >/dev/null 2>&1; then
+  echo "error: task $ID has an invalid recorded ship branch '$SHIP_BRANCH'" >&2
   exit 1
 fi
+BRANCH=$SHIP_BRANCH
 if ! git -C "$WT" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null; then
-  WANT=$BRANCH
   BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-  [ -n "$BRANCH" ] || { echo "error: ship branch $WANT does not exist and worktree $WT is detached" >&2; exit 1; }
+  [ -n "$BRANCH" ] || { echo "error: ship branch $SHIP_BRANCH does not exist and worktree $WT is detached" >&2; exit 1; }
   git -C "$WT" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null || { echo "error: branch $BRANCH does not exist in $WT" >&2; exit 1; }
 fi
 
@@ -165,12 +174,25 @@ resolve_pr_head() {
 
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
 PR_HEAD_RECORDED=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || true)
+MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
 COMPARE_REF=$BRANCH
+LATER_COMMITS=
 if [ -n "$PR_URL" ]; then
   if PR_HEAD=$(resolve_pr_head "$PR_URL" "$PR_HEAD_RECORDED"); then
     COMPARE_REF=$PR_HEAD
   else
     echo "warning: PR head unavailable; diff may lag the open PR (using local branch $BRANCH)" >&2
+  fi
+elif [ "$MODE" = local-only ]; then
+  if ! READY_LINE=$(fm_dod_local_newest_ready "$STATE/$ID.status"); then
+    echo "warning: task $ID has no ready report; reviewing the tip of $BRANCH, which cannot land until a ready report names its commit" >&2
+  elif ! READY_HEAD=$(fm_dod_local_ready_head "$PROJ" "$READY_LINE" "$SHIP_BRANCH"); then
+    echo "warning: $READY_HEAD; reviewing the tip of $BRANCH, which cannot land until a ready report names its commit" >&2
+  elif ! git -C "$PROJ" merge-base --is-ancestor "$READY_HEAD" "refs/heads/$SHIP_BRANCH" >/dev/null 2>&1; then
+    echo "warning: the newest ready report of task $ID names $READY_HEAD, which is not on branch $SHIP_BRANCH; reviewing the tip of $BRANCH, which cannot land until a fresh ready report names its commit" >&2
+  else
+    COMPARE_REF=$READY_HEAD
+    LATER_COMMITS=$(git -C "$PROJ" rev-list --count "$READY_HEAD..refs/heads/$SHIP_BRANCH")
   fi
 fi
 
@@ -220,9 +242,6 @@ if git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
   git -C "$WT" fetch origin "+refs/heads/$DEFAULT:refs/remotes/origin/$DEFAULT" --quiet
   BASE="origin/$DEFAULT"
   if [ -z "$RECORDED_BASE" ] && [ -e "$CONFIG/spawn-base-primary-checkout" ]; then
-    # shellcheck source=bin/fm-dod-lib.sh
-    . "$SCRIPT_DIR/fm-dod-lib.sh"
-    MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
     BASE=$(resolve_review_base)
   fi
 else
@@ -233,6 +252,11 @@ git -C "$WT" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || { echo "e
 git -C "$WT" rev-parse --verify --quiet "$COMPARE_REF^{commit}" >/dev/null || { echo "error: compare ref $COMPARE_REF does not resolve in $WT" >&2; exit 1; }
 
 echo "diff base: $BASE"
+if [ -n "$LATER_COMMITS" ]; then
+  echo "diff head: $COMPARE_REF, the commit the newest ready report names, which is what lands"
+  [ "$LATER_COMMITS" = 0 ] \
+    || echo "left out: $LATER_COMMITS later commit(s) on $SHIP_BRANCH that no ready report names; they do not land"
+fi
 if git -C "$WT" diff --quiet "$BASE...$COMPARE_REF" --; then
   echo "no changes vs $BASE"
   exit 0

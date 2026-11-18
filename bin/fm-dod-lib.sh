@@ -889,9 +889,12 @@ fm_dod_local_ready_head() {  # <project> <line> [<task-branch>]
       ;;
   esac
   case "$branch" in *[[:space:]]*) branch='' ;; esac
-  if [ -z "$branch" ] || [ "${#id}" -lt 7 ] || [ "${#id}" -gt 64 ] \
-    || { [ -n "$want" ] && [ "$branch" != "$want" ]; }; then
+  if [ -z "$branch" ] || [ "${#id}" -lt 7 ] || [ "${#id}" -gt 64 ]; then
     printf '%s\n' "the ready report does not name its commit; append \`done [at=<epoch>]: ready in branch ${want:-<branch>} at <commit id>\`, where the commit id is what \`git rev-parse HEAD\` prints on the committed branch"
+    return 1
+  fi
+  if [ -n "$want" ] && [ "$branch" != "$want" ]; then
+    printf '%s\n' "the ready report names branch $branch, not the task's branch $want; append \`done [at=<epoch>]: ready in branch $want at <commit id>\`, where the commit id is what \`git rev-parse HEAD\` prints on $want"
     return 1
   fi
   sha=$(git -C "$project" rev-parse --verify --quiet "$id^{commit}" 2>/dev/null) || sha=''

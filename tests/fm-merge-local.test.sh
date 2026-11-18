@@ -223,7 +223,13 @@ test_reports_that_name_no_commit_refuse() {
       old-form|no-report-words|prose-first|other-branch|too-short|expression)
         # shellcheck disable=SC2016 # The backticks are part of the line the refusal quotes.
         assert_contains "$REFUSAL" 'append `done [at=<epoch>]: ready in branch fm/local-task at <commit id>`' \
-          "$label: the refusal did not give the exact line to write" ;;
+          "$label: the refusal did not give the exact line to write"
+        if [ "$label" = other-branch ]; then
+          assert_contains "$REFUSAL" "names branch fm/another-task, not the task's branch fm/local-task" \
+            "$label: the refusal did not say the report names the wrong branch"
+        else
+          assert_not_contains "$REFUSAL" 'names branch' "$label: a report naming no commit was blamed on its branch"
+        fi ;;
       *) assert_contains "$REFUSAL" 'not one commit in the project clone' "$label: the refusal did not explain the id" ;;
     esac
   done 3<<'CASES'
