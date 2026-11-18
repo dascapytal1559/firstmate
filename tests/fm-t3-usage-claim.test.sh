@@ -138,11 +138,12 @@ test_wake_tries_candidates_until_one_binds() {
   meta_with_thread unbound ''
   meta_with_thread lost t-lost
   meta_with_thread tk t-tk
-  as_agent "$CLAIM" wake --task gone --task unbound --task lost --task tk
+  meta_with_thread lost-again t-lost
+  as_agent "$CLAIM" wake --task gone --task unbound --task lost --task lost --task lost-again --task tk
   expect_code 0 "$RC" "a wake claim exits 0: $ERR"
   assert_equals phone "$(claim_of run:coord:run-c device)" "the turn counts with the first named task T3 binds: $(claims run:coord:run-c)"
   assert_equals '{"threadId":"t-tk"}' "$(claim_of run:coord:run-c fromThread)" "named by that task's own thread, with no time"
-  assert_equals 2 "$(t3_fake_calls t3_usage_claim | awk 'END { print NR }')" "a task with no thread is skipped, and one T3 refuses gives the next its turn"
+  assert_equals 2 "$(t3_fake_calls t3_usage_claim | awk 'END { print NR }')" "a task with no thread is skipped, one T3 refuses gives the next its turn, and a thread already refused is not asked again"
   assert_equals "" "$(t3_fake_calls t3_usage_claim | head -n 1 | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).runId ?? ""))')" "the turn is named by the thread alone"
   [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "a wake that names its turn logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
   as_agent "$CLAIM" wake --device computer

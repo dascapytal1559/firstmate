@@ -23,7 +23,8 @@
 #     any claim on that turn, and a later drain in the same turn leaves it.
 #   fm-t3-usage-claim.sh wake [--task <id> | --from-thread <reference> | --caused-by <cause-json> | --device phone|computer]...
 #     The wake drain's claim on the current turn. It tries the candidates
-#     that name something, in order, until T3 binds one: a task's own thread
+#     that name something, in order and each distinct value once, until T3
+#     binds one: a task's own thread
 #     (where that task counts now), a reference given, a cause given (one a
 #     note or follow-up recorded before references existed, passed on
 #     unchanged), or a device given, such as the phone for a voice journal's
@@ -162,8 +163,8 @@ verb_turn() {
 }
 
 verb_wake() {
-  local -a candidates=()
-  local c value rc refused=''
+  local -a candidates=() tried=()
+  local c t value rc refused=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --task) [ "$#" -ge 2 ] || usage; candidates+=("task:$2"); shift 2 ;;
@@ -177,6 +178,10 @@ verb_wake() {
   for c in "${candidates[@]}"; do
     value=$(candidate_value "$c")
     [ -n "$value" ] || continue
+    for t in ${tried[@]+"${tried[@]}"}; do
+      [ "$t" != "$value" ] || continue 2
+    done
+    tried+=("$value")
     rc=0
     claim_value "$value" --if-unclaimed || rc=$?
     case "$rc" in
