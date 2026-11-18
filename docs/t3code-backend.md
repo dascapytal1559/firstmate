@@ -138,7 +138,7 @@ A launch reads the thread back and refuses one that did not bind the cause; a ca
 ### Usage claims
 
 Some work has no prompt T3 can follow: FirstMate's own wake turns run outside any traced prompt.
-Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Usage by origin" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
+Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Phone vs computer split" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
 
 - **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
 - **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.

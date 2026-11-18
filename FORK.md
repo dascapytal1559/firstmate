@@ -46,7 +46,7 @@ A model and an effort are checked against T3 Code's own list for that agent befo
 Details: [worker environment](docs/t3code-backend.md#worker-environment-and-channel-statement) and [provider instances and models](docs/t3code-backend.md#provider-instances-and-models).
 
 Upstream: partly ([#7518](https://github.com/kunchenguid/firstmate/pull/7518): Claude and Codex workers only).
-T3 Code fork half: [Any agent as a worker](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#per-thread-environment-and-instructions).
+T3 Code fork half: [Any agent as a worker](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#any-agent-as-a-worker).
 
 ### Workers listed as crew
 
@@ -58,7 +58,7 @@ A T3 Code without crew lineage, a FirstMate not running in T3 Code, or a home wi
 Details: [task shape](docs/t3code-backend.md#task-shape-and-metadata).
 
 Upstream: none.
-T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#firstmate-crew-in-the-sidebar).
+T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#crew-in-the-sidebar).
 
 ### Readable titles
 
@@ -73,7 +73,7 @@ Projects already in T3 Code keep their old titles, and FirstMate's own records s
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 Upstream: none.
-T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#firstmate-crew-in-the-sidebar).
+T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#crew-in-the-sidebar).
 
 ### Full access and a clean stop
 
@@ -100,7 +100,7 @@ In a home that also runs Herdr or Rex workers, that other backend keeps the wait
 Details: [push events and polling fallback](docs/t3code-backend.md#push-events-and-polling-fallback).
 
 Upstream: none.
-T3 Code fork halves: [Approvals reach FirstMate at once](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#waits-end-on-a-question-or-approval) and [FirstMate answers approvals](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#agents-answer-approvals-over-mcp).
+T3 Code fork halves: [Approvals reach FirstMate at once](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#approvals-reach-firstmate-at-once) and [FirstMate answers approvals](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#firstmate-answers-approvals).
 
 ### Routing table on the Bridge
 
@@ -132,7 +132,7 @@ Upstream shows similar FirstMate-derived status on Herdr's project groups and re
 Details: [crew card status](docs/t3code-backend.md#crew-card-status).
 
 Upstream: partly ([#7434](https://github.com/kunchenguid/firstmate/pull/7434) on Herdr, [#8011](https://github.com/kunchenguid/firstmate/pull/8011) in terminals; neither on T3 Code).
-T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#firstmate-crew-in-the-sidebar).
+T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#crew-in-the-sidebar).
 
 ### Reply on a worker's thread
 
@@ -145,7 +145,7 @@ Settling, un-settling, snoozing, or un-snoozing a worker's thread sends FirstMat
 Details: [replies from a worker's thread](docs/t3code-backend.md#replies-from-a-workers-thread) and [`fm-t3-worker-reply.sh`](bin/fm-t3-worker-reply.sh).
 
 Upstream: none.
-T3 Code fork halves: [Reply box goes to FirstMate](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#a-crewmates-message-box-sends-to-firstmate) and [Settle, never archive](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#the-captain-settles-firstmate-archives).
+T3 Code fork halves: [Reply box goes to FirstMate](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#reply-box-goes-to-firstmate) and [Settle, never archive](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#settle-never-archive).
 
 ### Restart recovery
 
@@ -159,7 +159,7 @@ Until such a worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
 Upstream: none.
-T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#restart-registry).
+T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#clean-restarts).
 
 ### A usage limit never stops the work
 
@@ -188,7 +188,7 @@ A wait past its limit, or a stopped install, cancels the request so no message s
 Details: [clean restart](docs/t3code-backend.md#clean-restart).
 
 Upstream: none; upstream T3 Code has no restart registry.
-T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#restart-registry).
+T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#clean-restarts).
 
 ### Long commands survive restarts
 
@@ -215,7 +215,7 @@ If the old process is somehow still running, the new session says so and names t
 Details: [fresh session with /clear](docs/t3code-backend.md#fresh-session-with-clear).
 
 Upstream: partly (reclaiming a dead session's lock in [`fm-lock.sh`](bin/fm-lock.sh)).
-T3 Code fork half: [A fresh start really ends the old one](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#a-fresh-start-on-firstmate-ends-the-old-session).
+T3 Code fork half: [A fresh start really ends the old one](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#a-fresh-start-really-ends-the-old-one).
 
 ### Auto clearing on a notification
 
@@ -234,7 +234,7 @@ It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; with
 Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).
 
 Upstream: none; it compacts an idle session instead ([#7807](https://github.com/kunchenguid/firstmate/pull/7807)).
-T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#a-cold-thread-starts-fresh).
+T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#auto-clearing-cold-clear).
 
 ### Nightly clear check
 
@@ -260,7 +260,7 @@ It needs a T3 Code build with the watchdog (`t3_usage_reasons`); on an older bui
 Details: [`fm-usage-labels-check.sh`](bin/fm-usage-labels-check.sh).
 
 Upstream: none.
-T3 Code fork half: [Phone vs computer split](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#usage-by-origin).
+T3 Code fork half: [Phone vs computer split](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#phone-vs-computer-split).
 
 ### Pointer to the previous dialog
 
@@ -274,7 +274,7 @@ Approved by the captain on 2026-11-15, with the automatic clearing above, and ch
 Details: [the dialog mirror](docs/supervision-host.md#the-dialog-mirror) and [`fm-host-mirror.sh`](bin/fm-host-mirror.sh).
 
 Upstream: partly ([#5707](https://github.com/kunchenguid/firstmate/pull/5707) records the dialog).
-T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#a-cold-thread-starts-fresh).
+T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#auto-clearing-cold-clear).
 
 ### Alerts only when needed
 
@@ -285,7 +285,7 @@ A session outside T3 Code, a read-only session, and a second mate are told nothi
 Details: [`t3-thread.md`](docs/supervision-protocols/t3-thread.md).
 
 Upstream: none; upstream's FirstMate does not run as a T3 Code thread.
-T3 Code fork half: [Quiet workers, quiet wakes](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#only-top-level-threads-alert).
+T3 Code fork half: [Quiet workers, quiet wakes](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#quiet-workers-quiet-wakes).
 
 ### Work records its cause
 
@@ -295,7 +295,7 @@ This is an addition that only a T3 Code with the field uses.
 Details: [work causes](docs/t3code-backend.md#work-causes).
 
 Upstream: none.
-T3 Code fork half: [Work records its cause](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#work-records-the-prompt-that-caused-it).
+T3 Code fork half: [Work records its cause](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#work-records-its-cause).
 
 ### Live thread on record
 
@@ -340,7 +340,7 @@ Upstream warns unless the server proves telemetry is off, because stock T3 Code 
 Details: [setup](docs/t3code-backend.md#setup).
 
 Upstream: none.
-T3 Code fork half: [Telemetry off](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#telemetry-off-by-default).
+T3 Code fork half: [Telemetry off](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#telemetry-off).
 
 ## Outside T3 Code
 

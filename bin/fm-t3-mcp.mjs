@@ -137,8 +137,8 @@
 //     read. Changes nothing.
 //   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
 //       (--caused-by <cause-json|null> | --device phone|computer) [--if-unclaimed]
-//     The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by
-//     origin"): count work Usage cannot trace to that cause (as an agent
+//     The T3 Code fork's t3_usage_claim (its fork/README.md "Phone vs
+//     computer split"): count work Usage cannot trace to that cause (as an agent
 //     prompt with it would count) or straight to that device. --turn claims
 //     the calling process's own turn of that thread, found exactly as cause
 //     finds it, and answers claimed:false with a reason, claiming nothing,
@@ -311,8 +311,8 @@
 //   fm-t3-mcp.mjs restart-status
 //   fm-t3-mcp.mjs restart-request --reason <text> [--caused-by <cause-json>]
 //   fm-t3-mcp.mjs restart-cancel
-//     The T3 Code fork's restart registry (its fork/README.md "Restart
-//     registry"), for bin/fm-t3-restart-request.sh. Each prints T3's status
+//     The T3 Code fork's restart registry (its fork/README.md "Clean
+//     restarts"), for bin/fm-t3-restart-request.sh. Each prints T3's status
 //     {pending, reason, requestedAt, activeTurns, drained, serverStartedAt},
 //     refused as exit 1 (restart_malformed) unless every field has the
 //     fork's shape. restart-request sets the pending restart with that
@@ -1689,7 +1689,7 @@ async function causeVerb(flags) {
 }
 
 // --- usage claims -----------------------------------------------------------
-// The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by origin"):
+// The T3 Code fork's t3_usage_claim (its fork/README.md "Phone vs computer split"):
 // count work Usage cannot trace to a cause or a device.
 const USAGE_CLAIM_TOOL = "t3_usage_claim";
 const USAGE_DEVICES = ["phone", "computer"];
