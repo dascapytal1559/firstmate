@@ -127,6 +127,51 @@ test_later_nights_update_the_open_item() {
   pass "fm-usage-labels-check: later nights update the one item, reopening it when done"
 }
 
+# claims_log <line...>: the day's failed usage claims as
+# bin/fm-t3-usage-claim.sh logs them (UTC time, what, error).
+claims_log() {
+  printf '%s\n' "$@" > "$HOME_DIR/state/t3-usage-claims.log"
+}
+
+test_failed_naming_calls_raise_the_item() {
+  local text
+  fresh_case claims-only "{\"usageReasons\":{\"rows\":[$(row typed claude 900 false),$(row upkeep codex 100 false)]}}"
+  # Melbourne is 11 hours ahead in November: $DAY runs from 13:00Z the day
+  # before to 13:00Z that day.
+  claims_log \
+    "2026-11-14T12:30:00Z	wake turn coord: no candidate bound	invalid_request: before the day" \
+    "2026-11-14T14:00:00Z	wake turn coord: no candidate bound	origin_refused: counts to no device" \
+    "2026-11-15T10:00:00Z	wake turn coord: no candidate bound	origin_refused: counts to no device" \
+    "2026-11-15T12:00:00Z	turn coord	unavailable: down" \
+    "2026-11-15T14:00:00Z	turn coord	unavailable: the next day"
+  TZ=Australia/Melbourne "$CHECK" --day "$DAY" >/dev/null
+  expect_code 0 "$?" "failed naming calls raise the item"
+  text=$(cat "$BACKLOG")
+  assert_equals 1 "$(item_count)" "one item"
+  assert_contains "$text" "usage-labels-gap - Usage labels: 3 failed naming calls on $DAY" "the title counts the day's failed calls, by local time"
+  assert_contains "$text" "all 1000 tokens on $DAY (Australia/Melbourne) labelled" "the body says the figure itself is clean"
+  assert_contains "$text" "- 2x origin_refused: counts to no device" "the failures are grouped by error, most first"
+  assert_contains "$text" "- 1x unavailable: down" "each error is named"
+  assert_not_contains "$text" "before the day" "a line of the day before is left out"
+  assert_not_contains "$text" "the next day" "a line of the day after is left out"
+  fresh_case claims-and-gaps "$(gap_world)"
+  claims_log "2026-11-15T10:00:00Z	turn coord	unavailable: down"
+  TZ=Australia/Melbourne "$CHECK" --day "$DAY" >/dev/null
+  text=$(cat "$BACKLOG")
+  assert_contains "$text" "Usage labels: 550 tokens unlabelled and 1 failed naming calls on $DAY" "the title names both"
+  assert_contains "$text" "- unregisteredSession, claude: 500 tokens" "the tokens are still listed"
+  assert_contains "$text" "- 1x unavailable: down" "beside the failed calls"
+  fresh_case claims-unreadable '{}'
+  claims_log "2026-11-15T10:00:00Z	turn coord	unavailable: down"
+  TZ=Australia/Melbourne "$CHECK" --day "$DAY" >/dev/null
+  assert_contains "$(cat "$BACKLOG")" "- 1x unavailable: down" "an unreadable figure still reports the failed calls"
+  fresh_case claims-other-day "{\"usageReasons\":{\"rows\":[$(row typed claude 900 false)]}}"
+  claims_log "2026-11-15T14:00:00Z	turn coord	unavailable: the next day"
+  TZ=Australia/Melbourne "$CHECK" --day "$DAY" >/dev/null
+  assert_equals 0 "$(item_count)" "failed calls on other days raise nothing"
+  pass "fm-usage-labels-check: the day's failed naming calls raise the item, grouped by error"
+}
+
 test_an_unreadable_figure_is_raised_never_zero() {
   fresh_case nowatchdog '{}'
   "$CHECK" --day "$DAY" >/dev/null
@@ -180,5 +225,6 @@ fm_test_run \
   test_unlabelled_tokens_raise_one_item \
   test_later_nights_update_the_open_item \
   test_an_unreadable_figure_is_raised_never_zero \
+  test_failed_naming_calls_raise_the_item \
   test_no_write_and_usage \
   test_nightly_checks_run_every_step

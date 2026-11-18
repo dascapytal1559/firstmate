@@ -76,7 +76,7 @@ pass "plain note, list, and wake stay on the historical human path"
 isolated="$TMP_ROOT/isolated"
 mkdir -p "$isolated/bin"
 cp "$INBOX_BIN" "$isolated/bin/fm-inbox.sh"
-cp "$ROOT/bin/fm-t3-cause-lib.sh" "$isolated/bin/fm-t3-cause-lib.sh"
+cp "$ROOT/bin/fm-t3-origin-lib.sh" "$isolated/bin/fm-t3-origin-lib.sh"
 chmod +x "$isolated/bin/fm-inbox.sh"
 home=$(make_home human-wake-fail)
 set +e
@@ -546,27 +546,36 @@ assert_absent "$home/state/inbox/$did.note" "acked note leaves pending"
 assert_present "$home/state/inbox/handled/$did.note" "acked note is in handled"
 pass "drain --ack still moves the note to handled"
 
-# --- a note keeps the T3 prompt that caused it -------------------------------
-# bin/fm-t3-cause-lib.sh settles the cause (its T3 lookup is covered by
-# tests/fm-t3-mcp.test.sh and tests/fm-backend-t3code.test.sh); here the note
-# keeps what it is given, shows it, and writes none without one.
+# --- a note keeps where it comes from ----------------------------------------
+# bin/fm-t3-origin-lib.sh settles the reference: the writer's own T3 thread and
+# the time it wrote; here the note keeps it, shows it, and writes none outside
+# a T3 thread.
 
-home=$(make_home caused)
-cause='{"threadId":"coord","runId":"run-c","messageId":"msg-c"}'
-queued=$(FM_T3CODE_CAUSED_BY='{"messageId":"msg-c","runId":"run-c","threadId":"coord"}' run_inbox "$home" note "from a phone prompt") \
-  || fail "a note with a cause should be queued"
+home=$(make_home origin)
+queued=$(T3CODE_THREAD_ID=coord run_inbox "$home" note "from a phone prompt") \
+  || fail "a note from a T3 thread should be queued"
 cid=${queued#queued }
 cid=${cid%%$'\n'*}
-assert_grep "caused-by=$cause" "$home/state/inbox/$cid.note" "the note keeps its cause in the header"
-assert_equals "from a phone prompt" "$(sed -n '/^--$/,$p' "$home/state/inbox/$cid.note" | tail -n +2)" "the cause leaves the body exact"
-assert_contains "$(run_inbox "$home" drain)" "caused by T3 prompt (FM_T3CODE_CAUSED_BY for work on this note): $cause" "drain shows the cause"
-plain=$(run_inbox "$home" note "no cause here") || fail "a note without a cause should be queued"
+ref=$(sed -n '/^--$/q;s/^from-thread=//p' "$home/state/inbox/$cid.note")
+[ "$(printf '%s' "$ref" | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(String(d.threadId === "coord" && Math.abs(Date.parse(d.at) - Date.now()) < 60000))')" = true ] \
+  || fail "the note keeps the writer's thread and time in its header, got '$ref'"
+assert_equals "from a phone prompt" "$(sed -n '/^--$/,$p' "$home/state/inbox/$cid.note" | tail -n +2)" "the reference leaves the body exact"
+assert_contains "$(run_inbox "$home" drain)" "from T3 thread (FM_T3_FROM_THREAD for work on this note): $ref" "drain shows the reference"
+given=$(FM_T3_FROM_THREAD='{"at":"2026-11-18T20:00:00+11:00","threadId":"coord"}' run_inbox "$home" note "named explicitly") \
+  || fail "a note with an explicit reference should be queued"
+gid=${given#queued }
+gid=${gid%%$'\n'*}
+assert_grep 'from-thread={"threadId":"coord","at":"2026-11-18T09:00:00.000Z"}' "$home/state/inbox/$gid.note" "an explicit reference is kept in order and in UTC"
+plain=$(run_inbox "$home" note "no thread here") || fail "a note from outside T3 should be queued"
 pid=${plain#queued }
 pid=${pid%%$'\n'*}
-assert_no_grep "caused-by=" "$home/state/inbox/$pid.note" "a note with no cause writes no header"
+assert_no_grep "from-thread=" "$home/state/inbox/$pid.note" "a note from outside a T3 thread writes no header"
 before=$(count_notes "$home")
-if FM_T3CODE_CAUSED_BY='{"threadId":"coord"}' run_inbox "$home" note "bad cause" >/dev/null 2>&1; then
-  fail "a malformed explicit cause must refuse the note"
+if FM_T3_FROM_THREAD='{"threadId":"coord","messageId":"m"}' run_inbox "$home" note "bad reference" >/dev/null 2>&1; then
+  fail "a malformed explicit reference must refuse the note"
 fi
-assert_equals "$before" "$(count_notes "$home")" "a refused cause saves nothing"
-pass "note keeps the T3 prompt that caused it, drain shows it, and a malformed cause refuses"
+assert_equals "$before" "$(count_notes "$home")" "a refused reference saves nothing"
+mkdir -p "$home/state/inbox"
+printf 'id=1-old\nsource=text\ncaused-by={"threadId":"coord","messageId":"msg-c"}\n--\nolder note\n' > "$home/state/inbox/1-old.note"
+assert_contains "$(run_inbox "$home" list)" 'caused by T3 prompt: {"threadId":"coord","messageId":"msg-c"}' "a note written before references existed still shows its cause"
+pass "note keeps where it comes from, drain shows it, and a malformed reference refuses"

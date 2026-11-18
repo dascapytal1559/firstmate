@@ -254,6 +254,7 @@ Each night a check raises one backlog item when any of the previous day's T3 Cod
 T3 Code's Usage page counts each token to the phone or the computer, and a token with no evidence of either counts to the computer only by default.
 Such a gap used to surface only when someone noticed odd numbers on that page.
 So the nightly checks also read the T3 Code fork's labels watchdog for the previous day, with no model call, and raise one backlog item naming each unlabelled reason, provider, and token count.
+The same item also counts that day's failed usage claims, because a wake turn FirstMate failed to name counts as upkeep on the computer, which the watchdog cannot tell from real upkeep.
 If the watchdog cannot be read, that is the item instead, because an unreadable figure is unknown, not zero; a fully labelled day raises nothing.
 Later nights update the same item rather than adding another.
 It needs a T3 Code build with the watchdog (`t3_usage_reasons`); on an older build every night raises the unreadable item.
@@ -289,10 +290,10 @@ T3 Code fork half: [Quiet workers, quiet wakes](https://github.com/dascapytal155
 
 ### Work records its cause
 
-Each worker records which of the captain's prompts started it, so T3 Code's Usage page can count its tokens to the phone or the computer that prompt came from.
-FirstMate names that prompt when it launches a worker, steers one, or files a note from inside a T3 Code turn, and T3 Code checks it before recording it.
+Each piece of work names the T3 Code thread it comes from, and when, so T3 Code's Usage page can count it to the device of the latest typed message on that work.
+FirstMate names that thread when it launches a worker, steers one, files a note, queues an item, or claims a wake turn, and T3 Code turns it into the label; FirstMate no longer decides the cause itself.
 This is an addition that only a T3 Code with the field uses.
-Details: [work causes](docs/t3code-backend.md#work-causes).
+Details: [where work comes from](docs/t3code-backend.md#where-work-comes-from).
 
 Upstream: none.
 T3 Code fork half: [Work records its cause](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#work-records-its-cause).

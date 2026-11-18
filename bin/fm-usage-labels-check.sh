@@ -12,9 +12,16 @@
 # or its reason is not one of the evidence reasons (typed, inherited, journal,
 # upkeep, terminal).
 #
-#   - Everything labelled: nothing is written, one summary line on stdout.
+#   - Everything labelled and no failed claim: nothing is written, one
+#     summary line on stdout.
 #   - Unlabelled tokens: backlog item usage-labels-gap names each reason and
 #     provider with its tokens.
+#   - Failed naming calls: the day's lines (by local time) in
+#     state/t3-usage-claims.log, each a usage claim that failed
+#     (bin/fm-t3-usage-claim.sh). A wake that fails to name its turn counts
+#     as upkeep on the computer, which the T3 figure alone cannot tell from
+#     real upkeep, so any such line raises the same item, counted and grouped
+#     by error.
 #   - The figure cannot be read (no T3 credential, a T3 without the watchdog,
 #     T3 unreachable, an answer that does not read as a figure): the same item
 #     says so and why. An unreadable figure is never taken as zero.
@@ -40,6 +47,7 @@ FM_HOME="${FM_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 export FM_HOME
 HELPER="$SCRIPT_DIR/fm-t3-mcp.mjs"
 TASKS="$SCRIPT_DIR/fm-tasks-axi.sh"
+CLAIMS_LOG="${FM_STATE_OVERRIDE:-$FM_HOME/state}/t3-usage-claims.log"
 ITEM=usage-labels-gap
 
 usage() {
@@ -89,6 +97,24 @@ GAPS='["typed","inherited","journal","upkeep","terminal"] as $ev
   | map({reason: .[0].reason, provider: .[0].provider, tokens: (map(.tokens) | add)})
   | sort_by(-.tokens)'
 
+# The day's failed naming calls, by local time: {count, groups: [{error, n}]}.
+# shellcheck disable=SC2016  # $day and $f are jq variables.
+failed='{"count":0,"groups":[]}'
+if [ -f "$CLAIMS_LOG" ]; then
+  failed=$(jq -R -s -c --arg day "$day" '
+    [split("\n")[] | select(length > 0) | split("\t") as $f
+      | select(($f[0] | try (fromdateiso8601 | localtime | strftime("%Y-%m-%d")) catch "") == $day)
+      | ($f[2] // "")]
+    | {count: length, groups: (group_by(.) | map({error: .[0], n: length}) | sort_by(-.n))}' "$CLAIMS_LOG" 2>/dev/null) \
+    || failed='{"count":0,"groups":[]}'
+fi
+failed_count=$(printf '%s' "$failed" | jq -r '.count')
+failed_body=
+if [ "$failed_count" -gt 0 ]; then
+  failed_body="FirstMate's usage claims failed $failed_count times on $day, so the turns they meant to name count as upkeep on the computer, which T3's figure cannot tell from real upkeep (state/t3-usage-claims.log):
+$(printf '%s' "$failed" | jq -r '.groups[:5][] | "- \(.n)x \(.error)"')"
+fi
+
 if [ -n "$problem" ]; then
   title="Usage labels unreadable for $day"
   body="The nightly usage-label check could not read T3's labels watchdog (t3_usage_reasons) for $day, so that day's labelling is unknown, not zero: $problem."
@@ -96,16 +122,24 @@ else
   gaps=$(printf '%s' "$figure" | jq -c "$GAPS")
   total=$(printf '%s' "$figure" | jq -r '.tokens')
   zone=$(printf '%s' "$figure" | jq -r '.timeZone')
-  if [ "$gaps" = "[]" ]; then
+  if [ "$gaps" = "[]" ] && [ "$failed_count" -eq 0 ]; then
     echo "fm-usage-labels-check: $day ($zone): all $total tokens labelled"
     exit 0
   fi
-  unlabelled=$(printf '%s' "$gaps" | jq -r 'map(.tokens) | add')
-  title="Usage labels: $unlabelled tokens unlabelled on $day"
-  body="The nightly usage-label check found $unlabelled of $total tokens on $day ($zone) with no device evidence (counted to the computer only by default):
+  if [ "$gaps" = "[]" ]; then
+    title="Usage labels: $failed_count failed naming calls on $day"
+    body="The nightly usage-label check found all $total tokens on $day ($zone) labelled."
+  else
+    unlabelled=$(printf '%s' "$gaps" | jq -r 'map(.tokens) | add')
+    title="Usage labels: $unlabelled tokens unlabelled on $day"
+    [ "$failed_count" -eq 0 ] || title="Usage labels: $unlabelled tokens unlabelled and $failed_count failed naming calls on $day"
+    body="The nightly usage-label check found $unlabelled of $total tokens on $day ($zone) with no device evidence (counted to the computer only by default):
 $(printf '%s' "$gaps" | jq -r '.[] | "- \(.reason), \(.provider): \(.tokens) tokens"')
 Read it again with \`t3 usage reasons --days 1 --until-day $day\`."
+  fi
 fi
+[ -z "$failed_body" ] || body="$body
+$failed_body"
 
 if [ "$write" = 0 ]; then
   printf '%s\n%s\n' "$title" "$body"

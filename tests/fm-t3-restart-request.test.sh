@@ -185,38 +185,44 @@ test_unreadable_t3_and_usage() {
 }
 
 # shellcheck disable=SC2016  # ${...} and $x belong to the JavaScript snippets.
-test_request_names_the_latest_landed_cause() {
-  local landed='{"threadId":"coord","runId":"run-1","messageId":"msg-1"}' given='{"threadId":"coord","messageId":"msg-2"}'
-  fresh_case landed-cause '{"restartRegistry":true,"restartCause":true,"causedBy":true,"activeTurns":0}'
-  t3_fake_set 'const p = (id, run) => ({ type: "user_message", status: "completed", text: "x", runId: run, messageId: id });
-w.threads = { coord: { threadId: "coord", status: "completed", items: [p("msg-1", "run-1"), p("msg-2", "run-2")], runs: [] } };'
-  rm -f "$HOME_DIR/state/t3-landed-cause"
+test_request_names_the_latest_landed_origin() {
+  local landed='{"threadId":"worker"}' given='{"threadId":"coord","at":"2026-11-18T09:00:00.000Z"}'
+  fresh_case landed-origin '{"restartRegistry":true,"restartFromThread":true,"fromThread":true,"activeTurns":0}'
+  t3_fake_set 'w.threads = { coord: { threadId: "coord", status: "completed", items: [], runs: [] }, worker: { threadId: "worker", status: "completed", items: [], runs: [] } };'
+  rm -f "$HOME_DIR/state/t3-landed-origin"
   req drain --reason "install build h" --interval 1
-  expect_code 0 "$RC" "a restart with no landed cause drains: $OUT"
-  assert_equals "" "$(world_get 'w.restartRequest.causedBy && JSON.stringify(w.restartRequest.causedBy)')" "no landed cause sends none"
+  expect_code 0 "$RC" "a restart with no landed origin drains: $OUT"
+  assert_equals "" "$(world_get 'w.restartRequest.fromThread && JSON.stringify(w.restartRequest.fromThread)')" "no landed origin sends none"
   t3_fake_set 'w.restartRequest = null'
-  printf '%s\tt3-feature\t%s\n' "$(date +%s)" "$landed" > "$HOME_DIR/state/t3-landed-cause"
+  printf '%s\tt3-feature\t%s\n' "$(date +%s)" "$landed" > "$HOME_DIR/state/t3-landed-origin"
   req drain --reason "install build i" --interval 1
-  expect_code 0 "$RC" "a restart naming the landed cause drains: $OUT"
-  assert_equals "$landed" "$(world_get 'JSON.stringify(w.restartRequest.causedBy)')" "the request names the latest landed task's cause"
+  expect_code 0 "$RC" "a restart naming the landed origin drains: $OUT"
+  assert_equals "$landed" "$(world_get 'JSON.stringify(w.restartRequest.fromThread)')" "the request names the latest landed task's thread"
   t3_fake_set 'w.restartRequest = null'
-  OUT=$(FM_HOME="$HOME_DIR" FM_T3CODE_CAUSED_BY="$given" "$REQ" drain --reason "install build j" --interval 1 2>"$TMP_ROOT/stderr"); RC=$?
-  expect_code 0 "$RC" "an explicit cause drains: $OUT"
-  assert_equals "$given" "$(world_get 'JSON.stringify(w.restartRequest.causedBy)')" "FM_T3CODE_CAUSED_BY wins over the landed cause"
+  OUT=$(FM_HOME="$HOME_DIR" FM_T3_FROM_THREAD="$given" "$REQ" drain --reason "install build j" --interval 1 2>"$TMP_ROOT/stderr"); RC=$?
+  expect_code 0 "$RC" "an explicit reference drains: $OUT"
+  assert_equals "$given" "$(world_get 'JSON.stringify(w.restartRequest.fromThread)')" "FM_T3_FROM_THREAD wins over the landed origin"
   t3_fake_set 'w.restartRequest = null'
-  printf '%s\tt3-feature\t%s\n' "$(date +%s)" '{"threadId":"coord","messageId":"msg-gone"}' > "$HOME_DIR/state/t3-landed-cause"
+  printf '%s\tt3-feature\t%s\n' "$(date +%s)" '{"threadId":"gone"}' > "$HOME_DIR/state/t3-landed-origin"
   req drain --reason "install build k" --interval 1
-  expect_code 0 "$RC" "a cause T3 refuses never holds up the restart: $OUT"
+  expect_code 0 "$RC" "a reference T3 refuses never holds up the restart: $OUT"
   assert_equals "install build k" "$(world_get 'w.restartRequest.reason')" "the restart is pending without it"
-  OUT=$(FM_HOME="$HOME_DIR" FM_T3CODE_CAUSED_BY='{"bad":1}' "$REQ" drain --reason "install build l" --interval 1 2>"$TMP_ROOT/stderr"); RC=$?
-  expect_code 2 "$RC" "a malformed explicit cause is invalid use"
-  rm -f "$HOME_DIR/state/t3-landed-cause"
-  pass "fm-t3-restart-request drain: the request names the latest landed cause, FM_T3CODE_CAUSED_BY overrides it, and a refused one is dropped"
+  OUT=$(FM_HOME="$HOME_DIR" FM_T3_FROM_THREAD='{"threadId":"coord","messageId":"m"}' "$REQ" drain --reason "install build l" --interval 1 2>"$TMP_ROOT/stderr"); RC=$?
+  expect_code 2 "$RC" "a malformed explicit reference is invalid use"
+  t3_fake_set 'w.restartRequest = null'
+  fresh_case landed-origin-undeclared '{"restartRegistry":true,"fromThread":true,"activeTurns":0}'
+  t3_fake_set 'w.threads = { worker: { threadId: "worker", status: "completed", items: [], runs: [] } };'
+  printf '%s\tt3-feature\t%s\n' "$(date +%s)" "$landed" > "$HOME_DIR/state/t3-landed-origin"
+  req drain --reason "install build m" --interval 1
+  expect_code 0 "$RC" "a T3 whose restart takes no reference drains without one: $OUT"
+  assert_equals "" "$(world_get 'w.restartRequest.fromThread && JSON.stringify(w.restartRequest.fromThread)')" "and none is sent"
+  rm -f "$HOME_DIR/state/t3-landed-origin"
+  pass "fm-t3-restart-request drain: the request names the latest landed task's thread where T3 takes it, FM_T3_FROM_THREAD overrides it, and a refused one is dropped"
 }
 
 t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
-  test_request_names_the_latest_landed_cause \
+  test_request_names_the_latest_landed_origin \
   test_drains_at_once_and_leaves_the_request_pending \
   test_waits_for_running_turns \
   test_timeout_cancels_and_releases \

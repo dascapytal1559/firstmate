@@ -47,11 +47,14 @@
 # the duplicate wake this contract exists to remove. Notes written from here on
 # carry `announce_marker=1`, which is what makes a missing marker mean "not
 # announced" rather than "not known". Receipts report that state as null.
-# A note written from inside a T3 agent's turn records the prompt that caused
-# it as caused-by=<cause-json> (bin/fm-t3-cause-lib.sh owns the rule, and a
-# malformed FM_T3CODE_CAUSED_BY refuses with nothing saved); `list` and `drain`
-# show it, so firstmate can name that prompt as the cause of the work it
-# starts for the note (FM_T3CODE_CAUSED_BY on bin/fm-spawn.sh or fm-send.sh).
+# A note written from inside a T3 agent's turn records where it comes from,
+# the writer's own thread and time, as from-thread=<reference>
+# (bin/fm-t3-origin-lib.sh owns the rule, and a malformed FM_T3_FROM_THREAD
+# refuses with nothing saved). The wake about the note claims it
+# (bin/fm-wake-drain.sh), and `list` and `drain` show it, so firstmate can
+# name it for work it starts for the note in a turn that wake did not claim
+# (FM_T3_FROM_THREAD on bin/fm-spawn.sh or fm-send.sh). A note written before
+# references existed shows its caused-by=<cause-json> instead.
 # A note body is text, not options: only the flags above are parsed, anything
 # else starting with `--` begins the body, and `--` ends option parsing.
 # Human `note`/`list`/`drain` output and exit conventions stay as they were when
@@ -500,13 +503,13 @@ cmd_note() {
   else
     body="$*"
   fi
-  # The T3 prompt that made the writing agent leave this note, when it writes
-  # from inside a T3 turn (bin/fm-t3-cause-lib.sh).
-  local cause
-  # shellcheck source=bin/fm-t3-cause-lib.sh
-  . "$SELF_DIR/fm-t3-cause-lib.sh"
-  cause=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
-  queue_note text "$body" "${cause:+caused-by=$cause}" "$request_id" "$json"
+  # Where this note comes from, when the writing agent runs inside a T3 turn
+  # (bin/fm-t3-origin-lib.sh).
+  local origin
+  # shellcheck source=bin/fm-t3-origin-lib.sh
+  . "$SELF_DIR/fm-t3-origin-lib.sh"
+  origin=$(fm_t3_origin_resolve) || exit 1
+  queue_note text "$body" "${origin:+from-thread=$origin}" "$request_id" "$json"
 }
 
 cmd_announce() {
@@ -1119,7 +1122,7 @@ cmd_list() {
     [ -e "$f" ] || break
     any=1
     printf '%s\n' "$(basename "$f" .note)"
-    sed -n '/^--$/q;s/^caused-by=\(.*\)$/  caused by T3 prompt (FM_T3CODE_CAUSED_BY for work on this note): \1/p' "$f"
+    sed -n '/^--$/q;s/^from-thread=\(.*\)$/  from T3 thread (FM_T3_FROM_THREAD for work on this note): \1/p;s/^caused-by=\(.*\)$/  caused by T3 prompt: \1/p' "$f"
     sed -n '/^--$/,$p' "$f" | tail -n +2 | sed 's/^/    /'
   done
   [ "$any" -eq 1 ] || printf '(inbox empty)\n'

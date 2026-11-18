@@ -1,37 +1,43 @@
 #!/usr/bin/env bash
 # fm-t3-usage-claim.sh - Firstmate's usage claims on T3 Code: tell T3's Usage
-# page what caused work it cannot trace on its own, through the fork's
+# page where work it cannot trace on its own comes from, through the fork's
 # t3_usage_claim (docs/t3code-backend.md "Usage claims" owns the operator
 # contract; bin/fm-t3-mcp.mjs usage-claim owns the call).
 #
 # Every claim is best effort. A claim that cannot be made (no T3 credential,
-# a T3 without t3_usage_claim, no T3 turn, no recorded cause) is skipped
-# silently, and a call that fails is logged once, as one line in
-# state/t3-usage-claims.log, and never retried by this run. Every verb exits
-# 0 except invalid use (2), so no wake or turn ever waits on its accounting.
-# Sessions T3 does not run - pipeline reviews, the supervision engine, a
-# worker's own probes - are not claimed: they register themselves when they
-# start (docs/t3code-backend.md "Usage claims").
+# a T3 without t3_usage_claim, no T3 turn, nothing to name) is skipped
+# silently, and a claim that fails is logged once, as one line in
+# state/t3-usage-claims.log, and never retried by this run; the nightly
+# bin/fm-usage-labels-check.sh raises its item for any such line. Every verb
+# exits 0 except invalid use (2), so no wake or turn ever waits on its
+# accounting. Sessions T3 does not run - pipeline reviews, the supervision
+# engine, a worker's own probes - are not claimed: they register themselves
+# when they start (docs/t3code-backend.md "Usage claims").
 #
 # Usage:
-#   fm-t3-usage-claim.sh turn (--device phone|computer | --task <id> | --caused-by <cause-json>)
-#     Claim the calling agent's current T3 turn ($T3CODE_THREAD_ID): it
-#     counts to that device, to <id>'s recorded cause, or to that cause.
-#     For a turn the drain's claim does not describe, such as the turn that
-#     files a voice journal (--device phone). It replaces any claim on that
-#     turn, and a later drain in the same turn leaves it.
-#   fm-t3-usage-claim.sh wake [--task <id> | --caused-by <cause-json> | --device phone|computer]...
-#     The wake drain's claim on the current turn: the first candidate, in
-#     order, that has a cause (a task's recorded cause, a cause given, or a
-#     device given, such as the phone for a voice journal's note). A turn
-#     that already has a claim keeps it (T3's ifUnclaimed). With no
-#     candidate caused, or none at all, nothing is claimed: T3 files a
-#     coordinator turn that no claim names and no person typed as upkeep by
-#     itself, so upkeep needs no claim.
+#   fm-t3-usage-claim.sh turn (--device phone|computer | --task <id> | --from-thread <reference>)
+#     Claim the calling agent's T3 turn running now ($T3CODE_THREAD_ID): it
+#     counts to that device, with task <id>'s work, or with that origin
+#     reference's work. For a turn the drain's claim does not describe, such
+#     as the turn that files a voice journal (--device phone). It replaces
+#     any claim on that turn, and a later drain in the same turn leaves it.
+#   fm-t3-usage-claim.sh wake [--task <id> | --from-thread <reference> | --caused-by <cause-json> | --device phone|computer]...
+#     The wake drain's claim on the current turn. It tries the candidates
+#     that name something, in order, until T3 binds one: a task's own thread
+#     (where that task counts now), a reference given, a cause given (one a
+#     note or follow-up recorded before references existed, passed on
+#     unchanged), or a device given, such as the phone for a voice journal's
+#     note. T3 refuses a reference or cause it cannot bind, such as a task
+#     whose work counts to no device, and the next candidate gets its turn;
+#     a wake none of whose candidates binds is logged as failing to name its
+#     turn. A turn that already has a claim keeps it (T3's ifUnclaimed).
+#     With no candidate at all, nothing is claimed: T3 files a coordinator
+#     turn that no claim names and no person typed as upkeep by itself, so
+#     upkeep needs no claim.
 #
-# state/t3-usage-claims.log holds one line per failed call, trimmed as it
-# grows.
-# A task's cause is bin/fm-t3-cause-lib.sh's fm_t3_cause_of_task.
+# state/t3-usage-claims.log holds one tab-separated line per failed claim
+# (UTC time, what was claimed, the error), trimmed as it grows.
+# A task's reference is bin/fm-t3-origin-lib.sh's fm_t3_origin_of_task.
 # FM_T3_USAGE_CLAIM_TIMEOUT (seconds, default 20) bounds each T3 call.
 set -u
 
@@ -47,8 +53,8 @@ TIMEOUT=${FM_T3_USAGE_CLAIM_TIMEOUT:-20}
 case "$TIMEOUT" in ''|0*|*[!0-9]*) TIMEOUT=20 ;; esac
 export FM_HOME
 
-# shellcheck source=bin/fm-t3-cause-lib.sh
-. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+# shellcheck source=bin/fm-t3-origin-lib.sh
+. "$SCRIPT_DIR/fm-t3-origin-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
@@ -88,90 +94,101 @@ t3_ready() {
   [ -f "$TOKEN" ] && command -v node >/dev/null 2>&1 && [ -d "$STATE" ]
 }
 
-# claim <what> <usage-claim args...>: one bounded call; logs once and returns
-# 1 on failure. A T3 without usage claims is not a failure (returns 3), only
-# the absence of the feature.
+# CLAIM_OUT holds the helper's answer to the last claim.
+CLAIM_OUT=
+
+# claim <usage-claim args...>: one bounded call on the calling agent's turn.
+# 0 claimed (or kept); 3 this T3 cannot take the claim, the absence of a
+# feature rather than a failure; 4 T3 refused the value, which another value
+# may not be; 1 any other failure. Logs nothing: the caller does.
 claim() {
-  local what=$1 out rc=0
-  shift
-  out=$(fm_exec_timed "$TIMEOUT" 2 node "$HELPER" usage-claim "$@" --token-file "$TOKEN" 2>/dev/null) || rc=$?
+  local rc=0
+  CLAIM_OUT=$(fm_exec_timed "$TIMEOUT" 2 node "$HELPER" usage-claim --turn "$T3CODE_THREAD_ID" "$@" --token-file "$TOKEN" 2>/dev/null) || rc=$?
   [ "$rc" -eq 0 ] && return 0
-  case "$out" in *'"usage_claim_unsupported"'*) return 3 ;; esac
-  log_failure "$what" "$out"
+  case "$CLAIM_OUT" in
+    *'"usage_claim_unsupported"'*) return 3 ;;
+    *'"origin_refused"'*|*'"cause_refused"'*) return 4 ;;
+  esac
   return 1
 }
 
-# value_args <cause-json|device>: the usage-claim value flags.
+# value_args <value>: the usage-claim value flags for a device, a
+# reference, or a cause.
 value_args() {
   case "$1" in
     phone|computer) printf '%s\n' --device "$1" ;;
-    *) printf '%s\n' --caused-by "$1" ;;
+    *) printf '%s\n%s\n' "$(fm_t3_origin_flag "$1")" "$1" ;;
   esac
 }
 
-# first_cause <candidate...>: each candidate is task:<id>, cause:<json>, or
-# device:<device>. Prints the first cause or device found; status 1 when none
-# has one.
-first_cause() {
-  local c cause
-  for c in "$@"; do
-    case "$c" in
-      task:*) cause=$(fm_t3_cause_of_task "$STATE" "${c#task:}") ;;
-      cause:*) cause=${c#cause:} ;;
-      device:*) cause=${c#device:} ;;
-      *) cause= ;;
-    esac
-    if [ -n "$cause" ]; then
-      printf '%s' "$cause"
-      return 0
-    fi
-  done
-  return 1
+# candidate_value <candidate>: what task:<id>, from:<reference>,
+# cause:<json>, or device:<device> names, or nothing.
+candidate_value() {
+  case "$1" in
+    task:*) fm_t3_origin_of_task "$STATE" "${1#task:}" ;;
+    from:*|cause:*|device:*) printf '%s' "${1#*:}" ;;
+  esac
 }
 
-# claim_turn <value> [--if-unclaimed]: claim the calling agent's turn; with
-# --if-unclaimed, a turn that already has a claim keeps it.
-claim_turn() {
-  local value=$1 line thread=${T3CODE_THREAD_ID:-}
-  local -a args=(--turn "$thread")
+# claim_value <value> [--if-unclaimed]: claim the calling agent's turn with
+# <value>; the claim's status as claim returns it.
+claim_value() {
+  local value=$1 line
+  local -a args=()
   shift
-  [ -n "$thread" ] && t3_ready || return 0
   while IFS= read -r line; do args+=("$line"); done < <(value_args "$value")
-  claim "turn $thread" "${args[@]}" "$@"
+  claim "${args[@]}" "$@"
 }
 
 verb_turn() {
-  local value='' n=0
+  local candidate='' n=0 value rc=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; value=$2; n=$((n + 1)); shift 2 ;;
-      --task) [ "$#" -ge 2 ] || usage; value=task:$2; n=$((n + 1)); shift 2 ;;
-      --caused-by) [ "$#" -ge 2 ] || usage; value=cause:$2; n=$((n + 1)); shift 2 ;;
+      --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; candidate=device:$2; n=$((n + 1)); shift 2 ;;
+      --task) [ "$#" -ge 2 ] || usage; candidate=task:$2; n=$((n + 1)); shift 2 ;;
+      --from-thread) [ "$#" -ge 2 ] || usage; candidate=from:$2; n=$((n + 1)); shift 2 ;;
       *) usage ;;
     esac
   done
   [ "$n" -eq 1 ] || usage
-  case "$value" in
-    task:*|cause:*)
-      value=$(first_cause "$value") || { echo "fm-t3-usage-claim: no cause recorded for ${value#task:}; nothing claimed" >&2; return 0; }
-      ;;
-  esac
-  claim_turn "$value" || true
+  value=$(candidate_value "$candidate")
+  if [ -z "$value" ]; then
+    echo "fm-t3-usage-claim: ${candidate%%:*} ${candidate#*:} names no T3 thread; nothing claimed" >&2
+    return 0
+  fi
+  [ -n "${T3CODE_THREAD_ID:-}" ] && t3_ready || return 0
+  claim_value "$value" || rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ] || log_failure "turn $T3CODE_THREAD_ID" "$CLAIM_OUT"
 }
 
 verb_wake() {
   local -a candidates=()
-  local value
+  local c value rc refused=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --task) [ "$#" -ge 2 ] || usage; candidates+=("task:$2"); shift 2 ;;
+      --from-thread) [ "$#" -ge 2 ] || usage; candidates+=("from:$2"); shift 2 ;;
       --caused-by) [ "$#" -ge 2 ] || usage; candidates+=("cause:$2"); shift 2 ;;
       --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; candidates+=("device:$2"); shift 2 ;;
       *) usage ;;
     esac
   done
-  value=$(first_cause "${candidates[@]+"${candidates[@]}"}") || return 0
-  claim_turn "$value" --if-unclaimed || true
+  [ "${#candidates[@]}" -gt 0 ] && [ -n "${T3CODE_THREAD_ID:-}" ] && t3_ready || return 0
+  for c in "${candidates[@]}"; do
+    value=$(candidate_value "$c")
+    [ -n "$value" ] || continue
+    rc=0
+    claim_value "$value" --if-unclaimed || rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      # This candidate cannot be bound or this T3 cannot take it; the next
+      # one may be.
+      3) ;;
+      4) refused=$CLAIM_OUT ;;
+      *) log_failure "wake turn $T3CODE_THREAD_ID ($c)" "$CLAIM_OUT"; return 0 ;;
+    esac
+  done
+  [ -z "$refused" ] || log_failure "wake turn $T3CODE_THREAD_ID: no candidate bound" "$refused"
 }
 
 [ "$#" -ge 1 ] || usage

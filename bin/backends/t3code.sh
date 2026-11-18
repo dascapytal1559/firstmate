@@ -33,6 +33,8 @@
 . "$(dirname -- "${BASH_SOURCE[0]}")/../fm-composer-lib.sh"
 
 FM_BACKEND_T3CODE_HELPER="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/fm-t3-mcp.mjs"
+# shellcheck source=bin/fm-t3-origin-lib.sh
+. "$(cd "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/fm-t3-origin-lib.sh"
 
 # Sourced only through fm_backend_source in bin/fm-backend.sh, which owns
 # FM_BACKEND_CONFIG_DIR.
@@ -164,18 +166,18 @@ process.stdout.write([JSON.stringify(d.selection), word(d.threadEnvironment), wo
 # The optional parent thread id names the thread this one works for; where T3
 # offers crew lineage the helper sends it and proves the thread reads back as
 # that thread's crew, and elsewhere the thread launches without it.
-# The optional cause (bin/fm-t3-cause-lib.sh) rides the same way: where T3
-# declares causedBy it is sent and proven, and a cause T3 refuses fails the
-# launch (exit 3) with nothing launched.
-fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] [parent-thread-id] [cause-json] -> thread id
-  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} parent=${8:-} cause=${9:-} out rc
+# The optional origin (bin/fm-t3-origin-lib.sh: a reference, or a cause
+# recorded before references existed) is sent only where T3 declares it, and
+# one T3 refuses fails the launch (exit 3) with nothing launched.
+fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] [parent-thread-id] [origin-json] -> thread id
+  local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} parent=${8:-} origin=${9:-} out rc
   local -a args=(launch --project "$project_id" --title "$title" --model-selection "$selection")
   [ -z "$branch" ] || args+=(--branch "$branch")
   [ -z "$worktree" ] || args+=(--worktree "$worktree")
   [ -z "$env_file" ] || args+=(--environment-file "$env_file")
   [ -z "$instructions_file" ] || args+=(--instructions-file "$instructions_file")
   [ -z "$parent" ] || args+=(--parent "$parent")
-  [ -z "$cause" ] || args+=(--caused-by "$cause")
+  [ -z "$origin" ] || args+=("$(fm_t3_origin_flag "$origin")" "$origin")
   out=$(fm_backend_t3code_mcp "${args[@]}") && rc=0 || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   printf '%s' "$out" | fm_backend_t3code_json_get threadId || return 1
@@ -262,16 +264,17 @@ process.stdout.write(require("crypto").createHash("sha256").update(require("fs")
 # only on acceptance or T3's typed refusal of the send: any other failure,
 # including one before the request went out, leaves the earlier attempt
 # unproven and reads 7.
-# A cause JSON in FM_T3CODE_CAUSED_BY (bin/fm-t3-cause-lib.sh, which alone
-# decides one) rides the send as causedBy; any other value sends none. When T3
-# refuses that cause, which proves the message was not taken, an error line
-# beginning "error: T3 refused the cause" goes to stderr and the message is
+# A JSON value in FM_T3_FROM_THREAD (bin/fm-t3-origin-lib.sh, which alone
+# decides one: a reference, or a cause recorded before references existed)
+# rides the send as fromThread or causedBy; any other value sends none. When
+# T3 refuses it, which proves the message was not taken, an error line
+# beginning "error: T3 refused the origin" goes to stderr and the message is
 # sent again under the same request id without it: a message is never held
 # back for its accounting.
 fm_backend_t3code_turn_start() {  # <thread-id> <text> [model-selection-json]
-  local thread=$1 text=$2 file='' dir record='' id='' out rc=0 held=0 cause=''
-  local -a caused=()
-  case "${FM_T3CODE_CAUSED_BY:-}" in '{'*) cause=$FM_T3CODE_CAUSED_BY; caused=(--caused-by "$cause") ;; esac
+  local thread=$1 text=$2 file='' dir record='' id='' out rc=0 held=0 origin='' refused=''
+  local -a origins=()
+  case "${FM_T3_FROM_THREAD:-}" in '{'*) origin=$FM_T3_FROM_THREAD; origins=("$(fm_t3_origin_flag "$origin")" "$origin") ;; esac
   dir="${FM_STATE_OVERRIDE:-$FM_HOME/state}/t3code-sends"
   if [ -n "${FM_T3CODE_CLIENT_REQUEST_ID:-}" ]; then
     id=$FM_T3CODE_CLIENT_REQUEST_ID
@@ -303,13 +306,18 @@ fm_backend_t3code_turn_start() {  # <thread-id> <text> [model-selection-json]
   fi
   if [ "$rc" -eq 0 ]; then
     out=$(fm_backend_t3code_mcp send --thread "$thread" --message-file "$file" \
-      --client-request-id "$id" ${caused[@]+"${caused[@]}"}) || rc=$?
-    if [ "$rc" -eq 3 ] && [ -n "$cause" ] && [ "$(printf '%s' "$out" | fm_backend_t3code_error_code)" = cause_refused ]; then
-      echo "error: T3 refused the cause $cause of a message to thread $thread; sending it without one" >&2
-      rc=0
-      out=$(fm_backend_t3code_mcp send --thread "$thread" --message-file "$file" \
-        --client-request-id "$id") || rc=$?
+      --client-request-id "$id" ${origins[@]+"${origins[@]}"}) || rc=$?
+    if [ "$rc" -eq 3 ] && [ -n "$origin" ]; then
+      refused=$(printf '%s' "$out" | fm_backend_t3code_error_code) || refused=''
     fi
+    case "$refused" in
+      origin_refused|cause_refused)
+        echo "error: T3 refused the origin $origin of a message to thread $thread; sending it without one" >&2
+        rc=0
+        out=$(fm_backend_t3code_mcp send --thread "$thread" --message-file "$file" \
+          --client-request-id "$id") || rc=$?
+        ;;
+    esac
   fi
   [ -z "$file" ] || rm -f "$file"
   if [ "$rc" -eq 0 ] && { ! printf '%s\n' "$out" > "$dir/$id.accepted.$$.tmp" \

@@ -113,39 +113,42 @@ A spawn made between the FirstMate thread's turns, such as from a Stop-hook cont
 It is sent as `parentThreadId` only where the `t3_thread_launch` schema declares it, and the launch read-back must then show `relationshipToParent` `crew` under exactly that parent, or the thread is archived and refused like any other mis-binding.
 A T3 without crew lineage, a firstmate not running in T3, or a home with no pinned coordinator and either no live thread or several launches the thread with no parent, which changes only how T3 groups it; the spawn prints a note saying why, lineage grants nothing on the parent, and stopping or archiving either thread stays independent of the other.
 
-### Work causes
+### Where work comes from
 
-T3 Code's Usage page counts a worker's tokens to the phone or computer prompt that started it by following `causedBy`, the prompt a launch or a message names as its cause.
-Firstmate names that prompt at its durable boundaries, and [`bin/fm-t3-cause-lib.sh`](../bin/fm-t3-cause-lib.sh) is the one owner of how:
+T3 Code's Usage page counts each piece of work to the device of the latest typed message on it, until the next typed message; clicks and automatic notifications move nothing.
+Firstmate does not decide where work counts.
+At each durable boundary it records an origin reference, the T3 thread the work comes from and when, `{"threadId", "at"?}`, which is exactly what T3's `fromThread` takes, and passes it through untouched; T3 turns it into a label when the work launches or the claim is made (the fork's `fork/README.md` "Phone vs computer split" owns the rule).
+Writing a reference needs no T3 call: the thread is the one T3 names in each agent's environment as `T3CODE_THREAD_ID`, and the time is now.
+[`bin/fm-t3-origin-lib.sh`](../bin/fm-t3-origin-lib.sh) is the one owner of the references:
 
-- A spawn records it in the task record as `caused_by=` and sends it on the worker's launch and its brief; a relaunch keeps the recorded one.
-- A steer through `fm-send.sh` keeps it in the steer's inbox record, and every doorbell for that record carries it.
-- A note written with `fm-inbox.sh note` from inside a T3 turn keeps the prompt that made the agent write it, and `drain` shows it.
-- A condition-then-action follow-up armed with `fm-procevent-when.sh arm` keeps the prompt behind its arming turn in its spec as `caused_by=`, and the wake that reports its fired result claims that cause.
-- A backlog item added with `fm-tasks-axi.sh add` keeps the prompt that queued it, and its first spawn names that prompt, whatever turn launches it, such as a recovery wake after a restart.
-- A landing keeps the landed task's cause as the latest landed cause, and a [clean restart](#clean-restart) names it, since a restart installs landed work.
+- A spawn sends this thread, as of when the spawn began, as the worker launch's `fromThread`, so the thread is born where that turn's work counts; the task record and the brief carry nothing.
+  A relaunch keeps its recorded backend, which never launches a T3 thread, so it sends nothing.
+- A backlog item added with `fm-tasks-axi.sh add` keeps the reference of the turn that queued it, and its first launch sends that one, whatever turn launches it, such as a recovery wake after a restart.
+- A steer through `fm-send.sh` keeps the reference in the steer's inbox record, and every doorbell for that record sends it, so a re-ring binds to the turn that wrote the steer; T3 moves the worker only when that turn was typed.
+- A note written with `fm-inbox.sh note` keeps the writer's own thread and time, and the wake about the note claims it.
+- A condition-then-action follow-up armed with `fm-procevent-when.sh arm` keeps the arming turn's reference in its spec as `from_thread=`, and the wake that reports its fired result claims it.
+- A wake about a task claims with that task's own thread and no time, so the wake turn counts where the task counts now, re-roots included.
+- A landing keeps the landed task's thread as the latest landed origin, and a [clean restart](#clean-restart) sends it where T3's restart request declares `fromThread`, since a restart installs landed work.
 
-The cause is the T3 turn that started the command, in the thread T3 names in each agent's environment as `T3CODE_THREAD_ID`: the message that started the turn, or, when the turn received more prompts (a steer or queued input), the latest one that arrived before the command began.
-That is usually the current turn, but a command that began in a turn that has since ended, such as a send made just after it, or a background job still running into a later turn, names the turn it began in.
-A wake turn starts from T3's notification rather than a prompt, so work launched in it names that notification, and counts wherever the wake turn's [usage claim](#usage-claims) puts it.
-Firstmate records nothing rather than guess: when no recent turn spans the command's start, or when T3 cannot be read.
-`bin/fm-t3-mcp.mjs cause` owns the exact rule, and it never reads message text.
-Set `FM_T3CODE_CAUSED_BY` to `off` for no cause, or to a cause JSON (`{"threadId", "runId"?, "messageId"}`) to name one explicitly, such as the prompt a note recorded or an earlier prompt of a turn that received several.
+Because T3 copies a label onto work when it is launched, a turn must be named before anything is launched from it; the wake drain names its turn first.
+A note, steer, follow-up, or queued item written before references existed still carries a cause, the prompt it named, and passes it on as `causedBy` unchanged when it fires.
+Set `FM_T3_FROM_THREAD` to `off` for no reference, or to a reference JSON to name one explicitly, such as the reference a note recorded; anything else is refused before the boundary acts.
 
-`causedBy` is sent only where T3's `tools/list` schema declares it, so an older T3 keeps working without it.
-A launch reads the thread back and refuses one that did not bind the cause; a cause T3 refuses fails the launch with nothing created, while a message whose cause T3 refuses is reported and sent again without it, so a steer never waits on its accounting.
+`fromThread` is sent only where T3's `tools/list` schema declares it, so a T3 without it, and a Firstmate that runs in no T3 thread, launch and send exactly as before, with no reference.
+A launch whose reference T3 refuses fails with nothing created, while a message whose reference T3 refuses is reported and sent again without it, so a steer never waits on its accounting.
 
 ### Usage claims
 
-Some work has no prompt T3 can follow: FirstMate's own wake turns run outside any traced prompt.
-Firstmate tells T3 what caused them with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Phone vs computer split" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
+Some work has no typed message behind it: FirstMate's own wake turns start from T3's notifications.
+Firstmate tells T3 where they come from with the fork's `t3_usage_claim` (the fork's `fork/README.md` "Phone vs computer split" owns how Usage counts a claim), through [`bin/fm-t3-usage-claim.sh`](../bin/fm-t3-usage-claim.sh), which owns each claim's exact rule:
 
-- **Wake turns.** The wake drain claims its turn for the first presented wake that names a task with a cause (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the recorded cause of an inbox note or of a condition-then-action follow-up whose result was captured.
+- **Wake turns.** The wake drain claims its turn, naming the thread alone so T3 picks the turn running now, for the presented wakes in order until T3 binds one: a task's own thread (a status line, a stale worker, an inactive outcome, a merge, an open decision, a usage limit, a relayed supervision outcome, or a BRANCH OUTCOMES task), or the reference an inbox note or a captured condition-then-action follow-up recorded.
+  T3 refuses a thread whose work counts to no device, and the next wake gets its turn.
 - **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count to the phone.
 
-Upkeep needs no claim: T3 files a FirstMate coordinator turn that no claim names and no person typed as computer upkeep by itself, so a wake about no task (watcher recovery, scheduled checks, a follow-up armed with no cause), a wake about tasks that carry no cause, and a turn no drain describes (such as one a background command's notification started) all count to the computer with nothing sent.
+Upkeep needs no claim: T3 files a FirstMate coordinator turn that no claim names and no person typed as computer upkeep by itself, so a wake about no task (watcher recovery, scheduled checks, a follow-up armed outside T3) and a turn no drain describes (such as one a background command's notification started) count to the computer with nothing sent.
 The drain's claim passes `bin/fm-t3-mcp.mjs usage-claim --if-unclaimed`, which sends T3's `ifUnclaimed`, so a turn that already has a claim keeps it against later drains, while an explicit `turn` claim replaces it.
-T3 counts a claimed turn only when its own prompt does not already trace, so claiming a prompted turn changes nothing.
+A typed prompt still beats a claim, so claiming a typed turn changes nothing.
 Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, or restart.
 
 Agent sessions T3 does not run are not claimed: each registers itself when it starts, through the T3 fork's session-register hook, installed in each tool's settings (the fork's `docs/user/usage.md` "Count agent sessions T3 does not run" owns the hook, the register, and how Usage counts a registration).
@@ -157,8 +160,7 @@ Two kinds of session cannot inherit them, and Firstmate supplies them:
 - **Engine sessions.** The supervision host's engine runs with every hook off, so the host runs the hook that `config/session-register` names ([configuration](configuration.md#session-register-configsession-register)) before each engine turn, under the woken task, or under nothing for a wake about no task, which Usage counts to the computer.
   Each turn registers again, so a resumed conversation splits across its turns' tasks.
 
-A nightly check raises a backlog item for any of the previous day's usage still without device evidence: [`bin/fm-usage-labels-check.sh`](../bin/fm-usage-labels-check.sh).
-Work that still counts as Unknown by design: a task launched with no cause, until that task ends; and a session whose task T3 knows no thread for, such as a pane-backend worker's, whose panes carry the task but not the home.
+A nightly check raises a backlog item for any of the previous day's usage still without device evidence, and for any of that day's failed claims, since a wake that fails to name its turn reads as upkeep: [`bin/fm-usage-labels-check.sh`](../bin/fm-usage-labels-check.sh).
 
 [`configuration.md`](configuration.md#task-metadata) owns the task metadata fields, and its [task-selector contract](configuration.md#task-selectors) owns routing to the recorded thread.
 
@@ -388,7 +390,7 @@ A restart Firstmate causes itself, such as installing a new T3 build, waits unti
 [`bin/fm-t3-restart-request.sh`](../bin/fm-t3-restart-request.sh) closes that gap through the T3 Code fork's restart registry:
 
 1. Once no worker is busy, `drain` requests the restart with a reason naming the build, so T3 shows the captain a notice that it will restart, holds every new message, and lets running turns finish.
-   The request names the latest landed task's [cause](#work-causes), which T3 stamps on the restart note, so the note's turn counts to that prompt's device.
+   The request names the latest landed task's thread as [where the work comes from](#where-work-comes-from), where T3's restart request declares `fromThread`, so the restart note's turn counts where that work counts.
 2. It returns 0 only when T3 reports drained, every turn finished, and the caller then restarts T3; the server start releases the held messages in order.
 3. When T3 has not drained within `--within` seconds, `drain` cancels the request, which releases the held messages, and reports it.
    A signal cancels it the same way, as when its watch is retired or replaced by a newer build, or its action times out.
@@ -533,7 +535,7 @@ If a task's thread no longer reads back, release the task by hand:
 - Request-id deduplication holds within one T3 auth session only: every sign-in starts a new session, so resending an unconfirmed send, or retrying a frozen away-mode digest, after the captain signs in again can deliver it twice; verify such a message in T3 Code first.
 - Shell typing and Ctrl-U are unsupported; runtime Escape and Ctrl-C still interrupt the turn.
 - A Firstmate main session in a T3 thread is verified only for Claude; a Codex supervisor has no away mode on this backend because it has no tracked background tool for `start-native`, and T3 has no terminal for `start` to create.
-- A [work cause](#work-causes) is established only for a command an agent runs inside its own T3 turn on the same machine; an agent that runs commands in a shell older than its turn, a remote secondmate's steer, and a turn that received several prompts record none.
+- An [origin reference](#where-work-comes-from) is recorded only for a command an agent runs inside a T3 thread on the same machine; a remote secondmate's steer records none.
 - T3 checkpoints each turn as hidden refs under `refs/t3/orchestration-v2/checkpoints/` in the project clone; they are never pushed and do not affect the landed-work test.
 
 ## Regression entry points

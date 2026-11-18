@@ -585,8 +585,8 @@ test_relaunch_preserves_durable_task_metadata() {
     || fail "the task X request must survive relaunch"
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
-  [ "$(meta_field "$dir" rl19 caused_by)" = '{"threadId":"coord","runId":"run-c","messageId":"msg-c"}' ] \
-    || fail "the T3 prompt that caused the task must survive relaunch, not be re-resolved from the relaunching turn"
+  [ -z "$(meta_field "$dir" rl19 caused_by)" ] \
+    || fail "a cause line an older spawn wrote is no longer read, so a relaunch drops it"
   fm_pr_poll_artifacts_valid "$dir/home/state" rl19 "$ROOT/bin/fm-pr-poll.sh" \
     || fail "relaunch must keep an armed PR poll authenticated"
   pass "fm-control relaunch: an armed PR poll survives replacement launch publication"

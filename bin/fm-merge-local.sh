@@ -36,8 +36,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-# shellcheck source=bin/fm-t3-cause-lib.sh
-. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+# shellcheck source=bin/fm-t3-origin-lib.sh
+. "$SCRIPT_DIR/fm-t3-origin-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
@@ -211,8 +211,8 @@ MERGE_CONTROL_LOCK=
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 fm_lock_release "$MERGE_PROJECT_LOCK" || true
 MERGE_PROJECT_LOCK=
-# The latest landed cause, which a T3 restart names (bin/fm-t3-cause-lib.sh).
-fm_t3_cause_landed_record "$STATE" "$ID"
+# The latest landed origin, which a T3 restart names (bin/fm-t3-origin-lib.sh).
+fm_t3_origin_landed_record "$STATE" "$ID"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"

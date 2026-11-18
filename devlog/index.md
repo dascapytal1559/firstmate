@@ -1839,3 +1839,31 @@ What changed, in [FORK.md](../FORK.md) and the front page:
 - **The other half.** Where the T3 Code fork carries the other half of a feature, the section links to it.
 
 No code changed.
+
+## 68. FirstMate stops deciding causes and names where work comes from (18 November 2026)
+
+The usage-attribution redesign ("born labelled") moves the labelling into T3: work is labelled when it starts, from the thread it comes from.
+The rule it serves, in the captain's words:
+
+> if I start something and it starts on my phone, and until my next meaningful input it should be attributed to my phone and then I start inputting it from my computer, then it should start to be attributed to my computer and then if I switch back to my phone, then it's on my phone again.
+>
+> (16 November 2026)
+
+Until now FirstMate worked out a cause itself: it walked its own process tree to find which T3 turn had started a command, then looked up that turn's prompt.
+That guess was fragile, and T3 can now do the labelling itself, so FirstMate hands it an origin reference instead: the T3 thread the work comes from, and optionally when, `{"threadId", "at"}`.
+Writing one needs no T3 call and no look at the process tree.
+
+What changed:
+
+- **A spawn** sends "this thread, as of when the spawn began" on the worker's launch, and records nothing: T3 binds the thread's birth from it.
+- **A steer** keeps the reference in its inbox record, so a doorbell rung again later still binds to the turn that wrote the steer.
+- **A note, a delayed follow-up, and a queued backlog item** keep the reference of the turn that wrote them; the wake about them claims it, and a queued item's first launch sends it.
+- **A wake about a task** names that task's own thread, so the wake counts wherever the task counts now, including after he has steered it from the other device.
+  The wake tries each candidate in order until T3 binds one.
+- **A landing** keeps the landed task's thread for a T3 restart to name.
+- **The nightly usage check** now also counts the day's failed claims, because a wake that fails to name its turn counts as upkeep on the computer, which T3's figure alone cannot tell from real upkeep.
+
+Removed: the cause library and the process-tree lookup behind it (the helper's `cause` verb and five functions), and the `caused_by=` task record line.
+Things written before this change that still carry a cause pass it on unchanged when they fire.
+
+The evidence is the touched suites, run against the fake T3 server, which now models references and thread-only claims; no live T3 was called.

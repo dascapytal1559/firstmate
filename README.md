@@ -24,7 +24,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Nightly usage-labels check](FORK.md#nightly-usage-labels-check): a nightly check raises one backlog item when any of the day's T3 Code usage has no phone or computer label.
 - [Pointer to the previous dialog](FORK.md#pointer-to-the-previous-dialog): a fresh FirstMate session is told where the previous conversation is saved.
 - [Alerts only when needed](FORK.md#alerts-only-when-needed): a turn nobody typed into sounds only when it needs the captain.
-- [Work records its cause](FORK.md#work-records-its-cause): each worker records the prompt that started it, for T3's phone and computer split.
+- [Work records its cause](FORK.md#work-records-its-cause): each worker, steer, note, and wake names the T3 thread it comes from, for T3's phone and computer split.
 - [Live thread on record](FORK.md#live-thread-on-record): anything that must reach FirstMate can find its live T3 thread.
 - [Credential guard](FORK.md#credential-guard): FirstMate's own session cannot read the T3 password file.
 - [Current T3 releases](FORK.md#current-t3-releases): uses T3 Code 0.1.3's tool names, which the T3 Code fork serves, and nothing older.
