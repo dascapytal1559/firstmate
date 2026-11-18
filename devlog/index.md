@@ -1819,3 +1819,23 @@ What was built:
 - **Removed:** the pipeline claim instruction in every no-mistakes brief, the engine's claim call, and the spawn's data-folder claim, with the claim script's three verbs they used.
 
 The evidence is two zero-token review sessions from the same fixture run folder, one started directly (registered with no task) and one through the wrapper (registered under its task), and the new suites for the wrapper and the host's registration.
+
+## 67. The fork's feature list gets one name per feature and a credit line (18 November 2026)
+
+A catalogue of both forks' features, written for a video, found this fork's write-up uneven: some features had two or three names, one was missing from the front page, and an outside contributor's open pull request read as if it were upstream's own fix.
+The captain asked for a light clean-up:
+
+> I think just clean up the fork features to make sure that the description is good and That upstream hasn't covered it and it's documented well. Just like a cleanup.
+>
+> (18 November 2026)
+
+What changed, in [FORK.md](../FORK.md) and the front page:
+
+- **One name per feature.** Each section now uses the catalogue's short name, such as "Instant hand-over" and "Auto clearing on a notification", and the front page uses the same names in the same order, grouped as inside and outside T3 Code.
+- **Every feature on the front page.** "Reply on a worker's thread" had only a section; it now has its line.
+- **What it does, first.** Each section opens with one or two sentences on what the feature does for you, before how and why.
+- **A credit line.** Each section ends with "Upstream: none", "partly" with the upstream pull requests, or "open PR", and an outside contributor's open pull request is never called upstream's own.
+  Upstream was re-checked on the day: it covers none of the 35 features in full.
+- **The other half.** Where the T3 Code fork carries the other half of a feature, the section links to it.
+
+No code changed.
