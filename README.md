@@ -5,43 +5,44 @@ This fork and [the T3 Code fork](https://github.com/dascapytal1559/t3code) ship 
 A fork of [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) that regularly merges upstream's `main`.
 Upstream can run workers in T3 Code as an experimental backend; with the T3 Code fork, this fork makes T3 Code FirstMate's home:
 
-- [Restart recovery](FORK.md#recovery-after-a-t3-code-restart): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
-- [Instant handoff](FORK.md#instant-handoff): a worker's finish reaches FirstMate in seconds.
-- [Approvals at once](FORK.md#approvals-reach-firstmate-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
-- [Any agent](FORK.md#any-t3-code-agent-can-be-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
-- [Crew in the sidebar](FORK.md#workers-listed-as-firstmates-crew): T3 Code lists each worker under the FirstMate that started it.
-- [Readable titles](FORK.md#readable-project-and-task-titles): worker cards name the project and the task.
-- [Bridge routing table](FORK.md#the-model-routing-table-on-t3-codes-bridge): T3's Bridge tab shows which model FirstMate picks for each kind of task.
-- [Card status](FORK.md#what-the-worker-is-waiting-on-on-its-card): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
+- [Instant hand-over](FORK.md#instant-hand-over): a worker's finish reaches FirstMate in seconds, not about 38 s.
+- [Any agent as a worker](FORK.md#any-agent-as-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
+- [Workers listed as crew](FORK.md#workers-listed-as-crew): T3 Code lists each worker under the FirstMate that started it.
+- [Readable titles](FORK.md#readable-titles): worker cards name the project and the task, not `fm-` ids.
 - [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access (upstream's), and cleanup stops everything they started.
-- [Clean restarts](FORK.md#clean-t3-restarts): a new T3 build installs only once every running turn has finished.
-- [Usage limits](FORK.md#a-usage-limit-never-stops-the-work): a worker stopped by an account's usage limit reaches FirstMate by name and moves to another account at once.
-- [Long commands](FORK.md#long-commands-a-restart-cannot-cut): a worker's long test run or build survives a T3 restart.
-- [Fresh sessions](FORK.md#a-fresh-firstmate-session-takes-over-cleanly): after `/clear`, the new FirstMate session takes over the same thread.
-- [Cold sessions](FORK.md#a-notification-never-reloads-a-cold-session): a worker notification rings FirstMate through T3 Code instead of reloading a session idle past its cache lifetime.
-- [Clear check](FORK.md#a-nightly-check-watches-every-clear): a nightly check lists every clear of FirstMate's session and puts a line in the morning briefing when one may have hurt.
-- [Usage labels check](FORK.md#a-nightly-check-finds-unlabelled-usage): a nightly check raises one backlog item when any of the day's T3 Code usage has no label, or when the figure cannot be read.
-- [Previous dialog](FORK.md#a-fresh-session-points-at-the-previous-dialog): a fresh FirstMate session is told where the previous session's dialog is saved, and reads it only when the captain's first message needs it.
-- [Alerts](FORK.md#a-wake-turn-alerts-only-when-it-needs-the-captain): a turn nobody typed into sounds only when it needs the captain.
-- [Work causes](FORK.md#work-records-the-prompt-that-caused-it): each worker records the prompt that started it, for T3's usage by origin.
-- [Live thread record](FORK.md#the-live-firstmates-thread-on-record): the live FirstMate's T3 thread id is on record for anything that must reach it.
-- [Credential guard](FORK.md#the-t3-code-credential-stays-out-of-transcripts): the T3 credential stays out of FirstMate's transcript.
-- [Current T3 releases](FORK.md#current-t3-code-releases): uses T3 Code 0.1.3's tool names, which the T3 Code fork serves, and nothing older.
-- [Telemetry warning](FORK.md#telemetry-warning-that-fits-the-t3-code-fork): warns only when T3 telemetry is on or unreadable.
+- [Approvals at once](FORK.md#approvals-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
+- [Routing table on the Bridge](FORK.md#routing-table-on-the-bridge): T3's Bridge tab shows which model FirstMate picks for each kind of task.
+- [Card status](FORK.md#card-status): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
+- [Reply on a worker's thread](FORK.md#reply-on-a-workers-thread): a reply, settle, or snooze on a worker's thread reaches FirstMate as the captain's input on that task.
+- [Restart recovery](FORK.md#restart-recovery): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
+- [A usage limit never stops the work](FORK.md#a-usage-limit-never-stops-the-work): a worker stopped by an account's usage limit moves to another account at once, same conversation.
+- [Clean T3 restarts](FORK.md#clean-t3-restarts): a new T3 build installs only once every running turn has finished.
+- [Long commands survive restarts](FORK.md#long-commands-survive-restarts): a worker's long test run or build survives a T3 restart.
+- [Fresh sessions take over](FORK.md#fresh-sessions-take-over): after `/clear`, the new FirstMate session takes over the same thread.
+- [Auto clearing on a notification](FORK.md#auto-clearing-on-a-notification): a worker's notification starts FirstMate fresh instead of reloading a cold, expensive session.
+- [Nightly clear check](FORK.md#nightly-clear-check): a nightly check lists every clear of FirstMate's session and flags one that may have lost the thread.
+- [Nightly usage-labels check](FORK.md#nightly-usage-labels-check): a nightly check raises one backlog item when any of the day's T3 Code usage has no phone or computer label.
+- [Pointer to the previous dialog](FORK.md#pointer-to-the-previous-dialog): a fresh FirstMate session is told where the previous conversation is saved.
+- [Alerts only when needed](FORK.md#alerts-only-when-needed): a turn nobody typed into sounds only when it needs the captain.
+- [Work records its cause](FORK.md#work-records-its-cause): each worker, steer, note, and wake names the T3 thread it comes from, for T3's phone and computer split.
+- [Live thread on record](FORK.md#live-thread-on-record): anything that must reach FirstMate can find its live T3 thread.
+- [Credential guard](FORK.md#credential-guard): FirstMate's own session cannot read the T3 password file.
+- [Current T3 releases](FORK.md#current-t3-releases): uses T3 Code 0.1.3's tool names, which the T3 Code fork serves, and nothing older.
+- [Telemetry warning](FORK.md#telemetry-warning): warns only when T3 telemetry is on or unreadable.
 
 Outside T3 Code:
 
-- [Priorities and objectives](FORK.md#priorities-and-high-level-objectives-in-every-check-in): Bearings and `/ahoy` open with this home's priorities and high level objectives.
-- [Ideas](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work.
-- [When no worker is running](FORK.md#do-it-when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
+- [Priorities and objectives](FORK.md#priorities-and-objectives): every check-in opens with this home's priorities and high level objectives.
+- [Ideas in the backlog](FORK.md#ideas-in-the-backlog): the backlog keeps ideas the captain may pick up apart from work, never dispatched.
+- ["When no worker is running"](FORK.md#when-no-worker-is-running): "do X when the fleet goes idle" fires the moment the last worker's turn ends.
 - [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
-- [Codex efforts](FORK.md#codex-efforts-come-from-codexs-own-catalog): a Codex model's efforts come from Codex's own catalog, not a model name (upstream PR open).
-- [Local dates](FORK.md#a-put-off-decision-returns-at-local-midnight): a decision put off to a date returns at the start of that day where the captain is.
-- [Live review boards](FORK.md#review-boards-that-keep-listening): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
-- [Rebased landings](FORK.md#rebased-local-only-work-still-lands): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes (upstream PR open).
-- [Trusted review wakes](FORK.md#only-trusted-reviewers-wake-a-parked-worker): a worker parked on review restarts only for review activity from trusted people; anything else is reported to FirstMate.
-- [Fable quota floor](FORK.md#a-fable-worker-never-starts-on-a-nearly-out-account): a Fable worker never starts on a Claude account nearly out of its allowance.
-- [Sized worker starts](FORK.md#each-claude-worker-is-sized-before-it-starts): each Claude worker is sized against every account's quota and starts where it fits, or waits for the soonest reset.
+- [Live review boards](FORK.md#live-review-boards): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
+- [Local midnight](FORK.md#local-midnight): a decision put off to a date returns at the start of that day where the captain is.
+- [Reported landings](FORK.md#reported-landings): a `local-only` ready report names its commit and exactly that commit lands, stage after stage, with no stored record to go stale.
+- [Trusted review wakes](FORK.md#trusted-review-wakes): a worker parked on review restarts only for review activity from trusted people.
+- [Codex efforts](FORK.md#codex-efforts): a Codex model's efforts come from Codex's own catalog, not a model name.
+- [Fable quota floor](FORK.md#fable-quota-floor): a Fable worker never starts on a Claude account nearly out of its allowance.
+- [Sized worker starts](FORK.md#sized-worker-starts): each Claude worker is sized against every account's quota and starts where it fits, or waits for the soonest reset.
 
 Details and pictures: [FORK.md](FORK.md). The rest of this README is upstream's.
 

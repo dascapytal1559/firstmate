@@ -115,6 +115,21 @@
 //     field); world restartCause declares t3_restart_request's
 //     causedBy, checked like a launch's and stored on world restartRequest;
 //     world usageReasons ({rows}) offers the fork's read-only t3_usage_reasons.
+//   - a T3 with origin binding (world fromThread, the T3 Code fork from
+//     step 4) declares fromThread {threadId, at?} on t3_thread_launch,
+//     t3_thread_send, and t3_usage_claim, and refuses one naming a thread it
+//     does not have with the fork's "fromThread: ..." invalid_request before
+//     anything is created, sent, or claimed; it stores the reference sent on
+//     a launched thread and on the prompt's item (fromThread), and
+//     t3_thread_read reports both. A claim with fromThread binds by value:
+//     the device is world origins[threadId] (default computer; null is a
+//     thread whose work counts to no device, refused as the fork refuses
+//     it), stored as {device, bound: {reason}} with reason world
+//     originReasons[threadId] (default inherited), and answered with that
+//     device and reason. Its claims also take threadId alone, the thread's
+//     active run, refused when it has none. World restartFromThread declares
+//     t3_restart_request's fromThread, checked the same way and stored on
+//     world restartRequest. Without them the argument is dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -180,16 +195,17 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
       "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
-      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
+      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_send: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "threadId", "message", "mode", "freshContext", "clientRequestId",
-      ...(w.causedBy ? ["causedBy"] : [])].map((k) => [k, {}])),
+      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : [])].map((k) => [k, {}])),
   }),
   t3_restart_request: (w) => ({
     type: "object",
-    properties: Object.fromEntries(["environmentId", "reason", ...(w.restartCause ? ["causedBy"] : [])].map((k) => [k, {}])),
+    properties: Object.fromEntries(["environmentId", "reason", ...(w.restartCause ? ["causedBy"] : []),
+      ...(w.restartFromThread ? ["fromThread"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_interrupt: (w) => ({
     type: "object",
@@ -212,7 +228,7 @@ const TOOL_SCHEMAS = {
   t3_usage_claim: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "sessionId", ...(w.usageClaimFrom ? ["from"] : []), "directory", "threadId", "runId",
-      "causedBy", "device", ...(w.noIfUnclaimed ? [] : ["ifUnclaimed"])].map((k) => [k, {}])),
+      "causedBy", ...(w.fromThread ? ["fromThread"] : []), "device", ...(w.noIfUnclaimed ? [] : ["ifUnclaimed"])].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -322,12 +338,12 @@ function refreshThread(t) {
   t.status = active?.status ?? latestRun(t)?.status ?? "idle";
 }
 
-// A prompt's timeline item: its message and run ids, and its cause when it
-// has one.
-const promptItem = (text, runId, messageId, causedBy) =>
-  ({ type: "user_message", status: "completed", text, runId, messageId, updatedAt: now(), ...(causedBy ? { causedBy } : {}) });
+// A prompt's timeline item: its message and run ids, and its cause or origin
+// reference when it has one.
+const promptItem = (text, runId, messageId, causedBy, fromThread) =>
+  ({ type: "user_message", status: "completed", text, runId, messageId, updatedAt: now(), ...(causedBy ? { causedBy } : {}), ...(fromThread ? { fromThread } : {}) });
 
-function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefined) {
+function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefined, fromThread = undefined) {
   const runId = `run:${randomUUID()}`;
   t.runs = t.runs ?? [];
   const ordinal = Math.max(0, ...byOrdinal(t).map((r, i, all) => r.ordinal ?? all.length - i)) + 1;
@@ -336,8 +352,16 @@ function startRun(t, text, messageId = `msg:${randomUUID()}`, causedBy = undefin
   t.status = "running";
   t.latestRunId = runId;
   t.items = t.items ?? [];
-  t.items.push(promptItem(text, runId, messageId, causedBy));
+  t.items.push(promptItem(text, runId, messageId, causedBy, fromThread));
   return runId;
+}
+
+// The fork's bindUsageOrigin for a caller outside threads: null when <f>
+// names a thread T3 has, else its refusal.
+function fromThreadProblem(threads, f) {
+  const t = threads[f.threadId];
+  if (!t || t.deleted) return err("invalid_request", `fromThread: thread ${f.threadId} was not found.`);
+  return null;
 }
 
 // The fork's verifyCause: null when <c> names a prompt, else its refusal.
@@ -440,8 +464,14 @@ async function callTool(w, name, a) {
         const problem = causeProblem(threads, cause);
         if (problem) return [problem, false];
       }
+      const from = w.restartFromThread ? a.fromThread : undefined;
+      if (from !== undefined) {
+        const problem = fromThreadProblem(threads, from);
+        if (problem) return [problem, false];
+      }
       w.restartRequest = w.restartRequest ? { ...w.restartRequest, reason } : { reason, requestedAt: new Date().toISOString() };
       if (cause !== undefined) w.restartRequest.causedBy = cause;
+      if (from !== undefined) w.restartRequest.fromThread = from;
       return [ok(w.restartAnswer ?? restartStatus(w, threads)), true];
     }
     case "t3_usage_claim": {
@@ -455,26 +485,45 @@ async function callTool(w, name, a) {
       const from = w.usageClaimFrom ? a.from : undefined;
       if (from !== undefined && Number.isNaN(Date.parse(from))) return [err("invalid_request", "from must be an ISO 8601 time."), false];
       if (from !== undefined && a.sessionId === undefined) return [err("invalid_request", "from goes only with sessionId."), false];
-      const targets = ["sessionId", "directory", "runId"].filter((k) => a[k] !== undefined);
+      // With world fromThread, a thread alone names its active run.
+      const fromThread = w.fromThread ? a.fromThread : undefined;
+      let runId = a.runId;
+      if (w.fromThread && a.threadId !== undefined && runId === undefined && a.sessionId === undefined && a.directory === undefined) {
+        if (!t) return [err("invalid_request", `thread ${a.threadId} was not found.`), false];
+        if (!t.activeRunId) return [err("invalid_request", `thread ${a.threadId} has no turn running now.`), false];
+        runId = t.activeRunId;
+      }
+      const targets = [a.sessionId, a.directory, runId].filter((v) => v !== undefined);
       if (targets.length !== 1) return [err("invalid_request", "Give exactly one of sessionId, directory or runId."), false];
-      if ((targets[0] === "runId") !== (a.threadId !== undefined)) return [err("invalid_request", "threadId goes with runId, and only with runId."), false];
+      if ((runId !== undefined) !== (a.threadId !== undefined)) return [err("invalid_request", "threadId goes with runId, and only with runId."), false];
       if (a.directory !== undefined && !a.directory.startsWith("/")) return [err("invalid_request", "directory must be an absolute path."), false];
-      if ((a.causedBy === undefined) === (a.device === undefined) || (a.causedBy === null && a.device)) return [err("invalid_request", "Give exactly one of causedBy or device."), false];
+      if ([a.causedBy, fromThread, a.device].filter((v) => v !== undefined).length !== 1 || (a.causedBy === null && a.device)) {
+        return [err("invalid_request", w.fromThread ? "Give exactly one of causedBy, fromThread or device." : "Give exactly one of causedBy or device."), false];
+      }
       if (a.device !== undefined && !["phone", "computer"].includes(a.device)) return [err("invalid_params", "device"), false];
-      if (a.runId !== undefined && !(t?.runs ?? []).some((r) => r.runId === a.runId)) return [err("invalid_request", `run ${a.runId} is not a run of thread ${a.threadId}.`), false];
+      if (runId !== undefined && !(t?.runs ?? []).some((r) => r.runId === runId)) return [err("invalid_request", `run ${runId} is not a run of thread ${a.threadId}.`), false];
       if (a.causedBy) {
         const problem = causeProblem(threads, a.causedBy);
         if (problem) return [problem, false];
       }
+      let bound;
+      if (fromThread !== undefined) {
+        const problem = fromThreadProblem(threads, fromThread);
+        if (problem) return [problem, false];
+        const device = Object.hasOwn(w.origins ?? {}, fromThread.threadId) ? w.origins[fromThread.threadId] : "computer";
+        if (device === null) return [err("invalid_request", `fromThread: thread ${fromThread.threadId}'s work counts to no device then; nothing was claimed.`), false];
+        bound = { device, bound: { reason: (w.originReasons ?? {})[fromThread.threadId] ?? "inherited" }, fromThread };
+      }
       const ifUnclaimed = !w.noIfUnclaimed && a.ifUnclaimed === true;
       if (ifUnclaimed && a.causedBy === null) return [err("invalid_request", "ifUnclaimed goes only with a claim, not a removal."), false];
-      const key = a.sessionId !== undefined ? `session:${a.sessionId}${from === undefined ? "" : `@${Date.parse(from)}`}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${a.runId}`;
+      const key = a.sessionId !== undefined ? `session:${a.sessionId}${from === undefined ? "" : `@${Date.parse(from)}`}` : a.directory !== undefined ? `directory:${a.directory}` : `run:${a.threadId}:${runId}`;
       w.usageClaims = typeof w.usageClaims === "object" && w.usageClaims !== null ? w.usageClaims : {};
       const kept = ifUnclaimed && w.usageClaims[key] !== undefined;
       if (kept) { /* the earlier claim stands */ } else if (a.causedBy === null) delete w.usageClaims[key];
-      else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : { causedBy: a.causedBy };
-      const target = a.sessionId !== undefined ? { sessionId: a.sessionId, ...(from === undefined ? {} : { from: new Date(from).toISOString() }) } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId: a.runId };
-      return [ok(w.usageClaimAnswer ?? { ...target, causedBy: w.usageClaims[key]?.causedBy ?? null, device: w.usageClaims[key]?.device ?? null, ...(kept ? { kept: true } : {}) }), !kept];
+      else w.usageClaims[key] = a.device !== undefined ? { device: a.device } : bound ?? { causedBy: a.causedBy };
+      const target = a.sessionId !== undefined ? { sessionId: a.sessionId, ...(from === undefined ? {} : { from: new Date(from).toISOString() }) } : a.directory !== undefined ? { directory: a.directory } : { threadId: a.threadId, runId };
+      const stored = w.usageClaims[key];
+      return [ok(w.usageClaimAnswer ?? { ...target, causedBy: stored?.causedBy ?? null, device: stored?.device ?? null, ...(stored?.bound ? { reason: stored.bound.reason } : {}), ...(kept ? { kept: true } : {}) }), !kept];
     }
     case "t3_usage_reasons": {
       // The fork's read-only watchdog over world usageReasons.rows: the day
@@ -520,6 +569,11 @@ async function callTool(w, name, a) {
         const problem = causeProblem(threads, cause);
         if (problem) return [problem, false];
       }
+      const fromThread = w.fromThread ? a.fromThread : undefined;
+      if (fromThread !== undefined) {
+        const problem = fromThreadProblem(threads, fromThread);
+        if (problem) return [problem, false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -544,8 +598,9 @@ async function callTool(w, name, a) {
         if (a.instructions !== undefined || w.bindInstructions !== undefined) n.instructions = w.bindInstructions ?? a.instructions;
       }
       if (cause !== undefined || w.bindCause !== undefined) n.causedBy = w.bindCause ?? cause;
+      if (fromThread !== undefined) n.fromThread = fromThread;
       threads[id] = n;
-      if (a.message) startRun(n, a.message, undefined, cause);
+      if (a.message) startRun(n, a.message, undefined, cause, fromThread);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];
     }
     case "t3_thread_send": {
@@ -559,11 +614,16 @@ async function callTool(w, name, a) {
         const problem = causeProblem(threads, cause);
         if (problem) return [problem, false];
       }
+      const fromThread = w.fromThread ? a.fromThread : undefined;
+      if (fromThread !== undefined) {
+        const problem = fromThreadProblem(threads, fromThread);
+        if (problem) return [problem, false];
+      }
       const messageId = `msg:${randomUUID()}`;
       let delivery = "steered";
-      if (t.activeRunId) t.items.push(promptItem(a.message, t.activeRunId, messageId, cause));
+      if (t.activeRunId) t.items.push(promptItem(a.message, t.activeRunId, messageId, cause, fromThread));
       else {
-        startRun(t, a.message, messageId, cause);
+        startRun(t, a.message, messageId, cause, fromThread);
         delivery = "started";
       }
       const out = { threadId: t.threadId, messageId, runId: t.activeRunId, status: "running", delivery };

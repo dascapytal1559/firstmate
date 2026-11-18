@@ -543,8 +543,8 @@ test_local_merge_uses_the_recorded_ship_branch() {
 - $(basename "$proj") [local-only branch=contrib/] - changed after task intake (added 2026-01-01)
 EOF
   printf 'project=%s\nmode=local-only\nbranch=fix/%s\n' "$proj" "$id" > "$home/state/$id.meta"
-  printf 'local_done_head=%s\n' "$fix" >> "$home/state/$id.meta"
-  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id") \
+  printf 'done: ready in branch fix/%s at %s\n' "$id" "$fix" > "$home/state/$id.status"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id" --expected-head "$fix") \
     || fail "local merge did not use the branch recorded at task intake: $out"
   [ "$(git -C "$proj" rev-parse HEAD)" = "$fix" ] \
     || fail "local merge did not fast-forward the default branch to the recorded ship branch"

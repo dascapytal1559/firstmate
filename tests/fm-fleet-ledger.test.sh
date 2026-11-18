@@ -89,13 +89,13 @@ run_lifecycle() {
     "$ROOT/bin/fm-watch-checkpoint.sh" --seconds 2 2>&1)
   case "$out" in *"checkpoint:"*|*"signal:"*) ;; *) fail "watcher checkpoint did not run: $out" ;; esac
   LEDGER_AFTER_POLL=$(cat "$HOME_DIR/state/fleet-ledger.jsonl" 2>/dev/null || true)
-  printf ' finished\ndone: ready in branch\n' >> "$HOME_DIR/state/$TASK.status"
   printf 'landed\n' > "$WT_DIR/landed.txt"
   git -C "$WT_DIR" add landed.txt
   git -C "$WT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
     commit -qm 'landed'
-  printf 'local_done_head=%s\n' "$(git -C "$WT_DIR" rev-parse HEAD)" >> "$HOME_DIR/state/$TASK.meta"
-  out=$(in_home "$ROOT/bin/fm-merge-local.sh" "$TASK" 2>&1) || fail "local merge failed: $out"
+  LANDED=$(git -C "$WT_DIR" rev-parse HEAD)
+  printf ' finished\ndone: ready in branch fm/%s at %s\n' "$TASK" "$LANDED" >> "$HOME_DIR/state/$TASK.status"
+  out=$(in_home "$ROOT/bin/fm-merge-local.sh" "$TASK" --expected-head "$LANDED" 2>&1) || fail "local merge failed: $out"
   out=$(in_home "$ROOT/bin/fm-teardown.sh" "$TASK" 2>&1) || fail "teardown failed: $out"
 }
 
@@ -118,7 +118,7 @@ test_flag_on_records_the_task_lifecycle() {
 ["task.status","$TASK","needs-decision","pick-one"," choose \"a\"\\\\b or c"]
 ["task.status","$TASK","resolved","pick-one"," [key=pick-one]  chose a"]
 ["task.status","$TASK",null,null,"partial line without its newline finished"]
-["task.status","$TASK","done",null," ready in branch"]
+["task.status","$TASK","done",null," ready in branch fm/$TASK at $LANDED"]
 ["task.merged","$TASK","local"]
 ["task.cleaned_up","$TASK"]
 EOF

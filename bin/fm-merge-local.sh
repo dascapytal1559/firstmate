@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
 # Perform the approved local merge for a local-only ship task: fast-forward the
-# project's default branch to local_done_head= in state/<task-id>.meta,
-# recorded when the done report was accepted by bin/fm-dod-lib.sh. Missing or
-# malformed heads refuse. Legacy tasks with no head must report readiness again
-# before approval. The recorded ship branch must point at that exact commit, or
-# at a rebase of it that fm_dod_local_rebase_matches proves carries exactly its
-# changes; the refusal names the commits that differ. A landed rebased head is
-# recorded as local_landed_head= and named in the output.
+# project's default branch to the commit the task's newest ready report names,
+# the last `done: ready in branch <branch> at <commit id>` line of
+# state/<task-id>.status as bin/fm-dod-lib.sh reads it. A task with no ready
+# report, or whose newest one names no commit on its branch, refuses with the
+# line to write. Exactly the reported commit lands: later commits on the branch
+# that no report names stay there, and the output says how many.
+#
+# Usage:
+#   fm-merge-local.sh <task-id> [--expected-head <full-commit-id>]
+#   fm-merge-local.sh -h | --help
+#
+# --expected-head names the commit the approver reviewed, one full lowercase hex
+# id of 40 or 64 characters. The landing then refuses unless the newest report
+# names that commit, or a rebase of it that fm_dod_local_rebase_matches proves
+# carries exactly its changes; the refusal names the commits that differ. A task
+# whose record does not say yolo=on lands on the captain's approval of one
+# commit, so it requires the flag.
 #
 # This is firstmate's merge gate-action (the captain's merge authority applied
 # locally instead of via a GitHub PR). It is the one sanctioned exception to hard
 # rule #1 "never run state-changing git in projects/", and it is narrow: it only
 # runs for mode=local-only tasks, only after the captain approves (or yolo=on
 # auto-approves), and only as a clean fast-forward. A diverged branch needs a
-# rebase before landing, and changed content needs a new task/approval record
-# under bin/fm-dod-lib.sh's head-latching contract. See AGENTS.md prime directives,
+# rebase and a fresh ready report before landing, under bin/fm-dod-lib.sh's
+# ready-report contract. See AGENTS.md prime directives,
 # project management, and task lifecycle.
 # The task's existing per-task control lock serializes the captain-hold check
 # through that fast-forward. A still-held or unreadable row refuses before the
@@ -23,9 +33,8 @@
 # docs/captain-hold-lifecycle.md owns the accepted merge-to-cleanup residual.
 # A per-checkout lock in the project's Git directory serializes different
 # tasks across the checks, checkout update, ref transaction, and rollback.
-# tests/fm-merge-local.test.sh covers pinned-head and rebased-head landing,
-# changed-content refusals, and race refusals.
-# Usage: fm-merge-local.sh <task-id>
+# tests/fm-merge-local.test.sh covers reported-commit landing, successive
+# reports, refusals, the approved-commit check, and race refusals.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,11 +45,39 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-# shellcheck source=bin/fm-t3-cause-lib.sh
-. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+# shellcheck source=bin/fm-t3-origin-lib.sh
+. "$SCRIPT_DIR/fm-t3-origin-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
-if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then
+
+usage() {
+  sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
+}
+
+EXPECTED_HEAD=
+case "$#:${1:-}:${2:-}" in
+  1:-h:|1:--help:)
+    usage
+    exit 0
+    ;;
+  1:*:) ;;
+  3:*:--expected-head)
+    EXPECTED_HEAD=$3
+    case "$EXPECTED_HEAD" in ''|*[!0-9a-f]*) EXPECTED_HEAD= ;; esac
+    case ${#EXPECTED_HEAD} in
+      40|64) ;;
+      *)
+        echo "error: --expected-head takes one full lowercase hex commit id" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  *)
+    echo "error: invalid local merge request" >&2
+    exit 2
+    ;;
+esac
+if ! fm_pr_task_id_valid "$1"; then
   echo "error: invalid local merge request" >&2
   exit 2
 fi
@@ -71,10 +108,6 @@ if ! fm_backlog_meta_spawn_gen_optional "$META" "$STATE"; then
   exit 1
 fi
 MERGE_EXPECTED_SPAWN_GEN=$FM_BACKLOG_META_SPAWN_GEN
-MERGE_EXPECTED_HEAD=$(fm_dod_local_done_head "$META") || {
-  echo "error: missing or malformed local done head for task $ID; report readiness before approval" >&2
-  exit 1
-}
 
 MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
@@ -97,18 +130,11 @@ if [ "$FM_BACKLOG_META_SPAWN_GEN" != "$MERGE_EXPECTED_SPAWN_GEN" ]; then
   echo "error: task $ID changed incarnation while waiting to merge; refusing" >&2
   exit 1
 fi
-MERGE_HEAD=$(fm_dod_local_done_head "$META") || {
-  echo "error: missing or malformed local done head for task $ID" >&2
-  exit 1
-}
-[ "$MERGE_HEAD" = "$MERGE_EXPECTED_HEAD" ] || {
-  echo "error: task $ID local done head changed while waiting to merge; refusing" >&2
-  exit 1
-}
 
 PROJ=$(grep '^project=' "$META" | cut -d= -f2-)
 MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 [ "$MODE" = local-only ] || { echo "error: task $ID is mode=$MODE, not local-only; merge PR tasks with bin/fm-pr-merge.sh <id> <PR url> after approval" >&2; exit 1; }
+YOLO=$(grep '^yolo=' "$META" | tail -1 | cut -d= -f2- || true)
 
 BRANCH=$(grep '^branch=' "$META" | cut -d= -f2- || true)
 [ -n "$BRANCH" ] || BRANCH="fm/$ID"
@@ -119,8 +145,8 @@ fi
 branch_head() {
   git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH^{commit}"
 }
-local_head_matches() {
-  [ "$(branch_head)" = "$LAND_HEAD" ]
+ready_line() {
+  fm_dod_local_newest_ready "$STATE/$ID.status"
 }
 project_git_dir=$(git -C "$PROJ" rev-parse --absolute-git-dir) || {
   echo "error: cannot determine the project checkout's Git directory" >&2
@@ -128,7 +154,20 @@ project_git_dir=$(git -C "$PROJ" rev-parse --absolute-git-dir) || {
 }
 MERGE_PROJECT_LOCK="$project_git_dir/fm-local-landing.lock"
 fm_lock_acquire_wait "$MERGE_PROJECT_LOCK"
-LAND_HEAD=$(branch_head) || { echo "error: branch $BRANCH is missing; refusing" >&2; exit 1; }
+BRANCH_HEAD=$(branch_head) || { echo "error: branch $BRANCH is missing; refusing" >&2; exit 1; }
+READY_LINE=$(ready_line) || {
+  echo "error: task $ID has no ready report in its status log; report readiness before approval" >&2
+  exit 1
+}
+# The commit that lands is the one this report names, never the branch tip.
+MERGE_HEAD=$(fm_dod_local_ready_head "$PROJ" "$READY_LINE" "$BRANCH") || {
+  echo "error: $MERGE_HEAD" >&2
+  exit 1
+}
+if ! git -C "$PROJ" merge-base --is-ancestor "$MERGE_HEAD" "$BRANCH_HEAD" >/dev/null 2>&1; then
+  echo "error: the newest ready report of task $ID names $MERGE_HEAD, which is not on branch $BRANCH; after a rebase or an amend, have the worker append a fresh ready report naming the branch's current commit" >&2
+  exit 1
+fi
 
 DEFAULT=$(fm_dod_local_default_branch "$PROJ") || { echo "error: cannot determine default branch for $PROJ; expected origin/HEAD, main, or master" >&2; exit 1; }
 
@@ -141,17 +180,15 @@ if [ -n "$(git -C "$PROJ" status --porcelain 2>/dev/null | head -1)" ]; then
   exit 1
 fi
 
-# Clean fast-forward only: DEFAULT must be an ancestor of BRANCH.
+# Clean fast-forward only: DEFAULT must be a strict ancestor of the reported commit.
 before=$(git -C "$PROJ" rev-parse "$DEFAULT")
-if ! git -C "$PROJ" merge-base --is-ancestor "$before" "$LAND_HEAD"; then
-  echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged)." >&2
-  echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry." >&2
+if git -C "$PROJ" merge-base --is-ancestor "$MERGE_HEAD" "$before"; then
+  echo "error: nothing to land: the newest ready report of task $ID names $MERGE_HEAD, which is already on $DEFAULT" >&2
   exit 1
 fi
-# A rebased branch lands only while it carries exactly the approved changes.
-if [ "$LAND_HEAD" != "$MERGE_HEAD" ] \
-  && ! rebase_diff=$(fm_dod_local_rebase_matches "$PROJ" "$MERGE_HEAD" "$LAND_HEAD" "$before"); then
-  echo "error: branch $BRANCH differs from the recorded local done head and does not carry exactly its changes; refusing: $rebase_diff" >&2
+if ! git -C "$PROJ" merge-base --is-ancestor "$before" "$MERGE_HEAD"; then
+  echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged)." >&2
+  echo "Have the crewmate rebase $BRANCH onto $DEFAULT and report ready again, then retry." >&2
   exit 1
 fi
 
@@ -169,39 +206,41 @@ case "$hold_status" in
     exit 1
     ;;
 esac
+# The approver's commit, when named, must be what the newest report carries.
+if [ -n "$EXPECTED_HEAD" ]; then
+  if [ "$EXPECTED_HEAD" != "$MERGE_HEAD" ] \
+    && ! rebase_diff=$(fm_dod_local_rebase_matches "$PROJ" "$EXPECTED_HEAD" "$MERGE_HEAD" "$before"); then
+    echo "error: the newest ready report of task $ID names $MERGE_HEAD, which is not the approved $EXPECTED_HEAD and does not carry exactly its changes; refusing: $rebase_diff" >&2
+    exit 1
+  fi
+elif [ "$YOLO" != on ]; then
+  echo "error: task $ID lands on the captain's approval of one commit; pass --expected-head <full-commit-id> naming the commit he approved (the newest ready report names $MERGE_HEAD)" >&2
+  exit 1
+fi
 # Recheck after the approval read. Git's ref transaction below verifies and
-# locks the worker head together with the default-branch update.
-if [ "$(fm_dod_local_done_head "$META")" != "$MERGE_HEAD" ] || ! local_head_matches; then
-  echo "error: local done head or branch changed during approval check; refusing" >&2
+# locks the worker branch together with the default-branch update.
+if [ "$(ready_line)" != "$READY_LINE" ] || [ "$(branch_head)" != "$BRANCH_HEAD" ]; then
+  echo "error: the ready report or branch changed during approval check; refusing" >&2
   exit 1
 fi
 merge_status=0
 # Stage the fast-forward with Git's two-tree checkout, which preserves local
 # changes made since the clean-tree check and refuses obstructing files.
-git -C "$PROJ" read-tree -m -u "$before" "$LAND_HEAD" || exit $?
+git -C "$PROJ" read-tree -m -u "$before" "$MERGE_HEAD" || exit $?
 git -C "$PROJ" update-ref -m "merge $BRANCH: Fast-forward" --stdin >/dev/null <<EOF || merge_status=$?
 start
-verify refs/heads/$BRANCH $LAND_HEAD
-update refs/heads/$DEFAULT $LAND_HEAD $before
+verify refs/heads/$BRANCH $BRANCH_HEAD
+update refs/heads/$DEFAULT $MERGE_HEAD $before
 prepare
 commit
 EOF
 if [ "$merge_status" -ne 0 ]; then
   # The transaction left main untouched. Undo only the staged fast-forward;
   # the two-tree checkout also protects any intervening local edits here.
-  git -C "$PROJ" read-tree -m -u "$LAND_HEAD" "$before" || {
+  git -C "$PROJ" read-tree -m -u "$MERGE_HEAD" "$before" || {
     echo "error: local merge refused and checkout restoration failed in $PROJ" >&2
     exit 1
   }
-elif [ "$LAND_HEAD" != "$MERGE_HEAD" ]; then
-  # Still under the meta lock: record which commit carried the approved head.
-  landed_tmp=''
-  if ! landed_tmp=$(mktemp "$STATE/.local-landed-$ID.XXXXXX") \
-    || ! { cat "$META" && printf '\nlocal_landed_head=%s\n' "$LAND_HEAD"; } > "$landed_tmp" \
-    || ! fm_backlog_record_publish "$landed_tmp" "$META" 'local landing metadata' "$STATE"; then
-    [ -z "$landed_tmp" ] || rm -f -- "$landed_tmp"
-    echo "warning: landed $LAND_HEAD but could not record local_landed_head= for task $ID" >&2
-  fi
 fi
 fm_lock_release "$MERGE_META_LOCK" || true
 MERGE_META_LOCK=
@@ -209,12 +248,13 @@ fm_lock_release "$MERGE_CONTROL_LOCK" || true
 MERGE_CONTROL_LOCK=
 [ "$merge_status" -eq 0 ] || exit "$merge_status"
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+later=$(git -C "$PROJ" rev-list --count "$MERGE_HEAD..$BRANCH_HEAD")
 fm_lock_release "$MERGE_PROJECT_LOCK" || true
 MERGE_PROJECT_LOCK=
-# The latest landed cause, which a T3 restart names (bin/fm-t3-cause-lib.sh).
-fm_t3_cause_landed_record "$STATE" "$ID"
+# The latest landed origin, which a T3 restart names (bin/fm-t3-origin-lib.sh).
+fm_t3_origin_landed_record "$STATE" "$ID"
 # Opt-in fleet activity ledger (docs/fleet-ledger.md); off costs one file test.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" merged "$ID" local || true
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"
-[ "$LAND_HEAD" = "$MERGE_HEAD" ] \
-  || echo "landed rebased head $LAND_HEAD, which carries exactly the changes of approved head $MERGE_HEAD"
+[ "$later" = 0 ] \
+  || echo "landed the reported commit $MERGE_HEAD; $BRANCH has $later later commit(s) that no ready report names, left on the branch"

@@ -44,6 +44,10 @@
 #   (s) a branch merging both diverged default branches -> the unrelated merge
 #       bases are reported rather than picked silently
 #   (t) meta records base_branch= -> base stays origin/<base_branch>
+# A local-only task without pr=:
+#   (u) the review compares the commit the newest ready report names and counts
+#       the later commits it leaves out; with no usable report it reviews the
+#       branch tip under a warning
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -571,6 +575,50 @@ test_opted_in_base_branch_stays_on_origin() {
   pass "fm-review-diff keeps an opted-in named base branch on origin's copy"
 }
 
+# bin/fm-merge-local.sh lands the commit the newest ready report names, not the
+# branch tip, so the review must show that commit: a fix committed after the
+# report must not hide the reported bug from the reviewer.
+commit_feature() { # <case-dir> <content> <subject>
+  printf '%s\n' "$2" > "$1/wt/feature.txt"
+  git -C "$1/wt" add feature.txt
+  git -C "$1/wt" commit -qm "$3"
+}
+
+test_local_only_reviews_the_reported_commit() {
+  local case_dir out reported err
+  case_dir=$(make_case local-only-reported)
+  write_task_meta "$case_dir" "kind=ship" "mode=local-only" "branch=fm/task-x1"
+  commit_feature "$case_dir" 'reported-bug' "reported stage"
+  reported=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf 'done [at=1]: ready in branch fm/task-x1 at %s\n' "$reported" > "$case_dir/state/task-x1.status"
+  commit_feature "$case_dir" 'unreported-fix' "later fix"
+  commit_feature "$case_dir" 'unreported-fix-2' "later fix 2"
+
+  out=$(run_review_diff "$case_dir" task-x1 2> "$case_dir/stderr")
+  assert_contains "$out" '+reported-bug' "reported: the review must show the commit that lands"
+  assert_not_contains "$out" 'unreported-fix' "reported: commits after the report must not enter the review"
+  assert_contains "$out" "diff head: $reported" "reported: the review must name the commit it shows"
+  assert_contains "$out" 'left out: 2 later commit(s) on fm/task-x1' "reported: the review must count what it leaves out"
+
+  printf 'done [at=2]: ready in branch fm/task-x1 at %s\n' "$(git -C "$case_dir/wt" rev-parse HEAD)" >> "$case_dir/state/task-x1.status"
+  out=$(run_review_diff "$case_dir" task-x1 2> "$case_dir/stderr")
+  assert_contains "$out" '+unreported-fix-2' "re-reported: a fresh report moves the review to its commit"
+  assert_not_contains "$out" 'left out:' "re-reported: a report naming the tip leaves nothing out"
+
+  printf 'done [at=3]: ready in branch fm/old-name at %s\n' "$reported" >> "$case_dir/state/task-x1.status"
+  out=$(run_review_diff "$case_dir" task-x1 2> "$case_dir/stderr")
+  err=$(cat "$case_dir/stderr")
+  assert_contains "$out" '+unreported-fix-2' "wrong-branch: an unusable report falls back to the branch tip"
+  assert_not_contains "$out" 'diff head:' "wrong-branch: the tip review must not claim to show a landing commit"
+  assert_contains "$err" "names branch fm/old-name, not the task's branch fm/task-x1" "wrong-branch: the warning must give the report's reason"
+
+  rm "$case_dir/state/task-x1.status"
+  out=$(run_review_diff "$case_dir" task-x1 2> "$case_dir/stderr")
+  assert_contains "$out" '+unreported-fix-2' "no-report: without a report the branch tip is reviewed"
+  assert_contains "$(cat "$case_dir/stderr")" 'has no ready report' "no-report: the review must warn that nothing can land yet"
+  pass "fm-review-diff shows a local-only task's reported commit, the one that lands"
+}
+
 test_pr_meta_uses_pr_head_not_stale_local
 test_pr_meta_fetches_pull_head_without_recorded_sha
 test_stale_recorded_pr_head_loses_to_fetched_pull_head
@@ -591,3 +639,4 @@ test_opted_in_diverged_defaults_anchor_where_the_task_was_planted
 test_opted_in_landed_branch_reports_an_empty_review
 test_opted_in_unrelated_merge_bases_are_reported
 test_opted_in_base_branch_stays_on_origin
+test_local_only_reviews_the_reported_commit

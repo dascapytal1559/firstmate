@@ -154,7 +154,7 @@ case "$TOKENS" in ''|*[!0-9]*) pass_through ;; esac
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 fm_backend_source t3code >/dev/null 2>&1 || pass_through
-unset FM_T3CODE_CAUSED_BY FM_T3CODE_CLIENT_REQUEST_ID
+unset FM_T3_FROM_THREAD FM_T3CODE_CLIENT_REQUEST_ID
 BODY='A firstmate supervision wake is waiting in the durable wake queue. It was rung through T3 Code instead of waking the session in place, because the session sat idle past its prompt-cache lifetime.
 In a session that has just started, the session-start digest already presents the queue. Otherwise run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command.
 The Stop hook owns watcher continuity: the next turn end arms supervision, so do NOT run bin/fm-watch-arm.sh.'

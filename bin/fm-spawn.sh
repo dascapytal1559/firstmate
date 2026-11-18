@@ -777,13 +777,16 @@
 #   identity is owned by the parent home that holds its task metadata, while the
 #   pane export happens on the remote host (bin/fm-remote-secondmate-control.sh).
 #   Local spawns never pass it and resolve their own carrier exactly as before.
-# The T3 prompt that caused the task, as bin/fm-t3-cause-lib.sh settles it
-# (FM_T3CODE_CAUSED_BY overrides; a malformed value refuses before anything is
-# leased), is recorded as caused_by=<cause-json> and, on the t3code backend,
-# sent as causedBy on the worker's launch and its brief. A relaunch keeps the
-# recorded cause unless FM_T3CODE_CAUSED_BY is set; a first launch of a
-# backlog item queued with a cause (state/<id>.queued-cause) sends that one,
-# and a successful spawn drops that record. No cause writes no line.
+# Where the task comes from, as bin/fm-t3-origin-lib.sh settles it (this T3
+# thread when the spawn began; FM_T3_FROM_THREAD overrides, and a malformed
+# value refuses before anything is leased), is sent on the t3code backend as
+# the worker launch's fromThread, so T3 binds the thread's birth; nothing is
+# recorded in the task record and the brief carries none. A first launch of
+# a backlog item queued with a reference (state/<id>.queued-origin, or a
+# cause queued before references existed) sends that one instead, whatever
+# turn launches it, and a successful spawn drops that record. A relaunch
+# keeps its recorded backend, which never launches a T3 thread, so it sends
+# nothing.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -1011,8 +1014,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
-# shellcheck source=bin/fm-t3-cause-lib.sh
-. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+# shellcheck source=bin/fm-t3-origin-lib.sh
+. "$SCRIPT_DIR/fm-t3-origin-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-remote-herdr-identity-lib.sh
@@ -2295,17 +2298,14 @@ fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id" >&2
   exit 2
 }
-# The T3 prompt that caused this task (bin/fm-t3-cause-lib.sh), settled before
-# anything is leased or written. A relaunch is the same task, so it keeps the
-# recorded cause unless FM_T3CODE_CAUSED_BY says otherwise; it never borrows
-# the prompt of whatever turn relaunches it.
-if [ "$RELAUNCH" -eq 1 ] && [ -z "${FM_T3CODE_CAUSED_BY:-}" ]; then
-  SPAWN_CAUSE=$(fm_meta_get "$STATE/$ID.meta" caused_by)
-elif [ -z "${FM_T3CODE_CAUSED_BY:-}" ] && SPAWN_CAUSE=$(fm_t3_cause_queued "$STATE" "$ID") && [ -n "$SPAWN_CAUSE" ]; then
-  # The request that queued this backlog item, whatever turn launches it.
-  :
-else
-  SPAWN_CAUSE=$(fm_t3_cause_resolve "$CONFIG/t3code-token") || exit 1
+# Where this task comes from (bin/fm-t3-origin-lib.sh), settled before
+# anything is leased or written, so its time is when the spawn began. A
+# backlog item queued with a reference sends that one, whatever turn launches
+# it, unless FM_T3_FROM_THREAD says otherwise.
+SPAWN_ORIGIN=$(fm_t3_origin_resolve) || exit 1
+if [ -z "${FM_T3_FROM_THREAD:-}" ]; then
+  SPAWN_QUEUED_ORIGIN=$(fm_t3_origin_queued "$STATE" "$ID")
+  [ -z "$SPAWN_QUEUED_ORIGIN" ] || SPAWN_ORIGIN=$SPAWN_QUEUED_ORIGIN
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ]; then
   BRANCH="$BRANCH_PREFIX$ID"
@@ -6598,7 +6598,7 @@ require("fs").writeFileSync(file, JSON.stringify(env), { mode: 0o600 });
   T3CODE_CREATE_UNCERTAIN=1
   T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$title" \
     "$(git -C "$branch_dir" branch --show-current 2>/dev/null || true)" "$worktree" "$T3CODE_MODEL_SELECTION" \
-    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD" "$SPAWN_CAUSE") || rc=$?
+    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD" "$SPAWN_ORIGIN") || rc=$?
   rm -f "$env_file" "$instructions_file"
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 1 ] || T3CODE_CREATE_UNCERTAIN=0
@@ -7588,7 +7588,6 @@ preserve_relaunch_meta() {
   # one applies, so every other task record stays byte-identical.
   [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 0 ] || printf 'fable_floor_override=%s\n' "$FABLE_FLOOR_OVERRIDE"
   [ -z "$FABLE_FLOOR_UNCERTAIN" ] || printf 'fable_floor_uncertain=%s\n' "$FABLE_FLOOR_UNCERTAIN"
-  [ -z "$SPAWN_CAUSE" ] || printf 'caused_by=%s\n' "$SPAWN_CAUSE"
   # The detected OpenCode major, recorded so fm-control sends the exit key this
   # agent's TUI understands. Written only when a version was resolved, so a
   # non-opencode or undetectable task record stays byte-identical.
@@ -8206,7 +8205,8 @@ if [ "$BACKEND" = t3code ]; then
   # staged for a shell to source.
   T3CODE_BRIEF_TEXT=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF") || exit 1
   SPAWN_LAUNCH_SENT=1
-  FM_T3CODE_CAUSED_BY=$SPAWN_CAUSE fm_backend_t3code_turn_start "$T" "$T3CODE_BRIEF_TEXT" "$T3CODE_MODEL_SELECTION" || {
+  # The thread carries its birth, so the brief names no origin.
+  FM_T3_FROM_THREAD='' fm_backend_t3code_turn_start "$T" "$T3CODE_BRIEF_TEXT" "$T3CODE_MODEL_SELECTION" || {
     if [ "$?" -ne 7 ]; then
       echo "error: T3 refused the launch turn for $ID on thread $T; inspect the thread in T3 Code" >&2
       exit 1
@@ -8494,8 +8494,8 @@ if [ -n "$SPAWN_DEFERRED_SIGNAL" ]; then
 fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
-# The task record now holds the cause, so the queued item's record is done.
-fm_t3_cause_queue_forget "$STATE" "$ID"
+# The thread now carries its birth, so the queued item's record is done.
+fm_t3_origin_queue_forget "$STATE" "$ID"
 
 if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
   echo "error: the launch brief for $ID may already have been delivered to T3 thread $T: its outcome is unproven (a lost reply or a T3 error that can follow a commit). The task record is kept; inspect the thread in T3 Code, and if the brief is absent resend only the identical brief text, which reuses its request id within the hour" >&2

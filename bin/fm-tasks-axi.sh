@@ -17,11 +17,12 @@
 # `ready` leaves out ideas, which are never dispatchable, and `start <id>` refuses
 # one (docs/configuration.md "Ideas").
 #
-# `add` (or `create`) run inside a T3 turn also records the prompt that queued
-# the item as state/<id>.queued-cause (bin/fm-t3-cause-lib.sh's
-# fm_t3_cause_queue_record), so a launch from a later turn, such as a recovery
-# wake, still names the request the work serves; `rm` and `done` drop that
-# record. Recording is best effort and never changes the exit status.
+# `add` (or `create`) run inside a T3 turn also records where the item comes
+# from, that turn's thread and time, as state/<id>.queued-origin
+# (bin/fm-t3-origin-lib.sh's fm_t3_origin_queue_record), so a launch from a
+# later turn, such as a recovery wake, still counts with the request the work
+# serves; `rm` and `done` drop that record. Recording is best effort and never
+# changes the exit status.
 #
 # `show` (including `view`) and `list` decode stored captain-hold reasons
 # through bin/fm-hold-reason-lib.sh, which owns the field-only decoding contract.
@@ -68,8 +69,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-# shellcheck source=bin/fm-t3-cause-lib.sh disable=SC1091
-. "$SCRIPT_DIR/fm-t3-cause-lib.sh"
+# shellcheck source=bin/fm-t3-origin-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-t3-origin-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
@@ -172,19 +173,19 @@ case "${1:-}" in
     exit $?
     ;;
   add|create)
-    # The queued item keeps the cause of the turn that queued it (header).
+    # The queued item keeps where the turn that queued it comes from (header).
     out=$(tasks-axi ${ARGS[@]+"${ARGS[@]}"})
     rc=$?
     [ -z "$out" ] || printf '%s\n' "$out"
     [ "$rc" -eq 0 ] || exit "$rc"
     id=$(printf '%s\n' "$out" | sed -n 's/^ok: added \([^ ]*\) ->.*/\1/p;s/^    "id": "\([^"]*\)",*$/\1/p' | head -n 1)
-    [ -z "$id" ] || fm_t3_cause_queue_record "$STATE" "$id" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/t3code-token"
+    [ -z "$id" ] || fm_t3_origin_queue_record "$STATE" "$id"
     exit 0
     ;;
   rm|done)
     tasks-axi ${ARGS[@]+"${ARGS[@]}"}
     rc=$?
-    [ "$rc" -ne 0 ] || fm_t3_cause_queue_forget "$STATE" "${2:-}"
+    [ "$rc" -ne 0 ] || fm_t3_origin_queue_forget "$STATE" "${2:-}"
     exit "$rc"
     ;;
 esac

@@ -766,59 +766,78 @@ assert_grep 'status: fired' "$(first_result "$H" when-fleet-idle)" "the fleet-id
 assert_contains "$(count_lines "$IDLOG")" 1 "the fleet-idle action ran once"
 pass "a busy worker blocks the fleet-idle watch and its turn-end fires it"
 
-# --- arm records the arming turn's T3 cause in the spec ------------------------
+# --- arm records where the arming turn comes from in the spec ----------------
 # A follow-up the captain's phone message set up fires later in a wake turn;
-# the spec keeps the arming turn's cause so that wake counts to the same
-# prompt (bin/fm-wake-drain.sh claim_wake_usage). The line is written before
-# the spec is hash-bound, so a fire still validates, and rebind-all keeps it.
+# the spec keeps the arming turn's thread and time so that wake counts with
+# the same work (bin/fm-wake-drain.sh claim_wake_usage). The line is written
+# before the spec is hash-bound, so a fire still validates, and rebind-all
+# keeps it, as it keeps the cause a spec armed before references existed
+# carries.
+REF='{"threadId":"coord","at":"2026-11-18T09:00:00.000Z"}'
 CAUSE='{"threadId":"coord","runId":"run-old","messageId":"msg-old"}'
-H="$TMP_ROOT/h-cause"; new_home "$H"
-FM_T3CODE_CAUSED_BY="$CAUSE" when "$H" arm caused --interval 0.1 --stable 1 \
-  --condition true --action "$ACT" "$TMP_ROOT/caused-act" >/dev/null || fail "arm with a cause failed"
-assert_equals "caused_by=$CAUSE" "$(grep '^caused_by=' "$H/state/when/when-caused.spec")" \
-  "the spec records the arming turn's cause"
-assert_equals "$(fm_pr_sha256 "$H/state/when/when-caused.spec")" "$(sed -n '2p' "$H/state/when/when-caused.trust")" \
-  "the cause is written before the spec is hash-bound"
+H="$TMP_ROOT/h-origin"; new_home "$H"
+FM_T3_FROM_THREAD="$REF" when "$H" arm origin --interval 0.1 --stable 1 \
+  --condition true --action "$ACT" "$TMP_ROOT/origin-act" >/dev/null || fail "arm with a reference failed"
+assert_equals "from_thread=$REF" "$(grep '^from_thread=' "$H/state/when/when-origin.spec")" \
+  "the spec records the arming turn's reference"
+assert_equals "$(fm_pr_sha256 "$H/state/when/when-origin.spec")" "$(sed -n '2p' "$H/state/when/when-origin.trust")" \
+  "the reference is written before the spec is hash-bound"
 pe "$H" reconcile >/dev/null
-wait_for_result "$H" when-caused || fail "the watch armed with a cause captured no outcome"
-assert_grep 'status: fired' "$(first_result "$H" when-caused)" "a spec carrying a cause still loads and fires"
+wait_for_result "$H" when-origin || fail "the watch armed with a reference captured no outcome"
+assert_grep 'status: fired' "$(first_result "$H" when-origin)" "a spec carrying a reference still loads and fires"
+
+H="$TMP_ROOT/h-origin-here"; new_home "$H"
+env -u FM_T3_FROM_THREAD T3CODE_THREAD_ID=coord FM_HOME="$H" "$ROOT/bin/fm-procevent-when.sh" arm here \
+  --condition true --action "$ACT" "$TMP_ROOT/here-act" >/dev/null || fail "arm inside a T3 thread failed"
+[ "$(sed -n 's/^from_thread=//p' "$H/state/when/when-here.spec" | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(String(d.threadId === "coord" && Math.abs(Date.parse(d.at) - Date.now()) < 60000))')" = true ] \
+  || fail "an arm inside a T3 thread records that thread and the time it armed: $(grep '^from_thread=' "$H/state/when/when-here.spec")"
 
 for given in unset off; do
-  H="$TMP_ROOT/h-nocause-$given"; new_home "$H"
+  H="$TMP_ROOT/h-noorigin-$given"; new_home "$H"
   if [ "$given" = off ]; then
-    FM_T3CODE_CAUSED_BY=off when "$H" arm nocause --condition true --action "$ACT" "$TMP_ROOT/nocause-act" >/dev/null \
-      || fail "arm with the cause off failed"
+    FM_T3_FROM_THREAD=off when "$H" arm noorigin --condition true --action "$ACT" "$TMP_ROOT/noorigin-act" >/dev/null \
+      || fail "arm with the reference off failed"
   else
-    env -u FM_T3CODE_CAUSED_BY -u T3CODE_THREAD_ID FM_HOME="$H" "$ROOT/bin/fm-procevent-when.sh" arm nocause \
-      --condition true --action "$ACT" "$TMP_ROOT/nocause-act" >/dev/null || fail "arm outside a T3 turn failed"
+    env -u FM_T3_FROM_THREAD -u T3CODE_THREAD_ID FM_HOME="$H" "$ROOT/bin/fm-procevent-when.sh" arm noorigin \
+      --condition true --action "$ACT" "$TMP_ROOT/noorigin-act" >/dev/null || fail "arm outside a T3 thread failed"
   fi
-  if grep -q '^caused_by=' "$H/state/when/when-nocause.spec"; then
-    fail "no cause available (FM_T3CODE_CAUSED_BY $given) must leave no caused_by line"
+  if grep -q '^from_thread=' "$H/state/when/when-noorigin.spec"; then
+    fail "no reference available (FM_T3_FROM_THREAD $given) must leave no from_thread line"
   fi
 done
 
-H="$TMP_ROOT/h-badcause"; new_home "$H"
-if FM_T3CODE_CAUSED_BY='{"nope":1}' when "$H" arm badcause --condition true --action "$ACT" "$TMP_ROOT/bad-act" 2>"$TMP_ROOT/badcause.err"; then
-  fail "a malformed FM_T3CODE_CAUSED_BY must refuse the arm"
+H="$TMP_ROOT/h-badorigin"; new_home "$H"
+if FM_T3_FROM_THREAD="$CAUSE" when "$H" arm badorigin --condition true --action "$ACT" "$TMP_ROOT/bad-act" 2>"$TMP_ROOT/badorigin.err"; then
+  fail "a malformed FM_T3_FROM_THREAD must refuse the arm"
 fi
-assert_grep "FM_T3CODE_CAUSED_BY" "$TMP_ROOT/badcause.err" "the refusal names the variable"
-assert_absent "$H/state/when/when-badcause.spec" "a refused arm leaves no spec behind"
+assert_grep "FM_T3_FROM_THREAD" "$TMP_ROOT/badorigin.err" "the refusal names the variable"
+assert_absent "$H/state/when/when-badorigin.spec" "a refused arm leaves no spec behind"
 
-H="$TMP_ROOT/h-cause-rebind"; new_home "$H"
-REPO_ROOT="$TMP_ROOT/cause-rebind-repo"
+H="$TMP_ROOT/h-origin-rebind"; new_home "$H"
+REPO_ROOT="$TMP_ROOT/origin-rebind-repo"
 mkdir -p "$REPO_ROOT/bin"
-CAUSE_ACT="$REPO_ROOT/bin/act.sh"
+ORIGIN_ACT="$REPO_ROOT/bin/act.sh"
 # shellcheck disable=SC2016  # $1 belongs to the written script.
-printf '#!/usr/bin/env bash\necho v1 >> "$1"\n' > "$CAUSE_ACT"
-chmod +x "$CAUSE_ACT"
-FM_T3CODE_CAUSED_BY="$CAUSE" FM_HOME="$H" FM_ROOT_OVERRIDE="$REPO_ROOT" "$ROOT/bin/fm-procevent-when.sh" arm cause-rebind \
-  --condition true --action "$CAUSE_ACT" "$TMP_ROOT/cause-rebind.log" >/dev/null || fail "arm for the rebind case failed"
+printf '#!/usr/bin/env bash\necho v1 >> "$1"\n' > "$ORIGIN_ACT"
+chmod +x "$ORIGIN_ACT"
+for name in origin-rebind cause-rebind; do
+  FM_T3_FROM_THREAD="$REF" FM_HOME="$H" FM_ROOT_OVERRIDE="$REPO_ROOT" "$ROOT/bin/fm-procevent-when.sh" arm "$name" \
+    --condition true --action "$ORIGIN_ACT" "$TMP_ROOT/$name.log" >/dev/null || fail "arm for the rebind case $name failed"
+done
+# The second watch stands for one armed before references existed: its spec
+# carries the cause, bound as arm would have bound it.
+spec="$H/state/when/when-cause-rebind.spec"
+sed "s/^from_thread=.*/caused_by=$CAUSE/" "$spec" > "$spec.new" && mv "$spec.new" "$spec" && chmod 600 "$spec"
+printf 'fm-when-trust-v1\n%s\n' "$(fm_pr_sha256 "$spec")" > "$H/state/when/when-cause-rebind.trust"
 # shellcheck disable=SC2016  # $1 belongs to the written script.
-printf '#!/usr/bin/env bash\necho v2 >> "$1"\n' > "$CAUSE_ACT"
+printf '#!/usr/bin/env bash\necho v2 >> "$1"\n' > "$ORIGIN_ACT"
 OUT=$(FM_HOME="$H" FM_ROOT_OVERRIDE="$REPO_ROOT" "$ROOT/bin/fm-procevent-when.sh" rebind-all) || fail "rebind-all failed: $OUT"
-assert_contains "$OUT" "rebound: when-cause-rebind" "the watch was rebound"
-assert_equals "caused_by=$CAUSE" "$(grep '^caused_by=' "$H/state/when/when-cause-rebind.spec")" \
-  "rebind-all keeps the recorded cause"
-pass "arm records the arming turn's cause before binding the spec, records none without one, refuses a malformed one, and rebind-all keeps it"
+assert_contains "$OUT" "rebound: when-origin-rebind" "the watch was rebound"
+assert_contains "$OUT" "rebound: when-cause-rebind" "the older watch was rebound"
+assert_equals "from_thread=$REF" "$(grep '^from_thread=' "$H/state/when/when-origin-rebind.spec")" \
+  "rebind-all keeps the recorded reference"
+assert_equals "caused_by=$CAUSE" "$(grep '^caused_by=' "$spec")" \
+  "rebind-all keeps an older spec's cause"
+pass "arm records the arming turn's reference before binding the spec, records none without one, refuses a malformed one, and rebind-all keeps it or an older cause"
 
 printf 'all fm-procevent-when tests passed\n'

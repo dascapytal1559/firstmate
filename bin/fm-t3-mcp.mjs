@@ -65,7 +65,7 @@
 //   fm-t3-mcp.mjs launch --project <id> --title <title> --model-selection <json>
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
-//       [--parent <thread-id>] [--caused-by <cause-json>]
+//       [--parent <thread-id>] [--from-thread <reference> | --caused-by <cause-json>]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
@@ -74,15 +74,18 @@
 //     for, sent as parentThreadId only where t3_thread_launch's tools/list
 //     schema declares it (T3 then lists the thread as that thread's crew);
 //     elsewhere the launch goes ahead without it, and the result's
-//     parentThreadId is null. --caused-by names the prompt that caused this
-//     work (see cause), sent as causedBy only where the launch schema
-//     declares it; elsewhere the result's causedBy is null. T3 checks the
-//     cause before it creates anything, so a cause it refuses exits 3
-//     (cause_refused) with no thread launched. Reads the thread and its configuration
+//     parentThreadId is null. --from-thread names where the work comes from
+//     (an origin reference, see from-thread-check), sent as fromThread only
+//     where the launch schema declares it; elsewhere the result's fromThread
+//     is null. T3 binds it before it creates anything, so a reference it
+//     refuses exits 3 (origin_refused) with no thread launched.
+//     --caused-by passes on a cause recorded before references existed
+//     (parseCause), sent as causedBy the same way and refused the same way
+//     (cause_refused). Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
 //     read reports one), instance, model, every requested option value,
-//     the given environment and instructions, the cause it was sent, and, when a parent was sent,
+//     the given environment and instructions, and, when a parent was sent,
 //     relationshipToParent crew under exactly that parent; a refused
 //     thread that does not then read back archived with no active run exits
 //     1, because it may still be live. A read-back that fails also archives
@@ -91,10 +94,12 @@
 //     1 as well. A transport or unexpected failure of the
 //     gate, before t3_thread_launch is requested, exits 8: no thread was
 //     launched. Without --message-file the thread is created idle.
-//   fm-t3-mcp.mjs send --thread <id> --message-file <file> --client-request-id <id> [--caused-by <cause-json>]
+//   fm-t3-mcp.mjs send --thread <id> --message-file <file> --client-request-id <id>
+//       [--from-thread <reference> | --caused-by <cause-json>]
 //     t3_thread_send mode auto: start an idle thread's next turn or steer the
-//     running one. --caused-by rides as causedBy where the send schema
-//     declares it; T3 refusing that cause is exit 3 (cause_refused), proven
+//     running one. --from-thread rides as fromThread, and --caused-by as
+//     causedBy, where the send schema declares it; T3 refusing that
+//     reference or cause is exit 3 (origin_refused or cause_refused), proven
 //     non-delivery. T3 derives the message and command ids from the client
 //     request id within the auth session that sent it, so a retry with the
 //     same id under the same sign-in is the same delivery; after a fresh
@@ -106,60 +111,32 @@
 //     typed refusal, is proven non-delivery for this attempt; exit 3 is only
 //     T3's refusal of the send itself, so a typed failure of the gate's reads
 //     exits 1.
-//   fm-t3-mcp.mjs cause --thread <caller-thread-id>
-//     The prompt that caused what the calling process is about to do, from
-//     the turn of <caller-thread-id> that started the calling process (its
-//     process turn, below), as a cause {threadId, runId,
-//     messageId} T3's causedBy takes: the message that started the turn
-//     (the run's userMessageId, which for a wake is the notification T3
-//     posted, so work a claimed wake turn launches inherits its claim), or,
-//     when the turn received more prompts (a steer or a queued input), the
-//     latest one received before this process began, by each prompt's
-//     updatedAt with one second of slack. The caller passes
-//     the thread it runs in ($T3CODE_THREAD_ID, which T3 sets in each
-//     agent's environment). It answers causedBy null with a reason, and
-//     never guesses, when the thread is unknown, when the turn
-//     names no starting message and shows no prompt,
-//     or when no turn started this process: walking up its
-//     ancestors, the topmost one whose environment carries
-//     T3CODE_THREAD_ID=<caller-thread-id> is the agent T3 started, and the
-//     process just below it began the call. Its turn is the latest of the
-//     thread's five most recent runs that started no later than that process
-//     did, provided that run is still active or ended no earlier than that
-//     process started (one second of slack each way for ps's whole-second
-//     ages). A send made just after its turn ended, or by a job an earlier
-//     turn left running into a later one, therefore counts to the turn that
-//     started it, not to the current one; a process older than every recent
-//     turn, one started between turns, or one orphaned to init answers null.
-//     An agent that runs commands in a shell older than its current turn
-//     would count them to the turn that started that shell. The message pages
-//     it reads ask for one character of each item, so message text is never
-//     read. Changes nothing.
-//   fm-t3-mcp.mjs usage-claim (--turn <caller-thread-id> | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
-//       (--caused-by <cause-json|null> | --device phone|computer) [--if-unclaimed]
-//     The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by
-//     origin"): count work Usage cannot trace to that cause (as an agent
-//     prompt with it would count) or straight to that device. --turn claims
-//     the calling process's own turn of that thread, found exactly as cause
-//     finds it, and answers claimed:false with a reason, claiming nothing,
-//     where cause would answer null; --thread with --run names a run; a
-//     session (native id) or folder covers work run outside T3, such as a
-//     pipeline. T3 counts a claimed turn only when its own prompt does not
-//     already trace, so claiming a prompted turn changes nothing. A session
-//     claim with --from (a zoned ISO time) covers that session from then
-//     until a later claim's start, so a resumed session splits by turn; T3
-//     keeps one claim per session and start. A T3 whose claim takes no from
-//     gets the whole-session claim instead, answered with from null.
-//     Claiming the same target (and start) again replaces, unless
-//     --if-unclaimed sends T3's ifUnclaimed, which keeps a claim the target
-//     already has and answers claimed:false, reason "already claimed", with
-//     that earlier claim's causedBy and device; --caused-by null removes
-//     (not with --if-unclaimed). Prints {claimed, the target, causedBy,
-//     device} as T3 answered them, which must be what was asked unless kept,
-//     else exit 1 (usage_claim_unproven). Exit 3 (cause_refused) for a cause
-//     T3 refuses, with nothing claimed; exit 4 (usage_claim_unsupported)
-//     where T3 has no t3_usage_claim, or none that takes ifUnclaimed when
-//     --if-unclaimed asks for it.
+//   fm-t3-mcp.mjs usage-claim (--turn <thread-id> | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
+//       (--from-thread <reference> | --caused-by <cause-json|null> | --device phone|computer) [--if-unclaimed]
+//     The T3 Code fork's t3_usage_claim (its fork/README.md "Phone vs
+//     computer split"): count work Usage cannot trace on its own with that
+//     reference's work (bound by value when T3 takes the claim), as that
+//     cause (one recorded before references existed), or straight to that
+//     device. --turn sends the thread alone, and T3 picks its turn running
+//     now (a thread with none is T3's typed refusal); --thread with --run
+//     names a run; a session (native id) or folder covers work run outside
+//     T3, such as a pipeline. A session claim with --from (a zoned ISO time)
+//     covers that session from then until a later claim's start, so a
+//     resumed session splits by turn; T3 keeps one claim per session and
+//     start. A T3 whose claim takes no from gets the whole-session claim
+//     instead, answered with from null. Claiming the same target (and start)
+//     again replaces, unless --if-unclaimed sends T3's ifUnclaimed, which
+//     keeps a claim the target already has and answers claimed:false, reason
+//     "already claimed", with that earlier claim's causedBy and device;
+//     --caused-by null removes (not with --if-unclaimed). Prints {claimed,
+//     the target, causedBy, device, reason} as T3 answered them: a device
+//     claim must answer that device, a cause that cause, and a reference a
+//     device with T3's reason for it, unless kept, else exit 1
+//     (usage_claim_unproven). Exit 3 (origin_refused or cause_refused) for a
+//     reference or cause T3 refuses, such as a thread whose work counts to
+//     no device, with nothing claimed; exit 4 (usage_claim_unsupported)
+//     where T3 has no t3_usage_claim, or none that takes fromThread or
+//     ifUnclaimed when the call needs it.
 //   fm-t3-mcp.mjs usage-reasons [--days <n>] [--until-day <YYYY-MM-DD>] [--time-zone <iana>]
 //     The T3 Code fork's read-only t3_usage_reasons, the labels watchdog:
 //     Usage tokens over <n> days (T3's default 7, at most 366) ending
@@ -171,11 +148,12 @@
 //     day than --until-day, exits 1 (usage_reasons_malformed), never an
 //     empty figure; exit 4 (usage_reasons_unsupported) where T3 has no
 //     t3_usage_reasons. Changes nothing.
-//   fm-t3-mcp.mjs cause-check --json <text>
-//     Local, no T3 call: {causedBy} for <text>, a JSON object of exactly
-//     threadId, messageId, and optional runId, all non-empty strings, in any
-//     key order (the answer is in that order); anything else exits 2. T3 checks the ids themselves when the
-//     cause is sent.
+//   fm-t3-mcp.mjs from-thread-check --json <text>
+//     Local, no T3 call: {fromThread} for <text>, an origin reference: a
+//     JSON object of a non-empty threadId and an optional at, a zoned ISO
+//     time answered in UTC, and nothing else, in any key order (the answer
+//     is threadId then at); anything else exits 2. T3 checks the thread
+//     itself when the reference is sent.
 //   fm-t3-mcp.mjs state --thread <id>
 //     exists, archived, status, activeRunId, pendingRequestCount,
 //     worktreePath, and turnAt (the latest run's completion, else its start or
@@ -309,19 +287,20 @@
 //     coordinator or live, both null when there is none; exit 6 as
 //     thread-for-root when there is no usable pin and several live threads.
 //   fm-t3-mcp.mjs restart-status
-//   fm-t3-mcp.mjs restart-request --reason <text> [--caused-by <cause-json>]
+//   fm-t3-mcp.mjs restart-request --reason <text> [--from-thread <reference>]
 //   fm-t3-mcp.mjs restart-cancel
-//     The T3 Code fork's restart registry (its fork/README.md "Restart
-//     registry"), for bin/fm-t3-restart-request.sh. Each prints T3's status
+//     The T3 Code fork's restart registry (its fork/README.md "Clean
+//     restarts"), for bin/fm-t3-restart-request.sh. Each prints T3's status
 //     {pending, reason, requestedAt, activeTurns, drained, serverStartedAt},
 //     refused as exit 1 (restart_malformed) unless every field has the
 //     fork's shape. restart-request sets the pending restart with that
 //     reason (trimmed, 1 to 500 characters), or replaces only the reason of
 //     one already pending, and must read back pending with exactly that
-//     reason; --caused-by names the prompt whose work the restart installs,
-//     sent where the request's schema declares causedBy (T3 stamps it on its
-//     restart note), and a cause T3 refuses is dropped and the request sent
-//     again without it, reported as causeDropped with causedBy null;
+//     reason; --from-thread names where the work the restart installs
+//     counts, sent where the request's schema declares fromThread (T3 binds
+//     its restart note and continuations there), and a reference T3 refuses
+//     is dropped and the request sent again without it, reported as
+//     originDropped with fromThread null;
 //     restart-cancel clears it and releases the messages it held,
 //     and must read back not pending; either mismatch exits 1
 //     (restart_unproven). Exit 4 (restart_unsupported) when this T3 lacks a
@@ -1054,24 +1033,24 @@ async function restartStatusVerb(flags) {
 async function restartRequest(flags) {
   const reason = need(flags, "reason").trim();
   if (!reason || reason.length > RESTART_REASON_MAX) usage(`--reason must be 1 to ${RESTART_REASON_MAX} characters after trimming`);
-  const wanted = causeFlag(flags);
+  const wanted = fromThreadFlag(flags);
   const session = await restartSession(flags, [RESTART_STATUS_TOOL, "t3_restart_request", "t3_restart_cancel"]);
-  const cause = wanted !== null && toolOffers(session, "t3_restart_request", "causedBy") ? wanted : null;
+  const from = wanted !== null && toolOffers(session, "t3_restart_request", "fromThread") ? wanted : null;
   let answer;
-  let causeDropped = null;
+  let originDropped = null;
   try {
-    answer = await session.call("t3_restart_request", { reason, ...(cause ? { causedBy: cause } : {}) });
+    answer = await session.call("t3_restart_request", { reason, ...(from ? { fromThread: from } : {}) });
   } catch (err) {
-    // The cause only labels the restart note's usage, so a cause T3 refuses
+    // The reference only labels the restart note's usage, so one T3 refuses
     // never holds up the restart: ask again without it.
-    const refused = causeRefusal(err, cause, "the restart was requested without it");
-    if (refused.code !== "cause_refused") throw err;
-    causeDropped = refused.message;
+    const refused = originRefusal(err, from, null, "the restart was requested without it");
+    if (refused.code !== "origin_refused") throw err;
+    originDropped = refused.message;
     answer = await session.call("t3_restart_request", { reason });
   }
   const out = restartAnswer(answer);
   if (!out.pending || out.reason !== reason) throw new Refusal("restart_unproven", "T3 accepted the restart request but answered with another one", 1);
-  return { ...out, causedBy: causeDropped ? null : cause, causeDropped };
+  return { ...out, fromThread: originDropped ? null : from, originDropped };
 }
 
 async function restartCancel(flags) {
@@ -1369,9 +1348,8 @@ const sameEnvironment = (a, b) =>
 // mode T3 runs the driver at, when it reports one), exactly the requested
 // instance, model, and option values, the thread environment and
 // instructions it was given, and the crew lineage under the parent it named.
-function bindingProblems(t, config, selection, worktree, environment, instructions, parent, cause) {
+function bindingProblems(t, config, selection, worktree, environment, instructions, parent) {
   const problems = [];
-  if (cause !== null && !sameCause(cause, t.causedBy)) problems.push(`causedBy ${t.causedBy ? "differs" : "not bound"}`);
   if (parent !== null && (t.relationshipToParent !== "crew" || t.parentThreadId !== parent)) {
     problems.push(`lineage ${t.relationshipToParent ?? "none"} under ${t.parentThreadId ?? "no parent"}`);
   }
@@ -1401,7 +1379,7 @@ async function launch(flags) {
   const environment = launchEnvironment(flags);
   const instructions = launchInstructions(flags);
   if (flags.parent !== undefined && !flags.parent) usage("--parent needs a thread id");
-  const wanted = causeFlag(flags);
+  const wanted = originFlags(flags);
   let session;
   let g;
   try {
@@ -1413,9 +1391,9 @@ async function launch(flags) {
   // A T3 without crew lineage drops an undeclared argument, so the parent
   // rides, and is proven, only where the launch schema declares it.
   const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
-  // An older T3 refuses an undeclared key, so the cause rides only where
-  // declared.
-  const cause = wanted !== null && toolOffers(session, "t3_thread_launch", "causedBy") ? wanted : null;
+  // An older T3 refuses an undeclared key, so the reference (or a cause
+  // recorded before references existed) rides only where declared.
+  const { from, cause } = declaredOrigin(session, "t3_thread_launch", wanted);
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1430,6 +1408,7 @@ async function launch(flags) {
     ...(instructions !== null ? { instructions } : {}),
     ...(message ? { message } : {}),
     ...(parent !== null ? { parentThreadId: parent } : {}),
+    ...(from !== null ? { fromThread: from } : {}),
     ...(cause !== null ? { causedBy: cause } : {}),
   };
   let out;
@@ -1439,7 +1418,7 @@ async function launch(flags) {
     if (err instanceof Refusal && err.code === UNPROVEN_TOOL_ERROR) {
       throw new Refusal("launch_unconfirmed", `${err.message}, which can follow a created thread; inspect t3_thread_list before retrying`, 1);
     }
-    throw causeRefusal(err, cause, "no thread was launched; FM_T3CODE_CAUSED_BY=off launches without a cause");
+    throw originRefusal(err, from, cause, "no thread was launched; FM_T3_FROM_THREAD=off launches without a reference");
   }
   if (!out?.threadId) throw new Refusal("launch_unconfirmed", "t3_thread_launch returned no threadId; inspect t3_thread_list before retrying", 1);
   const archiveLaunched = () => archiveThread(session, out.threadId, ARCHIVE_TIMEOUT_MS).then((r) => r.archived === true, () => false);
@@ -1458,12 +1437,12 @@ async function launch(flags) {
       { threadId: out.threadId },
     );
   }
-  const problems = bindingProblems(t, config, selection, worktree, environment, instructions, parent, cause);
+  const problems = bindingProblems(t, config, selection, worktree, environment, instructions, parent);
   if (problems.length) {
     const archived = await archiveLaunched();
     throw new Refusal(
       "binding_mismatch",
-      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""}${parent !== null ? `, crew of ${parent}` : ""}${cause !== null ? ", cause" : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
+      `T3 bound thread ${out.threadId} to ${problems.join(", ")}, not the requested ${worktree ? "worktree" : "project root"}, model selection${environment || instructions !== null ? ", thread environment and instructions" : ""}${parent !== null ? `, crew of ${parent}` : ""} at full access; ${archived ? "archived it" : "its archive is unproven, so archive it in T3 Code"}`,
       archived ? 4 : 1,
       { threadId: out.threadId },
     );
@@ -1477,6 +1456,7 @@ async function launch(flags) {
     runId: out.runId ?? null,
     status: t.status ?? null,
     parentThreadId: parent,
+    fromThread: from,
     causedBy: cause,
     environmentId: g.environmentId,
     origin: session.origin,
@@ -1486,7 +1466,7 @@ async function launch(flags) {
 
 async function send(flags) {
   const args = { threadId: need(flags, "thread"), message: readMessage(flags), mode: "auto", clientRequestId: need(flags, "client-request-id") };
-  const wanted = causeFlag(flags);
+  const wanted = originFlags(flags);
   let session;
   try {
     ({ session } = await verifiedSession(flags));
@@ -1496,7 +1476,8 @@ async function send(flags) {
     if (err instanceof Refusal && err.exit === 3) throw new Refusal(err.code, err.message, 1, err.extra);
     throw err;
   }
-  const cause = wanted !== null && toolOffers(session, "t3_thread_send", "causedBy") ? wanted : null;
+  const { from, cause } = declaredOrigin(session, "t3_thread_send", wanted);
+  if (from !== null) args.fromThread = from;
   if (cause !== null) args.causedBy = cause;
   let out;
   try {
@@ -1506,7 +1487,7 @@ async function send(flags) {
     // message was not taken; anything else happened after the request went
     // out.
     if (err instanceof Refusal && (err.exit === 3 || err.exit === 4) && err.code !== UNPROVEN_TOOL_ERROR) {
-      throw causeRefusal(err, cause, "the message was not sent");
+      throw originRefusal(err, from, cause, "the message was not sent");
     }
     throw new Refusal(
       "delivery_unconfirmed",
@@ -1517,17 +1498,45 @@ async function send(flags) {
   }
   return {
     ok: true, threadId: args.threadId, clientRequestId: args.clientRequestId, delivery: out?.delivery ?? null, status: out?.status ?? null,
-    runId: out?.runId ?? null, messageId: out?.messageId ?? null, causedBy: cause,
+    runId: out?.runId ?? null, messageId: out?.messageId ?? null, fromThread: from, causedBy: cause,
   };
 }
 
-// --- causes -----------------------------------------------------------------
-// A cause is the prompt T3's causedBy names: {threadId, runId?, messageId}.
+// --- origins ----------------------------------------------------------------
+// An origin reference is what T3's fromThread takes: {threadId, at?}, the T3
+// thread work comes from and, optionally, when (bin/fm-t3-origin-lib.sh owns
+// where Firstmate records one). A cause is what T3's causedBy takes:
+// {threadId, runId?, messageId}, the prompt behind the work; only things
+// recorded before references existed still carry one, passed through
+// unchanged when they fire.
 
-// The first window, in timeline positions, the cause verb searches for its
-// turn's prompt.
-const CAUSE_READBACK_SPAN = 200;
+const FROM_THREAD_KEYS = ["threadId", "at"];
 const CAUSE_KEYS = ["threadId", "runId", "messageId"];
+
+// A reference from JSON text: an object of a non-empty string threadId and
+// an optional zoned ISO time at (answered in UTC), nothing else. Null for
+// anything else.
+export function parseFromThread(text) {
+  let v;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  if (Object.keys(v).some((k) => !FROM_THREAD_KEYS.includes(k))) return null;
+  if (typeof v.threadId !== "string" || !v.threadId) return null;
+  if (v.at === undefined) return { threadId: v.threadId };
+  const at = typeof v.at === "string" ? isoTime(v.at) : null;
+  return at === null ? null : { threadId: v.threadId, at };
+}
+
+function fromThreadFlag(flags) {
+  if (flags["from-thread"] === undefined) return null;
+  const from = parseFromThread(flags["from-thread"]);
+  if (!from) usage("an origin reference must be a JSON object of a threadId and an optional zoned ISO time at, nothing else");
+  return from;
+}
 
 // A cause from JSON text: an object of exactly those string keys, threadId and
 // messageId required. Null for anything else.
@@ -1552,145 +1561,43 @@ function causeFlag(flags) {
   return cause;
 }
 
+// --from-thread or --caused-by, at most one: {from, cause}, each or both null.
+function originFlags(flags) {
+  if (flags["from-thread"] !== undefined && flags["caused-by"] !== undefined) usage("give at most one of --from-thread or --caused-by");
+  return { from: fromThreadFlag(flags), cause: causeFlag(flags) };
+}
+
+// What of <wanted> rides <tool>: each only where its schema declares it, since
+// an older T3 refuses an undeclared key.
+function declaredOrigin(session, tool, wanted) {
+  return {
+    from: wanted.from !== null && toolOffers(session, tool, "fromThread") ? wanted.from : null,
+    cause: wanted.cause !== null && toolOffers(session, tool, "causedBy") ? wanted.cause : null,
+  };
+}
+
 const sameCause = (a, b) =>
   Boolean(b) && typeof b === "object" && CAUSE_KEYS.every((k) => (k === "runId" && a.runId === undefined) || (a[k] ?? null) === (b[k] ?? null));
 
-// T3 refuses a cause it cannot verify with a typed error whose message starts
-// "causedBy:" (the T3 Code fork's threadAccess verifyCause), before anything
-// is created or sent.
-function causeRefusal(err, cause, consequence) {
-  if (cause === null || !(err instanceof Refusal) || err.exit !== 3 || !/causedBy:/.test(err.message)) return err;
-  return new Refusal("cause_refused", `T3 refused the cause ${JSON.stringify(cause)} (${err.message.replace(/^T3 \S+ failed: /, "")}); ${consequence}`, 3, err.extra);
-}
-
-// The messages view of <threadId> from timeline position <start> on, every
-// page, with no message text.
-async function readMessagesFrom(session, threadId, start) {
-  const read = (afterPosition) =>
-    session.call("t3_thread_read", { threadId, view: "messages", limit: READ_LIMIT_MAX, maxCharsPerItem: 1, runLimit: 1, ...(afterPosition >= 0 ? { afterPosition } : {}) });
-  let out = await read(start - 1);
-  const items = [...(out?.items ?? [])];
-  for (let page = 0; out?.hasMore && out.nextPosition !== null && page < 10_000; page++) {
-    out = await read(out.nextPosition);
-    items.push(...(out?.items ?? []));
+// T3 refuses a reference or cause it cannot bind with a typed error whose
+// message starts "fromThread:" (the T3 Code fork's bindUsageOrigin, and its
+// claim of a thread whose work counts to no device) or "causedBy:" (its
+// verifyCause), before anything is created, sent, or claimed.
+function originRefusal(err, from, cause, consequence) {
+  if (!(err instanceof Refusal) || err.exit !== 3) return err;
+  const reason = err.message.replace(/^T3 \S+ failed: /, "");
+  if (from !== null && /fromThread:/.test(err.message)) {
+    return new Refusal("origin_refused", `T3 refused the origin ${JSON.stringify(from)} (${reason}); ${consequence}`, 3, err.extra);
   }
-  return items;
-}
-
-// Every prompt (user_message) of run <runId> in <threadId>'s own timeline.
-// T3 pages forward only, so the window starts near the end and widens until
-// it reaches back past the run's first item or to the thread's start.
-async function runPrompts(session, threadId, runId, itemCount) {
-  for (let span = CAUSE_READBACK_SPAN; ; span *= 4) {
-    const start = Math.max(0, itemCount - span);
-    const local = (await readMessagesFrom(session, threadId, start)).filter((it) => (it.sourceThreadId ?? threadId) === threadId);
-    const first = local.findIndex((it) => it.runId === runId);
-    if (start === 0 || first > 0) return local.filter((it) => it.type === "user_message" && it.runId === runId && it.messageId);
+  if (cause !== null && /causedBy:/.test(err.message)) {
+    return new Refusal("cause_refused", `T3 refused the cause ${JSON.stringify(cause)} (${reason}); ${consequence}`, 3, err.extra);
   }
-}
-
-// [[dd-]hh:]mm:ss, as ps prints etime.
-function etimeSeconds(text) {
-  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(text.trim());
-  return m ? ((Number(m[1] ?? 0) * 24 + Number(m[2] ?? 0)) * 60 + Number(m[3])) * 60 + Number(m[4]) : null;
-}
-
-// One process's parent, age in seconds, and whether the environment it was
-// started with carries T3CODE_THREAD_ID=<threadId> (an environment this user
-// cannot read carries nothing); null when ps cannot read the process.
-function processFacts(pid, threadId) {
-  const quiet = { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] };
-  let m;
-  try {
-    m = /^\s*(\d+)\s+(\S+)\s*$/.exec(execFileSync("ps", ["-o", "ppid=,etime=", "-p", String(pid)], quiet));
-  } catch {
-    return null;
-  }
-  const age = m ? etimeSeconds(m[2]) : null;
-  if (age === null) return null;
-  const mark = `T3CODE_THREAD_ID=${threadId}`;
-  let carries = false;
-  try {
-    carries = process.platform === "linux"
-      ? readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes(mark)
-      : execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)], quiet).split(/\s+/).includes(mark);
-  } catch {
-    carries = false;
-  }
-  return { ppid: Number(m[1]), age, carries };
-}
-
-// When the process below <threadId>'s agent that began this call started
-// (the cause verb's header owns the rule): {began} in epoch ms, or {reason}.
-// Every ancestor is read, not only an unbroken run of carriers: a harness may
-// start its command shell with a reduced environment that the shell then
-// re-exports (Claude Code does), so a non-carrier can sit between this
-// process and the agent.
-function callerStart(threadId) {
-  const chain = [];
-  let pid = process.pid;
-  for (let depth = 0; depth < 64 && pid > 1; depth++) {
-    const f = processFacts(pid, threadId);
-    if (!f) return { reason: `process ${pid} could not be read` };
-    chain.push(f);
-    pid = f.ppid;
-  }
-  if (pid > 1) return { reason: "the calling process tree is too deep to read" };
-  const agent = chain.findLastIndex((f) => f.carries);
-  if (agent < 1) return { reason: `the calling process does not run under thread ${threadId}'s agent` };
-  if (chain[agent].ppid <= 1) return { reason: "the calling process was orphaned from the agent that started it" };
-  // The process just below the agent began this call.
-  return { began: Date.now() - chain[agent - 1].age * 1000 };
-}
-
-// The turn of <threadId> that started the calling process (the cause verb's
-// header owns the rule): {runId, run, thread, began}, or {runId: null, reason}.
-async function callerTurn(session, threadId) {
-  let head;
-  try {
-    head = await session.call("t3_thread_read", { threadId, limit: 1, runLimit: 5 });
-  } catch (err) {
-    if (isNotFound(err)) return { runId: null, reason: `T3 has no thread ${threadId}` };
-    throw err;
-  }
-  const t = threadOf(head);
-  const activeRunId = t.activeRunId ?? null;
-  const runs = (head?.recentRuns ?? []).map((r) => ({ r, startMs: Date.parse(r.startedAt ?? r.requestedAt ?? "") }));
-  const active = runs.find(({ r }) => r.runId === activeRunId);
-  if (active && !Number.isFinite(active.startMs)) return { runId: null, reason: `turn ${activeRunId} has no start time` };
-  const start = callerStart(threadId);
-  if (start.reason) return { runId: null, reason: start.reason };
-  const { began } = start;
-  const latest = runs.filter(({ startMs }) => Number.isFinite(startMs) && startMs <= began + 1000).sort((a, b) => b.startMs - a.startMs)[0];
-  const spans = latest && (latest.r.runId === activeRunId || began <= Date.parse(latest.r.completedAt ?? "") + 1000);
-  if (!spans) {
-    const why = activeRunId ? "the calling process started before the thread's current turn" : `thread ${threadId} has no active turn`;
-    return { runId: null, reason: `${why}, and no recent turn spans its start` };
-  }
-  return { runId: latest.r.runId, run: latest.r, thread: t, began };
-}
-
-async function causeVerb(flags) {
-  const threadId = need(flags, "thread");
-  const { session } = await verifiedSession(flags);
-  const none = (reason) => ({ ok: true, threadId, causedBy: null, reason });
-  const turn = await callerTurn(session, threadId);
-  if (!turn.runId) return none(turn.reason);
-  const { runId, run, thread: t, began } = turn;
-  const prompts = await runPrompts(session, threadId, runId, t.itemCount ?? 0);
-  // The message that started the turn: a prompt, or for a wake the
-  // notification T3 names on the run. A later prompt (a steer or queued
-  // input) counts instead when it arrived before this process began, the
-  // latest such one; a prompt without a time never displaces the start.
-  const start = run?.userMessageId ?? prompts[0]?.messageId ?? null;
-  if (!start) return none(`turn ${runId} shows no prompt`);
-  const later = prompts.filter((p) => p.messageId !== start && Date.parse(p.updatedAt ?? "") <= began + 1000);
-  return { ok: true, threadId, causedBy: { threadId, runId, messageId: later.at(-1)?.messageId ?? start }, reason: null };
+  return err;
 }
 
 // --- usage claims -----------------------------------------------------------
-// The T3 Code fork's t3_usage_claim (its fork/README.md "Usage by origin"):
-// count work Usage cannot trace to a cause or a device.
+// The T3 Code fork's t3_usage_claim (its fork/README.md "Phone vs computer split"):
+// count work Usage cannot trace with a thread's work, a cause, or a device.
 const USAGE_CLAIM_TOOL = "t3_usage_claim";
 const USAGE_DEVICES = ["phone", "computer"];
 
@@ -1713,9 +1620,11 @@ async function usageClaim(flags) {
   const targets = ["turn", "run", "session", "directory"].filter((k) => flags[k] !== undefined);
   if (targets.length !== 1) usage("give exactly one of --turn, --run (with --thread), --session, or --directory");
   if ((flags.run !== undefined) !== (flags.thread !== undefined)) usage("--thread goes with --run, and only with --run");
-  const values = ["caused-by", "device"].filter((k) => flags[k] !== undefined);
-  if (values.length !== 1) usage("give exactly one of --caused-by or --device");
-  const value = flags.device !== undefined ? { device: flags.device } : flags["caused-by"] === "null" ? { causedBy: null } : { causedBy: causeFlag(flags) };
+  const values = ["from-thread", "caused-by", "device"].filter((k) => flags[k] !== undefined);
+  if (values.length !== 1) usage("give exactly one of --from-thread, --caused-by, or --device");
+  const value = flags.device !== undefined ? { device: flags.device }
+    : flags["from-thread"] !== undefined ? { fromThread: fromThreadFlag(flags) }
+    : flags["caused-by"] === "null" ? { causedBy: null } : { causedBy: causeFlag(flags) };
   if (value.device !== undefined && !USAGE_DEVICES.includes(value.device)) usage(`--device must be one of ${USAGE_DEVICES.join(", ")}`);
   if (flags.directory !== undefined && !path.isAbsolute(flags.directory)) usage("--directory must be an absolute path");
   if (flags.from !== undefined && flags.session === undefined) usage("--from goes only with --session");
@@ -1727,14 +1636,16 @@ async function usageClaim(flags) {
   if (ifUnclaimed && !toolOffers(session, USAGE_CLAIM_TOOL, "ifUnclaimed")) {
     throw new Refusal("usage_claim_unsupported", `this T3 cannot keep an earlier claim (${USAGE_CLAIM_TOOL} takes no ifUnclaimed)`, 4);
   }
+  if (value.fromThread !== undefined && !toolOffers(session, USAGE_CLAIM_TOOL, "fromThread")) {
+    throw new Refusal("usage_claim_unsupported", `this T3 cannot count a claim with a thread's work (${USAGE_CLAIM_TOOL} takes no fromThread)`, 4);
+  }
   // A T3 whose claim takes no from (before per-start session claims) gets
   // the whole-session claim, which replaces that session's earlier one.
   const sendFrom = from !== undefined && toolOffers(session, USAGE_CLAIM_TOOL, "from");
   let target;
   if (flags.turn !== undefined) {
-    const turn = await callerTurn(session, flags.turn);
-    if (!turn.runId) return { ok: true, claimed: false, threadId: flags.turn, reason: turn.reason };
-    target = { threadId: flags.turn, runId: turn.runId };
+    // T3 picks the thread's turn running now.
+    target = { threadId: flags.turn };
   } else if (flags.run !== undefined) {
     target = { threadId: flags.thread, runId: flags.run };
   } else if (flags.session !== undefined) {
@@ -1746,22 +1657,28 @@ async function usageClaim(flags) {
   try {
     out = await session.call(USAGE_CLAIM_TOOL, { ...target, ...value, ...(ifUnclaimed ? { ifUnclaimed: true } : {}) });
   } catch (err) {
-    throw causeRefusal(err, value.causedBy ?? null, "nothing was claimed");
+    throw originRefusal(err, value.fromThread ?? null, value.causedBy ?? null, "nothing was claimed");
   }
   const device = out?.device ?? null;
   const causedBy = out?.causedBy ?? null;
+  const reason = typeof out?.reason === "string" ? out.reason : null;
+  if (flags.turn !== undefined) target.runId = out?.runId ?? null;
   // A kept claim answers with the earlier value, not the one asked.
   if (ifUnclaimed && out?.kept === true) {
     if (flags.session !== undefined && from !== undefined) target.from = sendFrom ? out.from ?? null : null;
     return { ok: true, claimed: false, ...target, causedBy, device, reason: "already claimed" };
   }
-  const proven = value.device !== undefined ? device === value.device : value.causedBy === null ? causedBy === null && device === null : sameCause(value.causedBy, causedBy);
+  // A reference is bound by value: T3 answers the device that thread's work
+  // counts to, and why.
+  const proven = value.device !== undefined ? device === value.device
+    : value.fromThread !== undefined ? USAGE_DEVICES.includes(device) && Boolean(reason) && causedBy === null
+    : value.causedBy === null ? causedBy === null && device === null : sameCause(value.causedBy, causedBy);
   if (!proven) throw new Refusal("usage_claim_unproven", "T3 accepted the usage claim but answered with another value", 1);
   if (sendFrom && Date.parse(out?.from ?? "") !== Date.parse(from)) {
     throw new Refusal("usage_claim_unproven", "T3 accepted the session claim but answered with another start", 1);
   }
   if (flags.session !== undefined && from !== undefined) target.from = sendFrom ? out.from : null;
-  return { ok: true, claimed: true, ...target, causedBy, device };
+  return { ok: true, claimed: true, ...target, causedBy, device, ...(reason !== null ? { reason } : {}) };
 }
 
 // --- usage reasons ----------------------------------------------------------
@@ -2805,10 +2722,9 @@ const VERBS = {
   "resolve-selection": resolveSelection,
   launch,
   send,
-  cause: causeVerb,
   "usage-claim": usageClaim,
   "usage-reasons": usageReasons,
-  "cause-check": (flags) => ({ ok: true, causedBy: causeFlag({ "caused-by": need(flags, "json") }) }),
+  "from-thread-check": (flags) => ({ ok: true, fromThread: fromThreadFlag({ "from-thread": need(flags, "json") }) }),
   read,
   capture,
   limit,

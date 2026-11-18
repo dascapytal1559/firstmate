@@ -1819,3 +1819,105 @@ What was built:
 - **Removed:** the pipeline claim instruction in every no-mistakes brief, the engine's claim call, and the spawn's data-folder claim, with the claim script's three verbs they used.
 
 The evidence is two zero-token review sessions from the same fixture run folder, one started directly (registered with no task) and one through the wrapper (registered under its task), and the new suites for the wrapper and the host's registration.
+
+## 67. The fork's feature list gets one name per feature and a credit line (18 November 2026)
+
+A catalogue of both forks' features, written for a video, found this fork's write-up uneven: some features had two or three names, one was missing from the front page, and an outside contributor's open pull request read as if it were upstream's own fix.
+The captain asked for a light clean-up:
+
+> I think just clean up the fork features to make sure that the description is good and That upstream hasn't covered it and it's documented well. Just like a cleanup.
+>
+> (18 November 2026)
+
+What changed, in [FORK.md](../FORK.md) and the front page:
+
+- **One name per feature.** Each section now uses the catalogue's short name, such as "Instant hand-over" and "Auto clearing on a notification", and the front page uses the same names in the same order, grouped as inside and outside T3 Code.
+- **Every feature on the front page.** "Reply on a worker's thread" had only a section; it now has its line.
+- **What it does, first.** Each section opens with one or two sentences on what the feature does for you, before how and why.
+- **A credit line.** Each section ends with "Upstream: none", "partly" with the upstream pull requests, or "open PR", and an outside contributor's open pull request is never called upstream's own.
+  Upstream was re-checked on the day: it covers none of the 35 features in full.
+- **The other half.** Where the T3 Code fork carries the other half of a feature, the section links to it.
+
+No code changed.
+
+## 68. FirstMate stops deciding causes and names where work comes from (18 November 2026)
+
+The usage-attribution redesign ("born labelled") moves the labelling into T3: work is labelled when it starts, from the thread it comes from.
+The rule it serves, in the captain's words:
+
+> if I start something and it starts on my phone, and until my next meaningful input it should be attributed to my phone and then I start inputting it from my computer, then it should start to be attributed to my computer and then if I switch back to my phone, then it's on my phone again.
+>
+> (16 November 2026)
+
+Until now FirstMate worked out a cause itself: it walked its own process tree to find which T3 turn had started a command, then looked up that turn's prompt.
+That guess was fragile, and T3 can now do the labelling itself, so FirstMate hands it an origin reference instead: the T3 thread the work comes from, and optionally when, `{"threadId", "at"}`.
+Writing one needs no T3 call and no look at the process tree.
+
+What changed:
+
+- **A spawn** sends "this thread, as of when the spawn began" on the worker's launch, and records nothing: T3 binds the thread's birth from it.
+- **A steer** keeps the reference in its inbox record, so a doorbell rung again later still binds to the turn that wrote the steer.
+- **A note, a delayed follow-up, and a queued backlog item** keep the reference of the turn that wrote them; the wake about them claims it, and a queued item's first launch sends it.
+- **A wake about a task** names that task's own thread, so the wake counts wherever the task counts now, including after he has steered it from the other device.
+  The wake tries each candidate in order until T3 binds one.
+- **A landing** keeps the landed task's thread for a T3 restart to name.
+- **The nightly usage check** now also counts the day's failed claims, because a wake that fails to name its turn counts as upkeep on the computer, which T3's figure alone cannot tell from real upkeep.
+
+Removed: the cause library and the process-tree lookup behind it (the helper's `cause` verb and five functions), and the `caused_by=` task record line.
+Things written before this change that still carry a cause pass it on unchanged when they fire.
+
+The evidence is the touched suites, run against the fake T3 server, which now models references and thread-only claims; no live T3 was called.
+
+## 69. A ready report names its commit, and that commit is what lands (19 November 2026)
+
+![One worker's branch with two reported stages and a third in progress: before, the single recorded commit refused stage 2 or was not there yet; now each report names its commit and exactly that commit lands](media/reported-landing.svg)
+
+A long-lived `local-only` worker delivered stage after stage on one branch, and every stage after its first was refused at landing until FirstMate reset the task's record by hand.
+A fix had been proposed, and this was the second time the same check had tripped (entry 31 was the first).
+
+> Um we've tripped up on this issue before, and the rule was added as a response to the previous trip up. So this is the second time. Let's invoke our deep investigation from a fable agent to make sure that it agrees with the fix.
+>
+> (18 November 2026)
+
+The check: when a worker reported ready, FirstMate recorded one commit for the task, by looking at the worker's copy once the worker had gone quiet, and would land only that commit for as long as the task lived.
+The proposal let a new report replace the record once the recorded work had landed.
+
+The investigation counted every refusal in this home's own records before judging the proposal.
+In 20 days and 664 local landings, the record had refused finished work 114 times, in three ways:
+
+- **No record yet, 80 times.** The landing was tried before FirstMate had looked, usually because the worker was still ending its turn.
+- **The work had changed, 20 times.** It was revised, added to, or rebased after the report.
+- **The record was about earlier work, 14 times.** A stage that had already landed, or a done line from before a scout was promoted.
+
+The record had been edited by hand 79 times to get that work through, and in the cases traced it had not once stopped work that should not have landed.
+The proposal repaired the third kind, the rarest.
+Replaying the worker's real day of 24 stages, with made-up content, landed 1 stage without help on the old rule, 21 or 22 with the proposal, and 24 with the change below.
+
+The cause was the model, not a missing case.
+Upstream's worker reports once and stops, so one commit per task fits it.
+Here workers keep working after their first report, and the report did not say which commit it was about, so FirstMate had to work that out afterwards.
+
+> Yeah, go with the deep investigations workers fix on the landing issue.
+>
+> (19 November 2026)
+
+What was built:
+
+- **The report names its commit.** A `local-only` worker now reports `ready in branch <branch> at <commit id>`.
+- **Exactly that commit lands.** The landing takes the commit the task's newest report names, and later commits stay on the branch until a report names them.
+- **Nothing is stored.** The commit is read from the report each time, so there is no record to be missing or out of date, and reading a task's state no longer writes to it.
+- **A fresh report for each change.** The next stage, a revision, and a rebase each get their own report naming their own commit.
+- **An approval names its commit.** Where the captain approves each landing, FirstMate passes the approved commit and a newer report is refused, unless it is that commit rebased with exactly the same changes (entry 31's rule, kept for this).
+- **An old-style report is refused with the line to write.** So is a promoted scout's old done line, which used to count as a ready report.
+
+The choices made:
+
+- **One fixed place for the commit.** It is read only from the start of the report, so a commit id mentioned anywhere else in the line is prose.
+- **A short commit id is accepted** when it names exactly one commit on the task's branch, because workers already write short ones.
+- **The newest report wins.** Two stages reported before the first lands go in together.
+- **The hand reset is gone, not automated.** There is no record left to edit, so a report that will not land is fixed by the worker reporting again.
+
+This departs from upstream on purpose, and [FORK.md](../FORK.md#reported-landings) says how and why.
+
+The evidence is `tests/fm-merge-local.test.sh`: the twelve safety cases from the investigation, the 24-stage day as a made-up fixture, and the race cases the landing already had.
+Under the old code the same day needed a hand reset at 23 of its 24 landings.

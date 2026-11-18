@@ -3389,14 +3389,14 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   wt_commit "$case_dir" "merged work"
   wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
-  printf 'working: shipping\ndone: PR https://github.com/example/repo/pull/9 checks green\n' \
+  printf 'working: shipping\ndone: ready in branch fm/task-x1 at %s\n' "$wt_head" \
     > "$case_dir/state/task-x1.status"
   set +e
   FM_HOME="$case_dir/home" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
   expect_code 0 "$rc" "mate-teardown-delivers: teardown should succeed: $(cat "$case_dir/stderr")"
-  sed -E 's/ \[at=[0-9]+\]//' "$channel" | grep -Eq '^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: PR https://github.com/example/repo/pull/9 checks green pr=https://github.com/example/repo/pull/9 mode=local-only$' \
+  sed -E 's/ \[at=[0-9]+\]//' "$channel" | grep -Eq "^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: ready in branch fm/task-x1 at $wt_head mode=local-only\$" \
     || fail "mate-teardown-delivers: the final ledger line did not reach the parent: $(cat "$channel" 2>/dev/null)"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "mate-teardown-delivers: teardown left the task record"
 
@@ -3413,7 +3413,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   wt_commit "$case_dir" "merged work"
   wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
-  printf 'done: PR https://github.com/example/repo/pull/9 checks green\n' > "$case_dir/state/task-x1.status"
+  printf 'done: ready in branch fm/task-x1 at %s\n' "$wt_head" > "$case_dir/state/task-x1.status"
   set +e
   FM_HOME="$case_dir/home" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
@@ -3439,7 +3439,7 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   rc=$?
   set -e
   expect_code 0 "$rc" "mate-teardown-refuses: rerun after repair should succeed: $(cat "$case_dir/stderr2")"
-  sed -E 's/ \[at=[0-9]+\]//' "$channel" | grep -Eq '^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: PR https://github.com/example/repo/pull/9 checks green' \
+  sed -E 's/ \[at=[0-9]+\]//' "$channel" | grep -Eq "^done \[key=child-outcome-task-x1-done-[0-9a-f]{8}\]: child task-x1 done: ready in branch fm/task-x1 at $wt_head" \
     || fail "mate-teardown-refuses: the rerun did not deliver the final line"
   [ ! -e "$case_dir/state/task-x1.meta" ] || fail "mate-teardown-refuses: rerun left the task record"
   pass "a secondmate home's teardown delivers the child's final line or refuses until it can"
