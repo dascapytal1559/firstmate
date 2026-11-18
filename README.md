@@ -38,7 +38,7 @@ Outside T3 Code:
 - [No CI by default](FORK.md#no-ci-by-default): no-mistakes runs here do not wait for CI, and clones inherit that.
 - [Live review boards](FORK.md#live-review-boards): a worker's review board passes on each message the captain sends at once, and the worker says "got it" right away.
 - [Local midnight](FORK.md#local-midnight): a decision put off to a date returns at the start of that day where the captain is.
-- [Rebased landings](FORK.md#rebased-landings): a `local-only` branch rebased onto a newer main still lands when it carries exactly the approved changes.
+- [Reported landings](FORK.md#reported-landings): a `local-only` ready report names its commit and exactly that commit lands, stage after stage, with no stored record to go stale.
 - [Trusted review wakes](FORK.md#trusted-review-wakes): a worker parked on review restarts only for review activity from trusted people.
 - [Codex efforts](FORK.md#codex-efforts): a Codex model's efforts come from Codex's own catalog, not a model name.
 - [Fable quota floor](FORK.md#fable-quota-floor): a Fable worker never starts on a Claude account nearly out of its allowance.

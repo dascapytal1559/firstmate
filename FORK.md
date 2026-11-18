@@ -417,19 +417,20 @@ Details: [`fm-fleet-snapshot.sh`](bin/fm-fleet-snapshot.sh).
 
 Upstream: none.
 
-### Rebased landings
+### Reported landings
 
-A `local-only` task whose worker rebased its approved branch onto a newer main still lands without a fresh approval, as long as the rebase carries exactly the approved changes.
-Upstream records the commit a task reported done at and lands only that commit, so an approval never covers commits added after it, such as unfinished work a worker added after being steered ([#7782](https://github.com/kunchenguid/firstmate/issues/7782)).
-The fork departs because it runs many `local-only` workers on one project at once, often with `yolo`: each landing moves main, the other workers rebase as their instructions say, and the rebased commit is no longer the recorded one, so every later landing in the batch was refused and needed a fresh approval for unchanged work.
-The fork keeps upstream's intent by landing a rebased branch only when its commits match the approved ones one for one by exact content, in the same order, with no merge commit; commit messages may differ.
-An added, amended, reordered, or squashed commit is still refused, and the refusal names the commits that differ.
-The approval stays on the commit the task first reported, and the landing records the rebased commit it actually landed.
+A `local-only` worker's ready report names the commit it reports, and exactly that commit lands: the next stage of a long task, a revision, or a rebase each land on their own report, and a commit no report names never lands.
+Upstream records one commit for the whole task, taken by looking at the worker's copy after its first ready report, and lands only that commit, so an approval never covers commits added after it ([#7782](https://github.com/kunchenguid/firstmate/issues/7782), [#7916](https://github.com/kunchenguid/firstmate/pull/7916)): one report and one landing per task.
+The fork departs because its workers keep working after their first report: a long-lived worker delivers stage after stage on one branch, work is revised or rebased before it lands, and a scout is promoted in place, mostly on `local-only` projects that land under `yolo`.
+There the recorded commit was missing, out of date, or about earlier work in 114 of 778 attempts to land finished work over 20 days, and was reset by hand 79 times.
+The fork keeps upstream's intent by reading the commit from the report line itself, at one fixed place, and landing only that commit when it is on the task's branch; nothing is stored, so reading a task writes nothing and there is no record to go missing or out of date.
+Later commits stay on the branch until a report names them, and a ready report that names no commit is refused with the line to write.
+Where the captain approves each landing, the approver names the approved commit, and a newer report is refused unless it is that commit rebased with exactly the same changes: the same commits by exact content, in the same order, with no merge commit, the rule approved on 2026-11-08.
 An outside contributor's open upstream PR proves a rebase identical by comparing trees instead.
-Approved by the captain on 2026-11-08.
-Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the head-latching contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
+Approved by the captain on 2026-11-19.
+Details: [`fm-merge-local.sh`](bin/fm-merge-local.sh) and the ready-report contract in [`fm-dod-lib.sh`](bin/fm-dod-lib.sh).
 
-Upstream: open PR ([#8281](https://github.com/kunchenguid/firstmate/pull/8281), by an outside contributor, not merged).
+Upstream: none for landing the commit a report names; open PRs, each by an outside contributor and not merged, for parts of the same problem ([#8281](https://github.com/kunchenguid/firstmate/pull/8281) an identical rebase, [#8282](https://github.com/kunchenguid/firstmate/pull/8282) recording when the worker cannot be read, [#8301](https://github.com/kunchenguid/firstmate/pull/8301) a first report with no commits).
 
 ### Trusted review wakes
 

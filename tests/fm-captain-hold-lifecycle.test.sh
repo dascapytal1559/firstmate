@@ -3028,8 +3028,8 @@ test_retained_row_artifacts_survive_captain_answers() {
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" "worktree=$local_wt" \
     "project=$local_repo" "harness=codex" "kind=ship" "mode=local-only" \
     "spawn_gen=fixture-$local_id"
-  printf 'done: local merge ready\n' > "$home/state/$local_id.status"
-  printf 'local_done_head=%s\n' "$(git -C "$local_wt" rev-parse HEAD)" >> "$home/state/$local_id.meta"
+  printf 'done: ready in branch fm/%s at %s\n' "$local_id" "$(git -C "$local_wt" rev-parse HEAD)" \
+    > "$home/state/$local_id.status"
   run_captain "$home" hold "$local_id" --reason "captain local merge approval pending" \
     >/dev/null || fail "could not hold the released local merge"
   printf 'Land the approved change locally.\n' > "$home/local-answer.txt"
@@ -3041,6 +3041,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     "local merge approval retained its captain hold kind"
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-merge-local.sh" "$local_id" \
+    --expected-head "$(git -C "$local_wt" rev-parse HEAD)" \
     > "$home/local-merge.out" 2> "$home/local-merge.err" \
     || fail "approved local merge failed: $(cat "$home/local-merge.err")"
   run_teardown "$home" "$local_id" > "$home/local-teardown.out" \
@@ -3647,7 +3648,8 @@ test_local_merge_entrypoint_refuses_a_captain_held_task() {
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" "worktree=$local_wt" \
     "project=$local_repo" "harness=codex" "kind=ship" "mode=local-only" \
     "spawn_gen=fixture-$local_id"
-  printf 'local_done_head=%s\n' "$(git -C "$local_wt" rev-parse HEAD)" >> "$home/state/$local_id.meta"
+  printf 'done: ready in branch fm/%s at %s\n' "$local_id" "$(git -C "$local_wt" rev-parse HEAD)" \
+    > "$home/state/$local_id.status"
   run_captain "$home" hold "$local_id" --reason "captain local merge approval pending" \
     >/dev/null || fail "could not hold the local entrypoint fixture"
   before=$(git -C "$local_repo" rev-parse main)
@@ -3718,7 +3720,8 @@ test_local_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one() 
     "window=firstmate:fm-$id" "endpoint_task_id=$id" "worktree=$wt" \
     "project=$repo" "harness=codex" "kind=ship" "mode=local-only" \
     "spawn_gen=fixture-$id"
-  printf 'local_done_head=%s\n' "$(git -C "$wt" rev-parse HEAD)" >> "$home/state/$id.meta"
+  printf 'done: ready in branch fm/%s at %s\n' "$id" "$(git -C "$wt" rev-parse HEAD)" \
+    > "$home/state/$id.status"
   before=$(git -C "$repo" rev-parse main)
 
   # Unreadable authority record: refuse, and leave the default branch where it was.
@@ -3727,6 +3730,7 @@ test_local_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one() 
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-merge-local.sh" "$id" \
+    --expected-head "$(git -C "$wt" rev-parse HEAD)" \
     > "$home/missing-local.out" 2> "$home/missing-local.err"
   rc=$?
   set -e
@@ -3742,6 +3746,7 @@ test_local_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one() 
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-merge-local.sh" "$id" \
+    --expected-head "$(git -C "$wt" rev-parse HEAD)" \
     > "$home/absent-local.out" 2> "$home/absent-local.err" \
     || fail "the local merge entrypoint refused a home carrying no backlog"
   after=$(git -C "$repo" rev-parse main)
@@ -3920,8 +3925,8 @@ test_merge_entrypoints_refuse_a_reused_task_incarnation() {
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" \
     "worktree=$local_old_wt" "project=$local_old_repo" "harness=codex" \
     "kind=ship" "mode=local-only" "spawn_gen=original-$local_id"
-  printf 'local_done_head=%s\n' "$(git -C "$local_old_wt" rev-parse HEAD)" >> "$local_home/state/$local_id.meta"
-  printf 'done: local merge ready\n' > "$local_home/state/$local_id.status"
+  printf 'done: ready in branch fm/%s at %s\n' "$local_id" "$(git -C "$local_old_wt" rev-parse HEAD)" \
+    > "$local_home/state/$local_id.status"
 
   local_teardown_ready="$local_home/reuse-teardown-ready"
   local_teardown_release="$local_home/reuse-teardown-release"
@@ -3951,7 +3956,8 @@ test_merge_entrypoints_refuse_a_reused_task_incarnation() {
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$local_home" \
     FM_STATE_OVERRIDE="$local_home/state" FM_DATA_OVERRIDE="$local_home/data" \
     FM_CONFIG_OVERRIDE="$local_home/config" \
-    "$ROOT/bin/fm-merge-local.sh" "$local_id" > "$local_home/reuse-merge.out" \
+    "$ROOT/bin/fm-merge-local.sh" "$local_id" \
+    --expected-head "$(git -C "$local_old_wt" rev-parse HEAD)" > "$local_home/reuse-merge.out" \
     2> "$local_home/reuse-merge.err" &
   local_merge_pid=$!
   if ! wait_for_test_file "$local_merge_ready" "$local_merge_pid"; then
@@ -4104,8 +4110,8 @@ SH
     "window=firstmate:fm-$local_id" "endpoint_task_id=$local_id" "worktree=$local_wt" \
     "project=$local_repo" "harness=codex" "kind=ship" "mode=local-only" \
     "spawn_gen=fixture-$local_id"
-  printf 'local_done_head=%s\n' "$(git -C "$local_wt" rev-parse HEAD)" >> "$local_home/state/$local_id.meta"
-  printf 'done: local merge ready\n' > "$local_home/state/$local_id.status"
+  printf 'done: ready in branch fm/%s at %s\n' "$local_id" "$(git -C "$local_wt" rev-parse HEAD)" \
+    > "$local_home/state/$local_id.status"
   run_captain "$local_home" hold "$local_id" \
     --reason "captain local merge approval pending" >/dev/null \
     || fail "could not hold the local teardown-race fixture"
@@ -4137,6 +4143,7 @@ SH
     FM_HOME="$local_home" FM_STATE_OVERRIDE="$local_home/state" \
     FM_DATA_OVERRIDE="$local_home/data" FM_CONFIG_OVERRIDE="$local_home/config" \
     "$ROOT/bin/fm-merge-local.sh" "$local_id" \
+    --expected-head "$(git -C "$local_wt" rev-parse HEAD)" \
     > "$local_home/race-local.out" 2> "$local_home/race-local.err" &
   local_pid=$!
   i=0

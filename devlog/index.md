@@ -1867,3 +1867,57 @@ Removed: the cause library and the process-tree lookup behind it (the helper's `
 Things written before this change that still carry a cause pass it on unchanged when they fire.
 
 The evidence is the touched suites, run against the fake T3 server, which now models references and thread-only claims; no live T3 was called.
+
+## 69. A ready report names its commit, and that commit is what lands (19 November 2026)
+
+![One worker's branch with two reported stages and a third in progress: before, the single recorded commit refused stage 2 or was not there yet; now each report names its commit and exactly that commit lands](media/reported-landing.svg)
+
+A long-lived `local-only` worker delivered stage after stage on one branch, and every stage after its first was refused at landing until FirstMate reset the task's record by hand.
+A fix had been proposed, and this was the second time the same check had tripped (entry 31 was the first).
+
+> Um we've tripped up on this issue before, and the rule was added as a response to the previous trip up. So this is the second time. Let's invoke our deep investigation from a fable agent to make sure that it agrees with the fix.
+>
+> (18 November 2026)
+
+The check: when a worker reported ready, FirstMate recorded one commit for the task, by looking at the worker's copy once the worker had gone quiet, and would land only that commit for as long as the task lived.
+The proposal let a new report replace the record once the recorded work had landed.
+
+The investigation counted every refusal in this home's own records before judging the proposal.
+In 20 days and 664 local landings, the record had refused finished work 114 times, in three ways:
+
+- **No record yet, 80 times.** The landing was tried before FirstMate had looked, usually because the worker was still ending its turn.
+- **The work had changed, 20 times.** It was revised, added to, or rebased after the report.
+- **The record was about earlier work, 14 times.** A stage that had already landed, or a done line from before a scout was promoted.
+
+The record had been edited by hand 79 times to get that work through, and in the cases traced it had not once stopped work that should not have landed.
+The proposal repaired the third kind, the rarest.
+Replaying the worker's real day of 24 stages, with made-up content, landed 1 stage without help on the old rule, 21 or 22 with the proposal, and 24 with the change below.
+
+The cause was the model, not a missing case.
+Upstream's worker reports once and stops, so one commit per task fits it.
+Here workers keep working after their first report, and the report did not say which commit it was about, so FirstMate had to work that out afterwards.
+
+> Yeah, go with the deep investigations workers fix on the landing issue.
+>
+> (19 November 2026)
+
+What was built:
+
+- **The report names its commit.** A `local-only` worker now reports `ready in branch <branch> at <commit id>`.
+- **Exactly that commit lands.** The landing takes the commit the task's newest report names, and later commits stay on the branch until a report names them.
+- **Nothing is stored.** The commit is read from the report each time, so there is no record to be missing or out of date, and reading a task's state no longer writes to it.
+- **A fresh report for each change.** The next stage, a revision, and a rebase each get their own report naming their own commit.
+- **An approval names its commit.** Where the captain approves each landing, FirstMate passes the approved commit and a newer report is refused, unless it is that commit rebased with exactly the same changes (entry 31's rule, kept for this).
+- **An old-style report is refused with the line to write.** So is a promoted scout's old done line, which used to count as a ready report.
+
+The choices made:
+
+- **One fixed place for the commit.** It is read only from the start of the report, so a commit id mentioned anywhere else in the line is prose.
+- **A short commit id is accepted** when it names exactly one commit on the task's branch, because workers already write short ones.
+- **The newest report wins.** Two stages reported before the first lands go in together.
+- **The hand reset is gone, not automated.** There is no record left to edit, so a report that will not land is fixed by the worker reporting again.
+
+This departs from upstream on purpose, and [FORK.md](../FORK.md#reported-landings) says how and why.
+
+The evidence is `tests/fm-merge-local.test.sh`: the twelve safety cases from the investigation, the 24-stage day as a made-up fixture, and the race cases the landing already had.
+Under the old code the same day needed a hand reset at 23 of its 24 landings.

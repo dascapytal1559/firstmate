@@ -10,15 +10,18 @@
 # prints the block on stdout with no trailing blank line. The caller validates the
 # mode; an unknown mode is refused rather than silently rendered as the pipeline
 # contract.
-# For local-only tasks, the first accepted done head is latched as exactly one
-# local_done_head= full commit id in the live task metadata. Observing done again
-# never changes that identity. The approval covers that head's content: a later
-# head is the same approved work only when fm_dod_local_rebase_matches proves it
-# adds exactly the latched head's commits by content, such as after a rebase onto
-# a default branch that other landings advanced, so a done naming it is accepted
-# and bin/fm-merge-local.sh may land it with or without yolo. Any other revised
-# work, including an added, amended, reordered, squashed, or merge commit, needs
-# a new task/approval record.
+# For local-only tasks the ready report itself names the commit it reports,
+# `done: ready in branch <branch> at <commit id>`, and that commit is the
+# landing identity (fm_dod_local_ready_head). It is read from the report
+# wherever it is needed and never stored, so it cannot be missing or stale. The
+# report is accepted when a branch of the project clone holds its commit,
+# whatever the worker's copy has moved on to since. Every later report -
+# the next stage of a long-lived task, a revision, a rebase - names its own
+# commit, and bin/fm-merge-local.sh lands exactly the commit the task's newest
+# report names: a commit no report named never lands. An approver who reviewed
+# one commit names it there with --expected-head, which refuses a newer report
+# unless fm_dod_local_rebase_matches proves it carries exactly that commit's
+# changes.
 # The optional third argument is the task's full ship-branch name (a project's
 # registered prefix may replace the legacy `fm/` one); it defaults to `fm/<task-id>`
 # and is the immutable task branch rendered in every delivery contract.
@@ -49,8 +52,8 @@
 # The check tests that head, not whether some branch moved. In no-mistakes
 # mode the pre-validation `done: {summary}` is the pipeline handoff and is
 # not gated; only the later CI-ready `done: PR <url> checks green` is, or on a
-# Gerrit project the later `done: PR <change url> published for review`. The
-# named head is the worker copy's HEAD, except that a done naming the task's
+# Gerrit project the later `done: PR <change url> published for review`. Outside
+# local-only the named head is the worker copy's HEAD, except that a done naming the task's
 # recorded pr= passes when the forge holds that head: a forge-reported
 # pr_head= in no-mistakes mode, or a recorded merge
 # (state/<id>.pr-poll-merge-notified). A push to Gerrit's refs/for/ leaves no
@@ -671,9 +674,10 @@ Delivery contract: mode=local-only
 Ship branch: $branch
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`$branch\`. Do NOT push, do NOT open a PR, do NOT merge.
-A \`done:\` is accepted when the named head is on this project's shared local branch, not only on a detached copy; the check tests that head, not merely that a branch moved.
+A \`done:\` is accepted when it names its commit and that commit is on this project's shared local branch, not only on a detached copy; exactly the named commit lands, and a commit no report names never lands.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done [at=<epoch>]: ready in branch $branch\` to the status file and stop.
+When it is implemented and committed, append \`done [at=<epoch>]: ready in branch $branch at <commit id>\` to the status file and stop, where the commit id is what \`git rev-parse HEAD\` prints on your committed branch; any further words go after the commit id.
+Whenever the commit to land changes afterwards - a rebase, a revision, the next stage of a long task - append a fresh ready report naming the new commit.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
       ;;
@@ -864,15 +868,58 @@ fm_dod_meta_value() {  # <meta> <key>
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-
 }
 
-# Read the single owned local landing identity. Never accept rev expressions,
-# abbreviated hashes, duplicate fields, or a record with no head.
-fm_dod_local_done_head() {  # <meta>
-  local value count
-  count=$(awk -F= '$1 == "local_done_head" { n++ } END { print n+0 }' "$1") || return 1
-  [ "$count" = 1 ] || return 1
-  value=$(fm_dod_meta_value "$1" local_done_head) || return 1
-  case "$value" in ''|*[!0-9a-f]*) return 1 ;; esac
-  case ${#value} in 40|64) printf '%s\n' "$value" ;; *) return 1 ;; esac
+# The full id of the commit a local-only ready report names, or, with status 1,
+# a one-line reason on stdout. The report's note starts
+# `ready in branch <branch> at <commit id>`: the id sits at that one fixed
+# place, so a commit id anywhere else in the note is prose. It is 7 to 64 hex
+# digits naming exactly one commit in <project>, and a branch of <project> must
+# hold that commit, which is what survives the worker's disposable copy: the
+# task's own branch, or the default branch once the work has landed and cleanup
+# has removed the task's branch. With <task-branch> given, the report must name
+# that branch; bin/fm-merge-local.sh adds that the commit is on it before landing.
+fm_dod_local_ready_head() {  # <project> <line> [<task-branch>]
+  local project=$1 want=${3:-} note branch='' id='' sha
+  status_line_note "$2" note
+  case "$note" in
+    'ready in branch '*' at '*)
+      note=${note#ready in branch }
+      branch=${note%% at *}
+      id=${note#"$branch at "}
+      id=${id%%[!0-9a-f]*}
+      ;;
+  esac
+  case "$branch" in *[[:space:]]*) branch='' ;; esac
+  if [ -z "$branch" ] || [ "${#id}" -lt 7 ] || [ "${#id}" -gt 64 ] \
+    || { [ -n "$want" ] && [ "$branch" != "$want" ]; }; then
+    printf '%s\n' "the ready report does not name its commit; append \`done [at=<epoch>]: ready in branch ${want:-<branch>} at <commit id>\`, where the commit id is what \`git rev-parse HEAD\` prints on the committed branch"
+    return 1
+  fi
+  sha=$(git -C "$project" rev-parse --verify --quiet "$id^{commit}" 2>/dev/null) || sha=''
+  case "$sha" in
+    "$id"*) ;;
+    *)
+      printf '%s\n' "the ready report names $id, which is not one commit in the project clone; report the id \`git rev-parse HEAD\` prints on branch $branch"
+      return 1
+      ;;
+  esac
+  if ! fm_dod_ref_contains "$project" refs/heads "$sha"; then
+    printf '%s\n' "the ready report names $sha, which no branch of the project clone holds; after a rebase or an amend, append a fresh ready report naming the branch's current commit"
+    return 1
+  fi
+  printf '%s\n' "$sha"
+}
+
+# The task's newest ready report: the last done line of its status log,
+# whatever else the worker has written since.
+fm_dod_local_newest_ready() {  # <status-file>
+  local line verb last=''
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *:*) ;; *) continue ;; esac
+    status_line_verb "$line" verb
+    [ "$verb" != "done" ] || last=$line
+  done < "$1"
+  [ -n "$last" ] && printf '%s\n' "$last"
 }
 
 # The project's default branch name: origin/HEAD's target, else main or master.
@@ -911,7 +958,7 @@ fm_dod_local_commit_patches() {  # <project> <base> <head>
   done
 }
 
-# 0 when <candidate> carries exactly the changes of the approved local done head
+# 0 when <candidate> carries exactly the changes of the approved commit
 # <approved>: the commits each adds over its merge base with <default> have the
 # same content ids (fm_dod_local_commit_patches), the same count, in the same
 # order. Commit messages, authors, and dates may differ. Otherwise prints which
@@ -948,44 +995,6 @@ fm_dod_local_rebase_matches() {  # <project> <approved> <candidate> <default>
   }'
   return 1
 }
-
-# Latch the head before reporting readiness, not at landing time. Snapshot
-# callers may supply captured meta; compare it with the live record under the
-# existing control/meta locks before publishing to the live owner only. A caller
-# already holding the live meta lock passes meta-locked and retains its locks.
-fm_dod_pin_local_done_head() (  # <state> <id> <meta> <sha> <captured-meta> [meta-locked]
-  local state=$1 id=$2 meta=$3 sha=$4 captured=$5 script_dir live control='' lock='' tmp='' pinned project default
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  # These lazy imports are canonical lint roots. Keep their subshell-local
-  # initializers out of ShellCheck's analysis of the sourcing caller's globals.
-  # shellcheck source=/dev/null
-  . "$script_dir/fm-wake-lib.sh"
-  # shellcheck source=/dev/null
-  . "$script_dir/fm-backlog-transition-lib.sh"
-  live="$state/$id.meta"
-  if [ "${6:-}" != meta-locked ]; then
-    control="$state/.control-$id.lock"
-    lock=$(fm_meta_lock_path "$live") || return 1
-    fm_lock_try_acquire "$control" || return 1
-    trap 'fm_lock_release "$control" || true' EXIT
-    fm_lock_try_acquire "$lock" || return 1
-  fi
-  trap '[ -z "$tmp" ] || rm -f -- "$tmp"; [ -z "$lock" ] || fm_lock_release "$lock" || true; [ -z "$control" ] || fm_lock_release "$control" || true' EXIT
-  fm_backlog_record_present "$live" 'local readiness metadata' "$state" || return 1
-  cmp -s "$meta" "$live" || return 1
-  [ "$(cat "$live")" = "$captured" ] || return 1
-  if grep -q '^local_done_head=' "$live"; then
-    pinned=$(fm_dod_local_done_head "$live") || return 1
-    [ "$pinned" != "$sha" ] || return 0
-    project=$(fm_dod_meta_value "$live" project)
-    default=$(fm_dod_local_default_branch "$project") || return 1
-    fm_dod_local_rebase_matches "$project" "$pinned" "$sha" "refs/heads/$default" >/dev/null
-    return
-  fi
-  tmp=$(mktemp "$state/.local-done-$id.XXXXXX") || return 1
-  { cat "$live" && printf '\nlocal_done_head=%s\n' "$sha"; } > "$tmp" || return 1
-  fm_backlog_record_publish "$tmp" "$live" 'local readiness metadata' "$state"
-)
 
 # 0 when the forge's head for a PR is the head the done names. In no-mistakes
 # mode the pipeline pushes it, possibly with commits the worker clone never
@@ -1188,28 +1197,31 @@ fm_dod_named_head_reachable_outside_worktree() {  # <worktree> <project> <mode> 
   fm_dod_named_head_on_surviving_ref "$@"
 }
 
-# 0 when <line> is not a ship done: to gate, when the task's meta records
+# 0 when <line> is not a ship done: to gate, when the task is local-only and
+# fm_dod_local_ready_head accepts the commit its report names for the task's
+# branch (<meta>'s branch=, else fm/<id>, else the branch the report names),
+# when the task's meta records
 # forge=external and fm_dod_accept_external_review_done accepts it, when it
 # names the task's recorded PR whose head the forge holds, when it names a
 # Gerrit change whose current patch set carries the worker copy's HEAD tree, or otherwise when its named
 # head - the worker copy's HEAD - is reachable outside that disposable copy. A
 # published-for-review report that names no Gerrit change is refused.
-# There is no free-text SHA scan: a SHA that happens to appear in the note is
-# not the named head. 1 when
+# There is no free-text SHA scan: outside the one fixed place of a local-only
+# report, a SHA that happens to appear in the note is not the named head. 1 when
 # the claim is refused; stdout then holds a one-line reason and no other
 # output. <state> <id> <meta> supply pr=,
 # pr_head=, and the merge-notified marker; <meta> may be a captured copy
 # (bin/fm-fleet-snapshot.sh), so the marker is read from <state>.
-fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state> <id> <meta> [meta-locked]]
-  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url sha gerrit captured=''
+fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state> <id> <meta>]
+  local kind=$1 mode=$2 wt=$3 project=$4 line=$5 state=${6:-} id=${7:-} meta=${8:-} url sha gerrit branch
   fm_dod_should_gate_ship_done "$kind" "$mode" "$line" || return 0
-  if [ "$mode" = local-only ] && [ -n "$meta" ]; then
-    captured=$(cat "$meta") || return 1
-    if [ "$(fm_dod_meta_value "$meta" worktree)" != "$wt" ] \
-      || [ "$(fm_dod_meta_value "$meta" project)" != "$project" ]; then
-      printf '%s\n' 'local-only task identity changed before readiness could be recorded'
-      return 1
-    fi
+  if [ "$mode" = local-only ]; then
+    branch=''
+    [ -z "$meta" ] || branch=$(fm_dod_meta_value "$meta" branch)
+    [ -n "$branch" ] || branch=${id:+fm/$id}
+    sha=$(fm_dod_local_ready_head "$project" "$line" "$branch") && return 0
+    printf '%s\n' "$sha"
+    return 1
   fi
   if [ -n "$meta" ] && [ "$(fm_dod_meta_value "$meta" forge)" = external ]; then
     fm_dod_accept_external_review_done "$wt" "$project" "$line" "$meta"
@@ -1249,13 +1261,6 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
     return 1
   fi
   if fm_dod_named_head_reachable_outside_worktree "$wt" "$project" "$mode" "$sha"; then
-    if [ "$mode" = local-only ] && [ -n "$meta" ]; then
-      if [ -z "$state" ] || [ -z "$id" ] \
-        || ! fm_dod_pin_local_done_head "$state" "$id" "$meta" "$sha" "$captured" "${9:-}"; then
-        printf '%s\n' "local-only done head could not be recorded, or differs from the recorded head without carrying exactly its changes; revised work requires a new task/approval record"
-        return 1
-      fi
-    fi
     return 0
   fi
   if [ -n "$FM_DOD_REFRESH_FAILED" ]; then

@@ -282,7 +282,7 @@ test_local_only_branch_beside_gate_mirror_is_accepted() {
   git -C "$wt" commit -q --allow-empty -m 'local-only work also on the gate'
   sha=$(git -C "$wt" rev-parse HEAD)
   git -C "$wt" update-ref refs/remotes/no-mistakes/fm/mirror-local "$sha"
-  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/mirror-local" >/dev/null \
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/mirror-local at $sha" >/dev/null \
     || fail "local-only named branch in the project clone was refused beside a gate mirror ref"
   pass "local-only named branch stays reachable when the gate mirror also holds it"
 }
@@ -320,14 +320,46 @@ test_no_mistakes_prevalidation_done_is_not_gated() {
 }
 
 test_local_only_linked_branch_is_accepted() {
-  local repo wt
+  local repo wt sha
   repo="$TMP_ROOT/local-repo"
   wt="$TMP_ROOT/local-wt"
   fm_git_worktree "$repo" "$wt" fm/local
   git -C "$wt" commit -q --allow-empty -m 'local-only work'
-  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/local" \
+  sha=$(git -C "$wt" rev-parse HEAD)
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/local at $sha" \
     || fail "local-only named branch in a linked worktree was refused"
   pass "local-only linked named branch is reachable from the project clone"
+}
+
+# A local-only ready report names its commit at one fixed place. The worker's
+# copy is not consulted: a report stays good after the copy moves on, and a
+# line that names no commit there is refused with the line to write.
+test_local_only_report_names_its_commit() {
+  local repo wt sha reason
+  repo="$TMP_ROOT/named-repo"
+  wt="$TMP_ROOT/named-wt"
+  fm_git_worktree "$repo" "$wt" fm/named
+  git -C "$wt" commit -q --allow-empty -m 'reported work'
+  sha=$(git -C "$wt" rev-parse HEAD)
+  git -C "$wt" commit -q --allow-empty -m 'the next stage, not reported'
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/named at $sha; tests pass" \
+    || fail "a report naming an earlier commit of the branch was refused once the copy moved on"
+  reason=$(accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/named") \
+    && fail "a local-only report naming no commit was accepted"
+  # shellcheck disable=SC2016 # The backticks are part of the line the refusal quotes.
+  assert_contains "$reason" 'append `done [at=<epoch>]: ready in branch <branch> at <commit id>`' \
+    "the refusal did not give the line to write"
+  reason=$(accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/named, committed as $sha") \
+    && fail "a commit id elsewhere in the note was taken as the reported commit"
+  [ -n "$reason" ] || fail "a refused local-only report gave no reason"
+  # Landed and cleaned up: the default branch holds the commit and the task's
+  # branch is gone, as when cleanup delivers a second mate child's final line.
+  git -C "$repo" update-ref refs/heads/main "$sha"
+  git -C "$wt" checkout -q --detach
+  git -C "$repo" branch -q -D fm/named
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/named at $sha" \
+    || fail "a landed report was refused once cleanup had removed the task branch"
+  pass "local-only ready report names its commit at one fixed place, whatever the worker copy is on"
 }
 
 test_local_only_detached_head_is_refused() {
@@ -339,7 +371,7 @@ test_local_only_detached_head_is_refused() {
   sha=$(git -C "$wt" rev-parse HEAD)
   git -C "$wt" checkout -q --detach HEAD
   git -C "$wt" branch -q -D fm/detach
-  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/detach" >/dev/null \
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/detach at $sha" >/dev/null \
     && fail "detached local-only head whose branch was deleted was accepted"
   rc=0
   accept_done ship local-only "$wt" "$repo" "done: implementation complete" >/dev/null || rc=$?
@@ -356,12 +388,12 @@ test_standalone_local_only_needs_project_ref() {
   git -C "$wt" checkout -q -b fm/stand
   git -C "$wt" commit -q --allow-empty -m 'only in the standalone copy'
   sha=$(git -C "$wt" rev-parse HEAD)
-  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/stand" >/dev/null \
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/stand at $sha" >/dev/null \
     && fail "standalone local-only copy was accepted without the named head in the project clone"
   git -C "$repo" fetch -q "$wt" "fm/stand:fm/stand"
   [ "$(git -C "$repo" rev-parse fm/stand)" = "$sha" ] \
     || fail "project clone did not gain the named head"
-  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/stand" \
+  accept_done ship local-only "$wt" "$repo" "done: ready in branch fm/stand at $sha" \
     || fail "standalone local-only named head present in the project clone was refused"
   pass "standalone local-only done: requires the named head in the project clone"
 }
@@ -695,6 +727,7 @@ test_ci_ready_requires_pr_reference
 test_ci_ready_variants_are_gated
 test_keyed_and_spaced_done_lines_are_gated
 test_local_only_linked_branch_is_accepted
+test_local_only_report_names_its_commit
 test_local_only_detached_head_is_refused
 test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated

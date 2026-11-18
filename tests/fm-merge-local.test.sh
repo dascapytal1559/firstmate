@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Local-only landing must use the durable done head, including across races.
+# Local-only landing lands exactly the commit the task's newest ready report
+# names: through successive reports of one long-lived task, revisions, and
+# rebases, never a commit no report named, and safely across races.
 set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -9,13 +11,15 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-merge-local)
 fm_git_identity fmtest fmtest@example.invalid
 
-make_case() {
+make_case() {  # <name> [<yolo: on|off>]
   local name=$1
   CASE="$TMP_ROOT/$name"
   PROJ="$CASE/project"
   WT="$CASE/worker"
   HOME_DIR="$CASE/home"
   META="$HOME_DIR/state/local-task.meta"
+  STATUS="$HOME_DIR/state/local-task.status"
+  AT=1790000000
   mkdir -p "$HOME_DIR/state" "$HOME_DIR/data" "$HOME_DIR/config" "$HOME_DIR/bin"
   printf '#!/bin/sh\nexit 0\n' > "$HOME_DIR/bin/fm-guard.sh"
   chmod +x "$HOME_DIR/bin/fm-guard.sh"
@@ -25,63 +29,283 @@ make_case() {
   git -C "$WT" add approved.txt
   git -C "$WT" commit -q -m X
   X=$(git -C "$WT" rev-parse HEAD)
-  printf 'kind=ship\nmode=local-only\nbranch=fm/local-task\nproject=%s\nworktree=%s\nspawn_gen=fixture-1\n' \
-    "$PROJ" "$WT" > "$META"
+  printf 'kind=ship\nmode=local-only\nyolo=%s\nbranch=fm/local-task\nproject=%s\nworktree=%s\nspawn_gen=fixture-1\n' \
+    "${2:-on}" "$PROJ" "$WT" > "$META"
+  : > "$STATUS"
 }
 
-record_done() {
-  FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" \
-    'done [at=1790000000]: ready in branch fm/local-task' \
+# The worker commits one more made-up file and prints the new commit.
+commit() {  # <file>
+  printf '%s\n' "$1" > "$WT/$1"
+  git -C "$WT" add "$1"
+  git -C "$WT" commit -q -m "$1"
+  git -C "$WT" rev-parse HEAD
+}
+
+say() {  # <whole status line after the stamp>: the worker appends one status line
+  AT=$((AT + 1))
+  printf '%s\n' "${1%%:*} [at=$AT]:${1#*:}" >> "$STATUS"
+}
+
+# The worker's ready report, naming the commit its copy is on.
+report() {  # [<words after the commit id>]
+  say "done: ready in branch fm/local-task at $(git -C "$WT" rev-parse HEAD)${1:+$1}"
+}
+
+# What every reader of the task does with a done line: ask the gate.
+accept_line() {  # <line>
+  FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" "$1" \
     "$HOME_DIR/state" local-task "$META"
 }
 
-land() {
+land() {  # [<task>] [--expected-head <commit>]
   local task=local-task
-  [ "$#" -eq 0 ] || task=$1
+  case "${1:-}" in ''|--*) ;; *) task=$1; shift ;; esac
   FM_ROOT_OVERRIDE="$HOME_DIR" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
-    bash "${MERGE_SCRIPT:-$ROOT/bin/fm-merge-local.sh}" "$task"
+    bash "${MERGE_SCRIPT:-$ROOT/bin/fm-merge-local.sh}" "$task" "$@"
 }
 
-assert_refused() {
+main_head() {
+  git -C "$PROJ" rev-parse refs/heads/main
+}
+
+assert_refused() {  # [land arguments]
   local rc=0
-  REFUSAL=$(land 2>&1) || rc=$?
+  REFUSAL=$(land "$@" 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "landing unexpectedly succeeded: $REFUSAL"
-  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$BASE" ] || fail 'refusal moved main'
+  [ "$(main_head)" = "$BASE" ] || fail "refusal moved main: $REFUSAL"
   [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'refusal left a dirty checkout'
-  [ ! -e "$PROJ/approved.txt" ] || fail 'refusal left approved files behind'
 }
 
-test_branch_advance_does_not_change_approval() {
-  make_case advanced
-  record_done || fail 'done head was not accepted'
-  git -C "$WT" commit -q --allow-empty -m Y
+assert_landed() {  # <commit> <label> [land arguments]
+  local want=$1 label=$2 out
+  shift 2
+  out=$(land "$@" 2>&1) || fail "$label: landing refused: $out"
+  [ "$(main_head)" = "$want" ] || fail "$label: main is not the reported commit: $out"
+  [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail "$label: landing left a dirty checkout"
+  LANDING=$out
+  BASE=$want
+}
+
+# Safety 1. Commits a worker makes after a landing, and never reports, do not
+# land: the old report still names the landed commit, so there is nothing to land.
+test_unreported_commits_after_a_landing_do_not_land() {
+  make_case unreported
+  report
+  assert_landed "$X" 'stage 1'
+  commit unreported >/dev/null
+  accept_line "$(tail -1 "$STATUS")" || fail 'the landed report stopped being a valid report'
   assert_refused
-  # Re-reading the old done report must not silently approve Y.
-  record_done >/dev/null 2>&1 && fail 'stale done report was rebound to Y'
-  [ ! -e "$HOME_DIR/state/t3-landed-origin" ] || fail 'a refused landing recorded a landed origin'
-  git -C "$WT" reset -q --hard "$X"
+  assert_contains "$REFUSAL" 'nothing to land' 'the refusal did not say the report is already landed'
+  pass 'commits made after a landing and never reported do not land'
+}
+
+# Safety 2. A caller that builds its own done line (bin/fm-pr-check.sh does)
+# cannot attach the worker's current commit to an old report: a line naming no
+# commit is refused, and nothing is stored for the landing to pick up.
+test_a_caller_built_done_line_cannot_attach_unreported_commits() {
+  local before
+  make_case caller-line
+  report
+  assert_landed "$X" 'stage 1'
+  commit unreported >/dev/null
+  before=$(cat "$META")
+  accept_line 'done: PR https://example.invalid/pull/1' >/dev/null \
+    && fail 'a done line naming no commit was accepted for a local-only task'
+  [ "$(cat "$META")" = "$before" ] || fail 'a refused line changed the task record'
+  assert_refused
+  pass 'a done line built by another caller cannot attach unreported commits'
+}
+
+# Safety 3. The next stage of the same task lands on its own report.
+test_next_stage_lands_on_its_own_report() {
+  local y
+  make_case next-stage
+  report
+  assert_landed "$X" 'stage 1'
+  y=$(commit stage-2)
+  report
+  assert_landed "$y" 'stage 2'
+  pass 'the next stage of one task lands on its own ready report'
+}
+
+# Safety 4. A worker that has already started its next stage in the same copy:
+# exactly the reported commit lands, and the later commit stays on the branch
+# until a report names it.
+test_only_the_reported_commit_lands_when_the_worker_moved_on() {
+  local y z
+  make_case moved-on
+  report
+  assert_landed "$X" 'stage 1'
+  y=$(commit stage-2)
+  report
+  say 'paused: stage 3 is being built in this working copy'
+  z=$(commit stage-3-in-progress)
   printf 't3_thread_id=mcp:worker-1\n' >> "$META"
-  land >/dev/null || fail 'approved X did not land'
-  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$X" ] || fail 'landing did not use X'
-  [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'landing did not update the checkout'
-  [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'landing left a dirty checkout'
+  assert_landed "$y" 'stage 2'
+  assert_contains "$LANDING" "landed the reported commit $y" 'the output did not name the reported commit'
+  assert_contains "$LANDING" '1 later commit(s)' 'the output did not count the commit left on the branch'
+  [ "$(git -C "$PROJ" rev-parse refs/heads/fm/local-task)" = "$z" ] || fail 'landing moved the worker branch'
+  [ ! -e "$PROJ/stage-3-in-progress" ] || fail 'the unreported commit reached the project checkout'
   assert_equals "$(printf 'local-task\t{"threadId":"mcp:worker-1"}')" "$(cut -f2- "$HOME_DIR/state/t3-landed-origin")" \
     'the landing keeps its task thread as the latest landed origin, for a T3 restart to name'
-  pass 'branch advance refuses, and restoring the reported X lands exactly X and records its thread'
+  report
+  assert_landed "$z" 'stage 3'
+  pass 'exactly the reported commit lands when the worker has moved on, and the rest lands once reported'
+}
+
+# Safety 5. Work revised before it landed lands when the worker reports again.
+test_revised_work_lands_on_the_new_report() {
+  local revised
+  make_case revised
+  report
+  printf 'approved X, revised\n' > "$WT/approved.txt"
+  git -C "$WT" commit -q -a --amend --no-edit
+  revised=$(git -C "$WT" rev-parse HEAD)
+  accept_line "$(tail -1 "$STATUS")" >/dev/null && fail 'a report naming an amended-away commit was accepted'
+  assert_refused
+  assert_contains "$REFUSAL" 'append a fresh ready report' 'the refusal did not ask for a fresh report'
+  report
+  assert_landed "$revised" 'revised work'
+  [ "$(cat "$PROJ/approved.txt")" = 'approved X, revised' ] || fail 'landing did not use the revised content'
+  pass 'work revised before landing lands on the report that names the revision'
+}
+
+# Safety 6a. A promoted scout's own done line names no commit, so it is never a
+# ready report; the ship's later report lands.
+test_promoted_scout_lands_on_its_ship_report() {
+  local finished
+  make_case promoted
+  say 'done: report written at data/local-task/report.md'
+  commit in-progress >/dev/null
+  accept_line "$(tail -1 "$STATUS")" >/dev/null && fail "a scout's done line was accepted as a ready report"
+  finished=$(commit finished)
+  report
+  assert_landed "$finished" 'the promoted ship'
+  pass "a promoted scout's ship report lands, whatever its scout-time done line said"
+}
+
+# Safety 6b. A landing attempted while that scout line is the only done line
+# lands nothing.
+test_landing_on_a_scout_done_line_refuses() {
+  make_case scout-line
+  say 'done: report written at data/local-task/report.md'
+  commit in-progress >/dev/null
+  assert_refused
+  assert_contains "$REFUSAL" 'ready in branch fm/local-task at <commit id>' 'the refusal did not give the line to write'
+  pass "a landing attempted on a scout's done line lands nothing and says what to report"
+}
+
+# Safety 7. A question still open for the captain does not hide the report.
+test_report_with_an_open_question_lands() {
+  make_case open-question
+  say 'needs-decision [key=q1]: a made-up question'
+  report
+  say 'paused: waiting to land'
+  assert_landed "$X" 'the reported stage'
+  pass 'a ready report lands while a question is open and after the worker wrote more'
+}
+
+# Safety 8. A report that does not name its commit at the one fixed place is
+# refused with the line to write; the accepted spellings are checked beside it.
+test_reports_that_name_no_commit_refuse() {
+  local label line reason
+  while IFS='|' read -r label line <&3; do
+    [ -n "$label" ] || continue
+    make_case "unnamed-$label"
+    line=${line//@X@/$X}
+    line=${line//@SHORT@/${X:0:6}}
+    say "$line"
+    reason=$(accept_line "$(tail -1 "$STATUS")") && fail "$label: the report was accepted"
+    [ -n "$reason" ] || fail "$label: the gate refused without a reason"
+    assert_refused
+    case "$label" in
+      old-form|no-report-words|prose-first|other-branch|too-short|expression)
+        # shellcheck disable=SC2016 # The backticks are part of the line the refusal quotes.
+        assert_contains "$REFUSAL" 'append `done [at=<epoch>]: ready in branch fm/local-task at <commit id>`' \
+          "$label: the refusal did not give the exact line to write" ;;
+      *) assert_contains "$REFUSAL" 'not one commit in the project clone' "$label: the refusal did not explain the id" ;;
+    esac
+  done 3<<'CASES'
+old-form|done: ready in branch fm/local-task
+no-report-words|done: finished, committed and tested
+prose-first|done: stage one ready in branch fm/local-task at @X@
+other-branch|done: ready in branch fm/another-task at @X@
+too-short|done: ready in branch fm/local-task at @SHORT@
+expression|done: ready in branch fm/local-task at HEAD
+unknown-id|done: ready in branch fm/local-task at 0123456789abcdef0123456789abcdef01234567
+not-a-commit|done: ready in branch fm/local-task at 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+CASES
+  make_case named
+  for line in "done: ready in branch fm/local-task at $X" \
+    "done: ready in branch fm/local-task at ${X:0:10}, rebased onto main" \
+    "done [key=ready]: ready in branch fm/local-task at $X; all checks pass"; do
+    accept_line "$line" || fail "an accepted spelling was refused: $line"
+  done
+  say "done: ready in branch fm/local-task at ${X:0:10} = the head I tested"
+  assert_landed "$X" 'a report naming a short unique id'
+  pass 'a report that names no usable commit refuses with the line to write, and the accepted spellings land'
+}
+
+# Safety 9. A report naming a commit that is not on the task's branch lands
+# nothing: one no branch holds is not a ready report at all, and one that only
+# another branch holds is refused at landing.
+test_report_naming_a_commit_off_the_branch_refuses() {
+  local stray
+  make_case off-branch
+  stray=$(printf 'stray\n' | git -C "$PROJ" commit-tree "$X^{tree}" -p "$BASE")
+  say "done: ready in branch fm/local-task at $stray"
+  accept_line "$(tail -1 "$STATUS")" >/dev/null && fail 'a commit no branch holds was accepted'
+  assert_refused
+  assert_contains "$REFUSAL" 'no branch of the project clone holds' 'the refusal did not say the commit is on no branch'
+  git -C "$PROJ" update-ref refs/heads/fm/elsewhere "$stray"
+  assert_refused
+  assert_contains "$REFUSAL" 'not on branch fm/local-task' 'the refusal did not name the task branch'
+  pass 'a report naming a commit that is not on the task branch refuses'
+}
+
+# Safety 10. One report lands once.
+test_a_landed_report_does_not_land_again() {
+  make_case twice
+  report
+  assert_landed "$X" 'the first landing'
+  assert_refused
+  assert_contains "$REFUSAL" 'nothing to land' 'the second landing did not say why it refused'
+  pass 'a report that already landed does not land again'
+}
+
+# Safety 11. Without yolo the landing is the captain's approval of one commit:
+# the approver names it, and a newer report is not that approval.
+test_an_approval_names_one_commit() {
+  local z rc bad
+  make_case approval off
+  report
+  assert_refused
+  assert_contains "$REFUSAL" "--expected-head" 'the refusal did not ask for the approved commit'
+  assert_contains "$REFUSAL" "$X" 'the refusal did not name the reported commit'
+  for bad in "${X:0:12}" refs/heads/fm/local-task ''; do
+    rc=0
+    land --expected-head "$bad" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 2 ] || fail "--expected-head '$bad' exited $rc, not 2"
+  done
+  z=$(commit more)
+  report
+  assert_refused --expected-head "$X"
+  assert_contains "$REFUSAL" "not the approved $X" 'the refusal did not name the approved commit'
+  assert_contains "$REFUSAL" 'extra commit' 'the refusal did not name the commit beyond the approval'
+  assert_landed "$z" 'the approved newer report' --expected-head "$z"
+  pass 'without yolo the approved commit must be named, and a newer report is not that approval'
 }
 
 # Another task lands on main after X was approved, and the worker rebases X
 # onto it, as its instructions say. A second approved commit, when asked for,
 # lets reorder and squash cases exist.
 approve_then_rebase() {  # <case> [two]
-  make_case "$1"
+  make_case "$1" off
   if [ "${2:-}" = two ]; then
-    printf 'approved X2\n' > "$WT/approved2.txt"
-    git -C "$WT" add approved2.txt
-    git -C "$WT" commit -q -m X2
-    X=$(git -C "$WT" rev-parse HEAD)
+    X=$(commit approved2.txt)
   fi
-  record_done || fail "$1: done head was not accepted"
+  report
   printf 'other task\n' > "$PROJ/other.txt"
   git -C "$PROJ" add other.txt
   git -C "$PROJ" commit -q -m other
@@ -90,32 +314,27 @@ approve_then_rebase() {  # <case> [two]
   [ "$(git -C "$WT" rev-parse HEAD)" != "$X" ] || fail "$1: rebase kept the approved commit"
 }
 
-test_rebased_identical_head_lands() {
-  local out rebased
+# Safety 12. The approved commit, rebased over another task's landing with the
+# same changes, is still the approved work.
+test_approved_work_lands_after_an_identical_rebase() {
+  local rebased
   approve_then_rebase rebased
   git -C "$WT" commit -q --amend -m 'X, reworded'
   rebased=$(git -C "$WT" rev-parse HEAD)
-  record_done || fail 'the rebased done was refused'
-  [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail 'the rebased done moved the approved head'
-  out=$(land 2>&1) || fail "the rebased identical head did not land: $out"
-  [ "$(git -C "$PROJ" rev-parse HEAD)" = "$rebased" ] || fail 'landing did not use the rebased head'
+  report
+  assert_landed "$rebased" 'the rebased approved work' --expected-head "$X"
   [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'landing did not update the checkout'
   [ -e "$PROJ/other.txt" ] || fail 'landing lost the other task'
-  [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'landing left a dirty checkout'
-  assert_contains "$out" "landed rebased head $rebased" 'the output did not name the rebased head'
-  assert_contains "$out" "approved head $X" 'the output did not name the approved head'
-  [ "$(fm_dod_meta_value "$META" local_landed_head)" = "$rebased" ] || fail 'the landed head was not recorded'
-  [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail 'landing changed the approved head'
-  pass 'a rebased head with the same changes lands and is recorded, keeping the approved head'
+  pass 'approved work rebased with the same changes lands under the approval of the original commit'
 }
 
-test_rebased_changed_head_refuses() {
+test_approved_work_changed_by_a_rebase_refuses() {
   local variant expect
   for variant in extra amended whitespace merge reordered squashed; do
     case "$variant" in
       reordered|squashed) approve_then_rebase "rebased-$variant" two ;;
-      merge) make_case "rebased-$variant"
-        record_done || fail 'merge: done head was not accepted'
+      merge) make_case "rebased-$variant" off
+        report
         printf 'other task\n' > "$PROJ/other.txt"
         git -C "$PROJ" add other.txt
         git -C "$PROJ" commit -q -m other
@@ -125,9 +344,7 @@ test_rebased_changed_head_refuses() {
     esac
     case "$variant" in
       extra)
-        printf 'unfinished\n' > "$WT/unfinished.txt"
-        git -C "$WT" add unfinished.txt
-        git -C "$WT" commit -q -m Y
+        commit unfinished.txt >/dev/null
         expect='extra commit' ;;
       amended)
         printf 'approved X, changed\n' > "$WT/approved.txt"
@@ -148,30 +365,139 @@ test_rebased_changed_head_refuses() {
         git -C "$WT" commit -q -m squashed
         expect='missing approved commit' ;;
     esac
-    record_done >/dev/null 2>&1 && fail "$variant: the changed done was accepted"
-    [ "$(fm_dod_local_done_head "$META")" = "$X" ] || fail "$variant: the approved head moved"
-    assert_refused
+    report
+    assert_refused --expected-head "$X"
     assert_contains "$REFUSAL" 'does not carry exactly its changes' "$variant: the refusal did not explain itself"
     assert_contains "$REFUSAL" "$expect" "$variant: the refusal did not name the differing commits"
-    assert_no_regex '^local_landed_head=' "$META" "$variant: a refusal recorded a landed head"
   done
-  pass 'rebased heads with an extra, amended, whitespace-amended, merge, reordered, or squashed commit refuse'
+  pass 'approved work rebased with an extra, amended, whitespace-amended, merge, reordered, or squashed commit refuses'
 }
 
-test_missing_and_malformed_head_refuse() {
-  local value
-  for value in missing empty abbreviated expression duplicate; do
-    make_case "$value"
-    case "$value" in
-      missing) ;;
-      empty) printf 'local_done_head=\n' >> "$META" ;;
-      abbreviated) printf 'local_done_head=%s\n' "${X:0:8}" >> "$META" ;;
-      expression) printf 'local_done_head=refs/heads/fm/local-task\n' >> "$META" ;;
-      duplicate) printf 'local_done_head=%s\nlocal_done_head=%s\n' "$X" "$X" >> "$META" ;;
-    esac
-    assert_refused
+# The landing identity lives in the report, so reading a task records nothing:
+# the task record and the state folder are byte-for-byte what they were, a
+# captured copy of the record answers the same, and a caller holding the task's
+# locks is not made to wait.
+test_accepting_a_report_writes_nothing() {
+  local before listing captured
+  make_case read-only
+  report
+  (
+    local FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state"
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$ROOT/bin/fm-wake-lib.sh"
+    local lock control="$HOME_DIR/state/.control-local-task.lock"
+    lock=$(fm_meta_lock_path "$META") || exit 1
+    fm_lock_try_acquire "$control" || exit 1
+    fm_lock_try_acquire "$lock" || exit 1
+    trap 'fm_lock_release "$lock"; fm_lock_release "$control"' EXIT
+    accept_line "$(tail -1 "$STATUS")" || exit 1
+  ) || fail "the report was not accepted under a caller's locks"
+  before=$(cat "$META")
+  listing=$(ls -A "$HOME_DIR/state")
+  captured="$CASE/captured.meta"
+  cp "$META" "$captured"
+  accept_line "$(tail -1 "$STATUS")" || fail 'the report was refused'
+  FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" "$(tail -1 "$STATUS")" \
+    "$HOME_DIR/state" local-task "$captured" || fail 'a captured record refused the report'
+  FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" "$(tail -1 "$STATUS")" \
+    || fail 'the report was refused without a task record'
+  accept_line 'done: ready in branch fm/local-task' >/dev/null && fail 'an unnamed report was accepted'
+  [ "$(cat "$META")" = "$before" ] || fail 'accepting a report changed the task record'
+  [ "$(ls -A "$HOME_DIR/state")" = "$listing" ] || fail 'accepting a report left files in the state folder'
+  pass 'accepting a ready report writes nothing and waits on no lock'
+}
+
+# One long-lived worker's real day, as made-up fixtures: 24 landings from 29
+# ready reports on one branch, with 12 landings by other tasks in between. Only
+# the order of events is taken from that day: ordinary stages, a stage reworked
+# while it was rebased and then stacked under the next one, stages reported on a
+# base that another landing had just overtaken and rebased unchanged, two stages
+# reported together, questions left open, and the worker writing on after a
+# report. Every landing must take exactly the commit its report named, unaided.
+OWNER_DAY='
+other; other; other; other
+stage; stage
+say needs-decision; say needs-decision; stage
+start; commit; report; say working; say paused; other; say working; rework; report; say paused; commit; report; say paused; land
+start; commit; commit; report; land
+stage; stage; stage; stage; stage; stage; stage; stage; stage
+say paused; start; commit; other; other; say needs-decision; report; say working; rebase; report; say working; land
+other; start; commit; report; say paused; land
+stage; stage; stage; stage; stage
+other; say needs-decision; say needs-decision; start; commit; report; other; rebase; report; land
+other; stage
+start; commit; other; report; say working; say working; rebase; commit; report; land
+'
+
+owner_step() {  # <op>
+  case "$1" in
+    other)
+      OTHERS=$((OTHERS + 1))
+      printf 'another task %s\n' "$OTHERS" > "$PROJ/other-$OTHERS.txt"
+      git -C "$PROJ" add "other-$OTHERS.txt"
+      git -C "$PROJ" commit -q -m "another task $OTHERS"
+      BASE=$(main_head) ;;
+    start|rebase) git -C "$WT" rebase -q main || fail "owner day: $1 failed" ;;
+    commit)
+      STAGES=$((STAGES + 1))
+      commit "stage-$STAGES.txt" >/dev/null ;;
+    rework)
+      git -C "$WT" rebase -q main || fail 'owner day: rework rebase failed'
+      printf 'reworked\n' >> "$WT/stage-$STAGES.txt"
+      git -C "$WT" commit -q -a --amend --no-edit ;;
+    report)
+      REPORTS=$((REPORTS + 1))
+      report "; stage report $REPORTS" ;;
+    'say needs-decision')
+      QUESTIONS=$((QUESTIONS + 1))
+      say "needs-decision [key=q$QUESTIONS]: a made-up question" ;;
+    'say '*) say "${1#say }: a made-up line" ;;
+    land)
+      LANDINGS=$((LANDINGS + 1))
+      assert_landed "$(git -C "$WT" rev-parse HEAD)" "owner day, landing $LANDINGS"
+      assert_not_contains "$LANDING" 'later commit(s)' "owner day, landing $LANDINGS left reported work behind" ;;
+    stage) owner_step start; owner_step commit; owner_step report; owner_step land ;;
+    *) fail "owner day: unknown step '$1'" ;;
+  esac
+}
+
+test_a_long_lived_owner_lands_every_stage() {
+  local row op rest
+  make_case owner-day
+  OTHERS=0 STAGES=0 REPORTS=0 QUESTIONS=0 LANDINGS=0
+  report
+  assert_landed "$X" 'owner day, the first commit'
+  while IFS= read -r row <&3; do
+    rest=$row
+    while [ -n "$rest" ]; do
+      op=${rest%%;*}
+      case "$rest" in *';'*) rest=${rest#*;} ;; *) rest='' ;; esac
+      op=${op#"${op%%[![:space:]]*}"}
+      op=${op%"${op##*[![:space:]]}"}
+      [ -z "$op" ] || owner_step "$op"
+    done
+  done 3<<EOF
+$OWNER_DAY
+EOF
+  assert_equals '24 29 12' "$LANDINGS $REPORTS $OTHERS" 'the fixture lost the shape of the day it stands for'
+  [ "$(git -C "$PROJ" rev-list --count main..fm/local-task)" = 0 ] || fail 'owner day ended with unlanded commits'
+  pass 'a long-lived owner lands all 24 stages of a day unaided, each exactly as reported'
+}
+
+test_help_and_bad_requests() {
+  local out rc bad
+  make_case help
+  out=$(bash "$ROOT/bin/fm-merge-local.sh" --help 2>&1) || fail "--help failed: $out"
+  assert_contains "$out" '--expected-head' '--help did not describe the approved-commit flag'
+  assert_not_contains "$out" 'no meta for task' '--help was read as a task id'
+  for bad in '' 'local-task extra' 'local-task --expected-head' 'local-task --land-anything x'; do
+    rc=0
+    # shellcheck disable=SC2086 # The bad request is deliberately split into its words.
+    FM_ROOT_OVERRIDE="$HOME_DIR" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+      bash "$ROOT/bin/fm-merge-local.sh" $bad >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 2 ] || fail "request '$bad' exited $rc, not 2"
   done
-  pass 'missing, malformed and ambiguous done heads refuse without moving main'
+  pass '--help prints the usage and a malformed request is refused before any task is read'
 }
 
 # A Git shim moves the branch inside the final ref-changing Git invocation.
@@ -180,7 +506,7 @@ test_change_after_hold_check_refuses() {
   local real_git out rc
   real_git=$(command -v git)
   make_case race-branch
-  record_done || fail 'race fixture done was not accepted'
+  report
   git -C "$WT" commit -q --allow-empty -m Y
   Y=$(git -C "$WT" rev-parse HEAD)
   git -C "$WT" reset -q --hard "$X"
@@ -210,18 +536,22 @@ SH
 
 test_diverged_default_refuses() {
   make_case diverged
-  record_done || fail 'diverged fixture done was not accepted'
+  report
   git -C "$PROJ" commit -q --allow-empty -m diverged
   BASE=$(git -C "$PROJ" rev-parse HEAD)
   assert_refused
+  assert_contains "$REFUSAL" 'report ready again' 'the refusal did not ask for a rebase and a fresh report'
+  [ ! -e "$PROJ/approved.txt" ] || fail 'refusal left approved files behind'
   pass 'a diverged default branch refuses without changing main or its checkout'
 }
 
+# The branch moves, or a newer ready report arrives, while the landing reads
+# whether the task is still held for the captain.
 test_change_during_approval_check_refuses() {
   local mode out rc
-  for mode in branch approval; do
+  for mode in branch report; do
     make_case "approval-$mode"
-    record_done || fail 'approval race fixture done was not accepted'
+    report
     git -C "$WT" commit -q --allow-empty -m Y
     Y=$(git -C "$WT" rev-parse HEAD)
     git -C "$WT" reset -q --hard "$X"
@@ -231,78 +561,32 @@ test_change_during_approval_check_refuses() {
 if [ "$RACE_MODE" = branch ]; then
   git -C "$RACE_PROJ" update-ref refs/heads/fm/local-task "$RACE_Y"
 else
-  printf 'local_done_head=%s\n' "$RACE_Y" >> "$RACE_META"
+  printf 'done [at=1790009999]: ready in branch fm/local-task at %s; reported again\n' "$RACE_X" >> "$RACE_STATUS"
 fi
 exit 3
 SH
     rc=0
     out=$(MERGE_SCRIPT="$CASE/toolbin/fm-merge-local.sh" RACE_MODE="$mode" \
-      RACE_PROJ="$PROJ" RACE_Y="$Y" RACE_META="$META" land 2>&1) || rc=$?
-    [ "$rc" -ne 0 ] || fail "approval race succeeded: $out"
-    [ "$(git -C "$PROJ" rev-parse HEAD)" = "$BASE" ] || fail 'approval race moved main'
+      RACE_PROJ="$PROJ" RACE_Y="$Y" RACE_X="$X" RACE_STATUS="$STATUS" land 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "approval race ($mode) succeeded: $out"
+    assert_contains "$out" 'changed during approval check' "approval race ($mode) refused for another reason"
+    [ "$(git -C "$PROJ" rev-parse HEAD)" = "$BASE" ] || fail "approval race ($mode) moved main"
   done
-  pass 'approval and branch changes during the hold read refuse without moving main'
-}
-
-test_snapshot_cannot_pin_a_replacement_task() {
-  local captured
-  make_case stale-snapshot
-  captured="$CASE/local-task.meta"
-  cp "$META" "$captured"
-  printf 'spawn_gen=replacement\n' >> "$META"
-  FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" \
-    'done: ready' "$HOME_DIR/state" local-task "$captured" >/dev/null 2>&1 \
-    && fail 'a stale snapshot pinned a replacement task'
-  assert_no_regex '^local_done_head=' "$META" 'stale snapshot changed live readiness'
-  pass 'captured metadata cannot pin a replacement task generation'
-}
-
-test_done_recording_preserves_caller_locks() {
-  local caller
-  for caller in ledger teardown; do
-    make_case "locked-$caller"
-    (
-      local FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state"
-      # shellcheck source=bin/fm-wake-lib.sh
-      . "$ROOT/bin/fm-wake-lib.sh"
-      local lock control='' owner
-      lock=$(fm_meta_lock_path "$META") || exit 1
-      if [ "$caller" = teardown ]; then
-        control="$HOME_DIR/state/.control-local-task.lock"
-        fm_lock_try_acquire "$control" || exit 1
-      fi
-      fm_lock_try_acquire "$lock" || exit 1
-      fm_current_pid owner || exit 1
-      trap 'fm_lock_release "$lock"; [ -z "$control" ] || fm_lock_release "$control"' EXIT
-      FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" \
-        'done: ready' "$HOME_DIR/state" local-task "$META" meta-locked || exit 1
-      [ "$(fm_dod_local_done_head "$META")" = "$X" ] || exit 1
-      FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" \
-        'done: ready again' "$HOME_DIR/state" local-task "$META" meta-locked || exit 1
-      git -C "$WT" commit -q --allow-empty -m Y || exit 1
-      if FM_HOME="$HOME_DIR" fm_dod_accept_ship_done ship local-only "$WT" "$PROJ" \
-        'done: changed' "$HOME_DIR/state" local-task "$META" meta-locked >/dev/null; then
-        exit 1
-      fi
-      [ "$(fm_dod_local_done_head "$META")" = "$X" ] || exit 1
-      [ "$(cat "$lock/pid")" = "$owner" ] || exit 1
-      [ -z "$control" ] || [ "$(cat "$control/pid")" = "$owner" ] || exit 1
-    ) || fail "$caller: done recording failed or changed the caller's locks"
-  done
-  pass 'ledger and teardown record the first done head without reacquiring or releasing caller locks'
+  pass 'a branch move or a newer report during the hold read refuses without moving main'
 }
 
 test_two_tasks_cannot_undo_a_same_tree_landing() {
   local real_git real_sleep other first_pid second_pid first_rc=0 second_rc=0 i project_lock
   make_case same-tree
-  record_done || fail 'first task readiness was not accepted'
+  report
   other=$(printf 'second task\n' | git -C "$PROJ" commit-tree "$X^{tree}" -p "$BASE")
   git -C "$PROJ" update-ref refs/heads/fm/other-task "$other"
-  printf 'kind=ship\nmode=local-only\nbranch=fm/other-task\nproject=%s\nspawn_gen=fixture-2\nlocal_done_head=%s\n' \
-    "$PROJ" "$other" > "$HOME_DIR/state/other-task.meta"
+  printf 'kind=ship\nmode=local-only\nyolo=on\nbranch=fm/other-task\nproject=%s\nspawn_gen=fixture-2\n' \
+    "$PROJ" > "$HOME_DIR/state/other-task.meta"
+  printf 'done [at=1790000001]: ready in branch fm/other-task at %s\n' "$other" > "$HOME_DIR/state/other-task.status"
   [ "$other" != "$X" ] || fail 'same-tree commits were not distinct'
   [ "$(git -C "$PROJ" rev-parse "$other^{tree}")" = "$(git -C "$PROJ" rev-parse "$X^{tree}")" ] \
-    || fail 'the two approved commits have different trees'
+    || fail 'the two reported commits have different trees'
   real_git=$(command -v git)
   real_sleep=$(command -v sleep)
   project_lock="$(git -C "$PROJ" rev-parse --absolute-git-dir)/fm-local-landing.lock"
@@ -397,11 +681,20 @@ SH
     [ "$(cat "$PROJ/approved.txt")" = 'approved X' ] || fail 'the competing task reverted the landed files'
     [ -z "$(git -C "$PROJ" status --porcelain)" ] || fail 'the competing task dirtied the landed checkout'
   ) || fail 'two-task same-tree landing corrupted the first result'
-  pass 'two approved tasks with the same tree cannot roll back a successful landing'
+  pass 'two reported tasks with the same tree cannot roll back a successful landing'
 }
 
-fm_test_run test_two_tasks_cannot_undo_a_same_tree_landing test_branch_advance_does_not_change_approval \
-  test_missing_and_malformed_head_refuse test_change_after_hold_check_refuses \
-  test_diverged_default_refuses test_change_during_approval_check_refuses \
-  test_snapshot_cannot_pin_a_replacement_task test_done_recording_preserves_caller_locks \
-  test_rebased_identical_head_lands test_rebased_changed_head_refuses
+fm_test_run test_two_tasks_cannot_undo_a_same_tree_landing \
+  test_unreported_commits_after_a_landing_do_not_land \
+  test_a_caller_built_done_line_cannot_attach_unreported_commits \
+  test_next_stage_lands_on_its_own_report \
+  test_only_the_reported_commit_lands_when_the_worker_moved_on \
+  test_revised_work_lands_on_the_new_report \
+  test_promoted_scout_lands_on_its_ship_report test_landing_on_a_scout_done_line_refuses \
+  test_report_with_an_open_question_lands test_reports_that_name_no_commit_refuse \
+  test_report_naming_a_commit_off_the_branch_refuses test_a_landed_report_does_not_land_again \
+  test_an_approval_names_one_commit test_approved_work_lands_after_an_identical_rebase \
+  test_approved_work_changed_by_a_rebase_refuses test_accepting_a_report_writes_nothing \
+  test_a_long_lived_owner_lands_every_stage test_help_and_bad_requests \
+  test_change_after_hold_check_refuses test_diverged_default_refuses \
+  test_change_during_approval_check_refuses

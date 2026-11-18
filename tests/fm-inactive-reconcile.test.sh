@@ -303,10 +303,11 @@ test_unpushed_ci_ready_done_is_not_published() {
   pass "unpushed CI-ready ship done: is not published upstream"
 }
 
-# Local readiness is recorded by the real ledger pass while it owns metadata.
-test_local_done_head_is_pinned_before_parent_delivery() {
-  local project worker sha
-  make_world local-done-head
+# A child's local-only ready reports reach the parent once each: a done line
+# that names no commit is not a ready report, and a later report is a new one.
+test_local_ready_reports_reach_the_parent_once_each() {
+  local project worker sha later
+  make_world local-ready-reports
   bind_secondmate local
   project="$MATE/projects/local"
   worker="$WORLD/worker"
@@ -318,20 +319,22 @@ test_local_done_head_is_pinned_before_parent_delivery() {
     'harness=codex' 'kind=ship' 'mode=local-only' 'yolo=off' 'spawn_gen=local-one'
   printf 'done: approved local work\n' > "$MATE/state/child.status"
   FM_FAKE_CREW_STATE=busy run_reconcile "$MATE"
-  [ "$(sed -n 's/^local_done_head=//p' "$MATE/state/child.meta")" = "$sha" ] \
-    || fail 'the ledger scan did not pin the local done head'
-  [ "$(outcome_count "$MATE" reported)" = 1 ] || fail 'local done report was not delivered'
-  grep -Fq 'child child done: approved local work' "$MAIN/state/mate.status" \
-    || fail 'the parent did not receive the local done report'
-  run_report "$MATE" child || fail 'repeated locked report failed'
-  [ "$(outcome_count "$MATE" reported)" = 1 ] || fail 'the same done report was delivered twice'
-  git -C "$worker" commit -q --allow-empty -m later
-  printf 'done: later local work\n' >> "$MATE/state/child.status"
+  [ "$(outcome_count "$MATE" reported)" = 0 ] || fail 'a done line naming no commit was delivered as a ready report'
+  printf 'done: ready in branch fm/child at %s\n' "$sha" >> "$MATE/state/child.status"
   FM_FAKE_CREW_STATE=busy run_reconcile "$MATE"
-  [ "$(sed -n 's/^local_done_head=//p' "$MATE/state/child.meta")" = "$sha" ] \
-    || fail 'a later head replaced the first readiness pin'
-  [ "$(outcome_count "$MATE" reported)" = 1 ] || fail 'an unapproved later head was reported'
-  pass 'inactive reconciliation pins local readiness under its existing lock before one parent delivery'
+  [ "$(outcome_count "$MATE" reported)" = 1 ] || fail 'local ready report was not delivered'
+  grep -Fq "child child done: ready in branch fm/child at $sha" "$MAIN/state/mate.status" \
+    || fail 'the parent did not receive the local ready report'
+  run_report "$MATE" child || fail 'repeated locked report failed'
+  [ "$(outcome_count "$MATE" reported)" = 1 ] || fail 'the same ready report was delivered twice'
+  git -C "$worker" commit -q --allow-empty -m later
+  later=$(git -C "$worker" rev-parse HEAD)
+  printf 'done: ready in branch fm/child at %s\n' "$later" >> "$MATE/state/child.status"
+  FM_FAKE_CREW_STATE=busy run_reconcile "$MATE"
+  [ "$(outcome_count "$MATE" reported)" = 2 ] || fail "the next stage's ready report was not delivered"
+  grep -Fq "child child done: ready in branch fm/child at $later" "$MAIN/state/mate.status" \
+    || fail "the parent did not receive the next stage's ready report"
+  pass 'inactive reconciliation delivers each local ready report to the parent once, and never a done line naming no commit'
 }
 
 # The ledger pass runs on every poll, so a ship done: already delivered does
@@ -1485,7 +1488,7 @@ test_idle_agent_with_rewritten_meta_keeps_terminal_outcome
 test_dead_agent_keeps_terminal_outcome
 test_branch_ack_retires_inactive_outcome_receipt
 test_unpushed_ci_ready_done_is_not_published
-test_local_done_head_is_pinned_before_parent_delivery
+test_local_ready_reports_reach_the_parent_once_each
 test_delivered_ledger_done_skips_git_gate
 test_local_secondmate_delivers_terminal_ledger_line
 test_secondmate_multiline_terminal_outcome_is_delivered_once
