@@ -203,7 +203,7 @@ T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blo
 A worker's long test run or build keeps going through a T3 Code restart, and its result still reaches the worker.
 A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker watches its output for up to nine minutes, so T3 shows the command and its output as upstream does and the worker reads as working.
 If the job is still running when the watch ends by itself, the worker declares a wait and ends its turn, and the result comes back to it as an instruction that starts its next turn when the job finishes.
-If a restart cuts the watch, the job keeps running, and the worker, once T3 or the restart recovery has resumed it, re-attaches from the log's last lines.
+If a restart cuts the watch, the job keeps running and its result still reaches the worker, and a worker T3 did not resume is told by the restart recovery to re-attach from the log's last lines.
 Upstream has a worker run such a command in its own turn or a background shell and declare the wait, and sets that wait to the job's timeout; outside contributors have open upstream PRs that wake a worker when its job finishes; surviving a restart is this fork's.
 The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
 The job itself is left out of the busy count, but a worker watching it is a running turn, so a clean restart waits for the watch to end, which is never more than about nine minutes.
