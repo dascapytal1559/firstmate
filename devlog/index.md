@@ -1974,8 +1974,8 @@ What was built, on FirstMate's side only:
 - **Unreadable stays pending.** A thread that cannot be read leaves the restart unhandled so the next session start retries; a gone thread is reported as before.
 - **Less code.** The "reported since the restart" time-stamp rule is gone, because a worker T3 resumed no longer reads as cut. The message text, the marker and the untrusted-claim rule stay for the workers that are messaged.
 
-Replayed over the real record, this sends 2 messages instead of 39 and still catches every cut turn.
-The one case it handles later rather than at once is a background command a worker never marked as awaited, which last happened before 12 November and is picked up by the worker's declared wait time.
+Replayed over the real record, this sends 2 messages instead of 39 and still catches every turn T3 shows as cut.
+Two cases it handles later rather than at once, each picked up by the worker's declared wait time: a background command a worker never marked as awaited, which last happened before 12 November, and, with T3's continuation setting off, a marked background wait the restart killed, since T3 then wakes nobody and the worker's thread reads idle.
 
 The choice to confirm: a worker he stopped by hand still reads as cut, so one whose last line says working is messaged at the next restart, as it is today.
 

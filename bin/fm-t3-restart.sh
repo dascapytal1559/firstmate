@@ -49,7 +49,8 @@
 #     pin is silent and never stops recovery.
 #
 # Marker (written only for a steered worker): <state>/<id>.t3-restart, owned
-# here, removed by teardown.
+# here, removed by teardown, and removed by a later recover that leaves the
+# worker asleep while its doorbell reads failed (no steer reached it).
 #   server=<the restarted server's identity>
 #   offset=<the status file's byte size when the restart was handled>
 #   doorbell=pending|sent|failed   (whether the recovery steer was recorded)
@@ -150,6 +151,12 @@ write_marker() {  # <marker> <offset> <doorbell>
   return 1
 }
 
+drop_failed_marker() {  # <marker>
+  [ -f "$1" ] && [ ! -L "$1" ] || return 0
+  [ "$(marker_value "$1" doorbell)" = failed ] || return 0
+  rm -f "$1"
+}
+
 STEER="Firstmate: the T3 server restarted at $CURRENT and ended your session, so anything that lived only in it is gone: background commands, waits, and monitors, and any command you ran in the foreground. A detached job you started with fm-job.sh is not one of them: it is still running or has already sent you its result, so check it with fm-job.sh status <your task id> and never rerun it; if it is still running, re-attach with fm-job.sh follow <your task id> <job> --from-end in the foreground. Check where your task really stands now: if you were waiting on something, check that condition directly, then continue or start the wait again; if you were mid-step, verify what actually finished before you go on. Then append one status line saying where you are (working, paused with its until, or your terminal state), because firstmate no longer trusts your earlier working or paused line until you do."
 
 echo "t3-restart: the T3 server restarted at $CURRENT; it ended every T3 session, this one included."
@@ -180,6 +187,7 @@ for meta in "$STATE"/*.meta; do
   case "$(fm_backend_t3code_probe "$thread")" in
     interrupted) ;;
     archived|http-404)
+      drop_failed_marker "$marker"
       echo "t3-restart: $id: its T3 thread $thread is gone or archived; nothing to wake"
       continue
       ;;
@@ -188,7 +196,10 @@ for meta in "$STATE"/*.meta; do
       FAILED=1
       continue
       ;;
-    *) continue ;;
+    *)
+      drop_failed_marker "$marker"
+      continue
+      ;;
   esac
   offset=0
   [ ! -f "$statusf" ] || offset=$(wc -c < "$statusf" | tr -d ' ')

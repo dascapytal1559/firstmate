@@ -3552,6 +3552,51 @@ test_t3_restart_failed_ring_retries() {
   pass "t3code restart: an unreadable thread or a failed ring keeps the restart pending for exactly that worker, and an unreadable server is no restart"
 }
 
+# A steer that was not recorded reached nobody, so when a rerun finds the
+# worker no longer cut (something else gave it a turn) or its thread gone, it
+# leaves the worker asleep and its earlier claim is trusted again.
+test_t3_restart_failed_ring_then_left_asleep() {
+  local out now pr pg wr wg tr=mcp:aa000051-0000-4000-8000-000000000051 tg=mcp:aa000052-0000-4000-8000-000000000052
+  t3_restart_home restart-failed-then-asleep
+  t3_restart_world "$(t3_thread_json "$tr" completed false)" "$(t3_thread_json "$tg" completed false)"
+  now=$(date +%s)
+  wr=$(t3_uid t3rsready); wg=$(t3_uid t3rsgone)
+  pr="paused [at=$((now - 3600))]: waiting on CI; resumes when it is green. until 2099-01-01T00:00Z"
+  pg="paused [at=$((now - 3600))]: waiting on the review; resumes when it lands. until 2099-01-01T00:00Z"
+  t3_restart_task "$wr" "$tr" ship "$pr"
+  t3_restart_task "$wg" "$tg" scout "$pg"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "the first recovery only records the server"
+
+  t3_restart_at $((now - 120))
+  t3_world_set "for (const id of ['$tr', '$tg']) w.threads[id].status = 'interrupted';"
+  mkdir -p "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  chmod 500 "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  chmod 700 "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  assert_contains "$out" "$wr: the restart steer was not recorded" "the first steer fails: $out"
+  assert_contains "$out" "$wg: the restart steer was not recorded" "the second steer fails: $out"
+  assert_grep 'doorbell=failed' "$RS_STATE/$wr.t3-restart" "the failed steer is marked"
+  assert_equals "" "$(t3_declared_wait "$RS_STATE/$wr.status")" "until recovery finishes the pause is not trusted"
+
+  # Before the rerun the captain gives one worker a turn, so its thread reads
+  # ready, and the other worker's thread is archived.
+  t3_world_set "w.threads['$tr'].status = 'completed'; w.threads['$tg'].status = 'completed'; w.threads['$tg'].archived = true;"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_not_contains "$out" "$wr" "the worker no longer cut is left asleep and unmentioned"
+  assert_contains "$out" "$wg: its T3 thread $tg is gone or archived" "the archived thread is reported"
+  [ -z "$(t3_sent_threads)" ] || fail "nobody is rung once neither thread reads cut, got '$(t3_sent_threads)'"
+  assert_absent "$RS_STATE/$wr.t3-restart" "the failed marker of a worker left asleep is dropped"
+  assert_absent "$RS_STATE/$wg.t3-restart" "the failed marker of a gone worker is dropped"
+  assert_equals "$pr" "$(t3_declared_wait "$RS_STATE/$wr.status")" "the worker left asleep keeps its declared wait"
+  assert_equals "$pg" "$(t3_declared_wait "$RS_STATE/$wg.status")" "the gone worker's pause is trusted again"
+  out=$(t3_crew_state "$wr")
+  assert_contains "$out" "state: paused" "the worker left asleep reads paused: $out"
+  assert_not_contains "$out" "predates a T3 server restart" "its claim is trusted: $out"
+  assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "the rerun records the restart as handled"
+  pass "t3code restart: a failed steer's marker is dropped when a rerun leaves the worker asleep, so its claim is trusted again"
+}
+
 # Every recovery pins this home's own live T3 thread (the root thread running
 # in the home, a main's or a secondmate's alike) as its project's coordinator
 # where T3 offers it, so the next restart wakes it even with no crew run cut.
@@ -3836,6 +3881,7 @@ test_t3_restart_recovery
 test_t3_restart_rings_only_cut_turns
 test_t3_restart_with_continuation_off
 test_t3_restart_failed_ring_retries
+test_t3_restart_failed_ring_then_left_asleep
 test_t3_restart_recover_pins_coordinator
 test_t3_restart_main_follows_t3s_note
 test_push_wait_wakes_on_an_approval_raised_mid_wait

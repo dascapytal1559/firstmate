@@ -385,9 +385,11 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
   An archived or missing thread is reported rather than rung, and a thread that cannot be read leaves the restart unrecorded, so the next session start retries.
   Workers with an open decision, a captain-held wait, or a terminal line are not looked at.
   A worker stopped by hand reads cut too, so one whose last line still says `working:` is steered at the next restart.
-  The one case this leaves for later is a worker that ended its turn on a background command it never marked with `t3_background_wait`: T3 records the loss but wakes nobody, so the worker is found by the watcher's recheck at its declared `until`, else within its four-hour wait cadence.
+  Two cases are left for later, both a worker that ended its turn normally on a background wait the restart killed, so its thread reads idle rather than cut: one it never marked with `t3_background_wait`, which T3 records but wakes nobody for, and, with continuation off, a marked one too, since T3 then wakes nobody at all.
+  Either worker is found by the watcher's recheck at its declared `until`, else within its four-hour wait cadence.
 - **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
-- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers each worker whose run was cut, since T3 resumed none of them, and leaves the idle ones asleep.
+  A worker whose steer was not recorded, and that a later `recover` leaves asleep because its thread no longer reads cut, has its claim trusted again.
+- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers each worker whose run was cut, since T3 resumed none of them, and leaves the idle ones asleep, including a worker whose marked background wait the restart killed, which waits for its paused `until` or the four-hour wait cadence.
 
 <a id="clean-restart"></a>
 

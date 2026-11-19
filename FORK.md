@@ -156,6 +156,8 @@ FirstMate reads the restart from T3's own start time, so it needs no hook of its
 Session start then asks T3 for the thread status of each working or waiting worker, and nudges once, to check what is still running and report again, only a worker whose thread still reads cut off.
 Every other worker stays asleep with its last status line still trusted: one T3 resumed, one that failed on a usage limit, and one waiting on the captain, on FirstMate, or on a detached job.
 Until a nudged worker reports, its last line no longer counts as current.
+Two kinds of lost wait are left for the worker's own declared time instead of nudged: a background command it never marked as awaited, and, when T3's continuation setting is off, a marked background wait too, since T3 then wakes nobody and the worker's last turn ended normally.
+Either is picked up at the worker's `paused:` until-time, else within its four-hour wait cadence.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
 Upstream FirstMate has no restart recovery of its own: it says only that a worker whose run was cut needs a steer, and it trusts a worker's declared wait and rechecks it at its stated time.
