@@ -149,16 +149,22 @@ T3 Code fork halves: [Reply box goes to FirstMate](https://github.com/dascapytal
 
 ### Restart recovery
 
-FirstMate's own session runs in T3 Code, and after a T3 Code restart it takes the helm again and nudges every worker the restart cut off.
+FirstMate's own session runs in T3 Code, and after a T3 Code restart it takes the helm again and nudges only the workers whose turn the restart cut off and nothing picked up again.
 A T3 Code server restart ends every agent session it hosts at once, including FirstMate's own when it runs inside T3 Code.
-The T3 Code fork owns the restart: it resumes the runs it cut where it can, and tells FirstMate's thread, which FirstMate pins as its project's coordinator, that the server restarted and to run session start again.
+The T3 Code fork owns the restart: it resumes the runs it cut where it can, wakes a worker whose marked background wait it cut, and tells FirstMate's thread, which FirstMate pins as its project's coordinator, that the server restarted and to run session start again.
 FirstMate reads the restart from T3's own start time, so it needs no hook of its own on its session, whatever agent runs it.
-Session start then reconciles what only FirstMate knows, each worker's last `working:` or `paused:` line.
-A worker that has reported since the restart is left alone, and every other working or waiting worker is nudged once to check what is still running and report again.
-Until such a worker reports, its last line no longer counts as current.
+Session start then asks T3 for the thread status of each working or waiting worker, and nudges once, to check what is still running and report again, only a worker whose thread still reads cut off.
+Every other worker stays asleep with its last status line still trusted: one T3 resumed, one that failed on a usage limit, and one waiting on the captain, on FirstMate, or on a detached job.
+Until a nudged worker reports, its last line no longer counts as current.
 Details: [server restart](docs/t3code-backend.md#server-restart).
 
-Upstream: none.
+Upstream FirstMate has no restart recovery of its own: it says only that a worker whose run was cut needs a steer, and it trusts a worker's declared wait and rechecks it at its stated time.
+Upstream T3 Code likewise leaves every settled thread asleep after a restart, waking only what it cut and the background work a worker said it was waiting on.
+This fork used to nudge every working or waiting worker, written when T3 resumed nothing after a restart, and kept it after T3 began resuming.
+Over three weeks of real restarts most of those nudges woke a worker that had lost nothing, each paying a whole turn on its full history, and the few that were needed all left a trace T3 itself records.
+So the fork now matches both upstreams more closely: it nudges only what T3 shows as cut.
+The marker and the untrusted-claim rule stay for the workers that are nudged.
+
 T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#clean-restarts).
 
 ### A usage limit never stops the work
@@ -195,7 +201,7 @@ T3 Code fork half: [Clean restarts](https://github.com/dascapytal1559/t3code/blo
 A worker's long test run or build keeps going through a T3 Code restart, and its result still reaches the worker.
 A worker's long command, such as a broad test sweep or a long build, runs as a detached job outside the worker's own session, and the worker watches its output for up to nine minutes, so T3 shows the command and its output as upstream does and the worker reads as working.
 If the job is still running when the watch ends by itself, the worker declares a wait and ends its turn, and the result comes back to it as an instruction that starts its next turn when the job finishes.
-If a restart cuts the watch, the job keeps running and the restart recovery tells the worker to re-attach from the log's last lines.
+If a restart cuts the watch, the job keeps running, and the worker, once T3 or the restart recovery has resumed it, re-attaches from the log's last lines.
 Upstream has a worker run such a command in its own turn or a background shell and declare the wait, and sets that wait to the job's timeout; outside contributors have open upstream PRs that wake a worker when its job finishes; surviving a restart is this fork's.
 The fork departs because a T3 Code restart ends every agent session with its background commands, so a long test run was cut by each new build.
 The job itself is left out of the busy count, but a worker watching it is a running turn, so a clean restart waits for the watch to end, which is never more than about nine minutes.

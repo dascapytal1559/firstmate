@@ -338,7 +338,7 @@ Failures, retries, and a T3 without `t3_routing_set` are handled exactly as for 
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
-A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line may need a steer, which the [server restart](#server-restart) recovery sends.
+A server restart cancels in-flight runs even though the thread still exists, so a thread whose last run ended `cancelled` or `interrupted` and was not resumed reads cut, and its worker needs the steer that the [server restart](#server-restart) recovery sends.
 Thread persistence alone does not prove a live agent.
 
 `bin/backends/t3code.sh` owns one status table over the thread's V2 status, read with `t3_thread_read`:
@@ -378,11 +378,16 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
 - **Pinning.** Every `recover` pins the home's own thread (the one the away daemon would find) as its project's coordinator where the server advertises `coordinatorRestartNote`, so the note reaches it after every start, even one that cut no crew run.
   The note is an ordinary user turn, not Firstmate operational input, so a main follows it whatever agent runs it, and Firstmate adds no hook of its own on the main.
   On the fork a pinned coordinator's notification-started turns end without an alert; the [T3 thread protocol](supervision-protocols/t3-thread.md), rendered into the session-start block of a main running as a T3 thread, owns when such a turn asks to alert.
-- **Recovery.** When `serverStartedAt` differs from the one the home last handled, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens an idle session or steers a resumed run, and the digest lists them under `T3 RESTART`.
-  A worker whose current claim is stamped after the restart has already resumed and said where it stands, so it gets no steer; a busy resumed run without such a line is still steered, since being busy does not show it checked what the restart took.
-  Workers with an open decision, a captain-held wait, or a terminal line are left alone, and an archived thread is reported rather than rung.
+- **Recovery.** When `serverStartedAt` differs from the one the home last handled, `recover` reads the thread status of every ship or scout whose current claim is `working:`, `paused:`, or nothing yet, through the adapter's [status table](#restart-and-liveness-behavior).
+  Only a worker whose turn T3 shows as cut off and not picked up again (the `interrupted` word: cancelled, interrupted, or rolled back) gets one recovery steer through `fm-send.sh`, whose doorbell reopens the idle session, and the digest lists it under `T3 RESTART`.
+  Every other worker is left asleep with its last status line still trusted: a run T3 resumed or woke no longer reads cut, a failed run belongs to [usage-limit handling](#usage-limit-stops), and an idle worker that lost nothing, such as one waiting on the captain, on Firstmate, or on a detached job, has nothing to check.
+  This is what T3 itself does after a restart, which leaves every thread asleep except the runs it cut and the workers whose marked wait it cut.
+  An archived or missing thread is reported rather than rung, and a thread that cannot be read leaves the restart unrecorded, so the next session start retries.
+  Workers with an open decision, a captain-held wait, or a terminal line are not looked at.
+  A worker stopped by hand reads cut too, so one whose last line still says `working:` is steered at the next restart.
+  The one case this leaves for later is a worker that ended its turn on a background command it never marked with `t3_background_wait`: T3 records the loss but wakes nobody, so the worker is found by the watcher's recheck at its declared `until`, else within its four-hour wait cadence.
 - **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
-- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers every working or waiting worker, since T3 resumed none of them.
+- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers each worker whose run was cut, since T3 resumed none of them, and leaves the idle ones asleep.
 
 <a id="clean-restart"></a>
 
