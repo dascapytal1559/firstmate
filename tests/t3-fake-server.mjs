@@ -130,6 +130,11 @@
 //     active run, refused when it has none. World restartFromThread declares
 //     t3_restart_request's fromThread, checked the same way and stored on
 //     world restartRequest. Without them the argument is dropped.
+//   - a T3 with upkeep launches (world upkeep, the T3 Code fork's
+//     upkeep launch) declares upkeep on t3_thread_launch, refuses it beside
+//     fromThread or causedBy with an "upkeep: ..." invalid_request before
+//     anything is created, and stores upkeep:true on the launched thread.
+//     Without it the argument is dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -195,7 +200,7 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
       "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
-      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : [])].map((k) => [k, {}])),
+      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : []), ...(w.upkeep ? ["upkeep"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_send: (w) => ({
     type: "object",
@@ -574,6 +579,10 @@ async function callTool(w, name, a) {
         const problem = fromThreadProblem(threads, fromThread);
         if (problem) return [problem, false];
       }
+      const upkeep = w.upkeep ? a.upkeep === true : false;
+      if (upkeep && (fromThread !== undefined || cause !== undefined)) {
+        return [err("invalid_request", "upkeep: a launch counted as upkeep names no origin; omit fromThread and causedBy."), false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -599,6 +608,7 @@ async function callTool(w, name, a) {
       }
       if (cause !== undefined || w.bindCause !== undefined) n.causedBy = w.bindCause ?? cause;
       if (fromThread !== undefined) n.fromThread = fromThread;
+      if (upkeep) n.upkeep = true;
       threads[id] = n;
       if (a.message) startRun(n, a.message, undefined, cause, fromThread);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];

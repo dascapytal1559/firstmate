@@ -116,6 +116,12 @@ test_origin_records() {
   [ ! -e "$state/t3-landed-cause" ] || fail "a landing drops the cause file kept before references existed"
   out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-9; fm_t3_origin_landed "$state"')
   assert_equals "" "$out" "a later landing with no thread leaves none, never an older task's"
+  printf '%s\n' "$REF_T" > "$state/item-u.queued-origin"
+  out=$(lib "$state" 'fm_t3_origin_queue_upkeep "$state" item-u; fm_t3_origin_queued "$state" item-u; printf " "; fm_t3_origin_of_task "$state" item-u')
+  assert_equals "upkeep upkeep" "$out" "an item queued as upkeep replaces its reference, and a task with no thread yet reads upkeep"
+  out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-u; fm_t3_origin_landed "$state"')
+  assert_equals "" "$out" "upkeep is never a landed reference"
+  lib "$state" 'fm_t3_origin_queue_forget "$state" item-u'
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-1; fm_t3_origin_queue_forget "$state" item-3'
   [ ! -e "$state/item-1.queued-origin" ] && [ ! -e "$state/item-3.queued-cause" ] || fail "forget drops the queued records of both kinds"
   out=$(lib "$state" 'fm_t3_origin_of_task "$state" ../item-1')
@@ -160,6 +166,19 @@ test_wake_tries_candidates_until_one_binds() {
   as_agent "$CLAIM" wake --task tk
   assert_equals "$REF_T" "$(claim_of run:coord:run-c fromThread)" "and a later drain leaves it"
   pass "fm-t3-usage-claim wake: candidates are tried in order until T3 binds one, the first claim of a turn stands, and turn replaces"
+}
+
+# A wake about an item queued as upkeep, before it has a thread, counts its
+# turn to the computer.
+test_wake_about_an_upkeep_item_claims_the_computer() {
+  fresh_case wake-upkeep
+  printf 'upkeep\n' > "$STATE_DIR/nightly.queued-origin"
+  meta_with_thread tk t-tk
+  as_agent "$CLAIM" wake --task nightly --task tk
+  expect_code 0 "$RC" "a wake claim exits 0: $ERR"
+  assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "the turn counts to the computer: $(claims run:coord:run-c)"
+  [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "the claim logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
+  pass "fm-t3-usage-claim wake: an item queued as upkeep counts its wake to the computer"
 }
 
 test_wake_about_nothing_claims_nothing() {
@@ -316,6 +335,7 @@ t3_fake_start "$TMP_ROOT/server"
 fm_test_run \
   test_origin_records \
   test_wake_tries_candidates_until_one_binds \
+  test_wake_about_an_upkeep_item_claims_the_computer \
   test_wake_about_nothing_claims_nothing \
   test_drain_claims_inbox_notes \
   test_claims_are_best_effort_and_logged_once \

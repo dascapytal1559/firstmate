@@ -1921,3 +1921,31 @@ This departs from upstream on purpose, and [FORK.md](../FORK.md#reported-landing
 
 The evidence is `tests/fm-merge-local.test.sh`: the twelve safety cases from the investigation, the 24-stage day as a made-up fixture, and the race cases the landing already had.
 Under the old code the same day needed a hand reset at 23 of its 24 landings.
+
+## 70. The bedtime routine counts to the computer (19 November 2026)
+
+A measurement of T3 Code's phone figure found the label follows the last-touch rule almost exactly, but the phone figure mostly measured the night.
+When he says he is going to bed, FirstMate updates its tools and starts one review per project over the day's landed work, and it started all of that inside the turn his goodnight began.
+So the whole routine, its review agents included, counted to the device he said goodnight on, which was nearly always the phone: in three nights it was 45% of everything labelled phone.
+
+His answer:
+
+> bedtime routine should mostly be on computer. The carve outs are the items mentioned in the journal. Just reason through it. You know, if something is, like, responsible because of a process we set up that runs on the computer. It's attributed to the computer, and by default, it attributes to the computer, where essentially identifying which area should be appropriately attributed to a phone, which journal passing and items mentioned in the journal should be attributed to a phone.
+>
+> (19 November 2026)
+
+What was built, on FirstMate's side:
+
+- **A spawn can say "upkeep".** `fm-spawn.sh --upkeep` launches the worker's T3 thread as FirstMate's own upkeep, so it counts to the computer whichever turn starts it, and its review agents and the wakes about it follow it there.
+- **It survives a wait.** A start held back for capacity or account room records upkeep on its backlog item, so the later start is upkeep even if nothing remembers the flag.
+- **A T3 without it changes nothing.** The launch then goes exactly as before, with a note.
+
+The choices made:
+
+- **A word on the launch, not an order of steps.** The other way needed no T3 change: the goodnight turn would only leave a follow-up, and a later wake would start the routine.
+  That works only while FirstMate keeps that order every night and no other notification shares the wake, so the launch says what the work is instead.
+- **The carve-outs need nothing.** Filing a voice journal and work started from its items already count to the phone, and what he asks for in the goodnight message itself keeps its device, so those start without the flag.
+- **The past stays as it is.** Closed days are final, so the change shows from the first night the T3 half is installed.
+
+The T3 Code half, accepting the word on a launch, is a separate change to the fork; until it lands, the flag only adds the note.
+The evidence is the touched suites, run against the fake T3 server, which now models the upkeep launch; no live T3 was called.

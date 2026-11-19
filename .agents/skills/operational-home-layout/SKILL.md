@@ -142,7 +142,7 @@ state/               runtime records and signals; gitignored
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   t3-bridge/         the last objectives and model routing pushes to T3's Bridge; bin/fm-t3-bridge.sh owns it
   t3code-sends/      T3 send request-id retention and accepted delivery outcomes; docs/t3code-backend.md "Current lifecycle and safety" owns the window and files
-  <id>.queued-origin t3-landed-origin  where a backlog item was queued from (dropped by its spawn, rm, or done; an older <id>.queued-cause is read the same way) and the latest landed task's thread; bin/fm-t3-origin-lib.sh owns both
+  <id>.queued-origin t3-landed-origin  where a backlog item was queued from, or upkeep (dropped by its spawn, rm, or done; an older <id>.queued-cause is read the same way) and the latest landed task's thread; bin/fm-t3-origin-lib.sh owns both
   t3-usage-claims.log  one line per failed T3 usage claim, trimmed as it grows, which bin/fm-usage-labels-check.sh counts nightly; bin/fm-t3-usage-claim.sh owns it, safe to delete
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (`process-event-sources` skill)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

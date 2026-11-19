@@ -25,7 +25,8 @@
 #     The wake drain's claim on the current turn. It tries the candidates
 #     that name something, in order and each distinct value once, until T3
 #     binds one: a task's own thread
-#     (where that task counts now), a reference given, a cause given (one a
+#     (where that task counts now; for an item queued as upkeep with no
+#     thread yet, the computer), a reference given, a cause given (one a
 #     note or follow-up recorded before references existed, passed on
 #     unchanged), or a device given, such as the phone for a voice journal's
 #     note. T3 refuses a reference or cause it cannot bind, such as a task
@@ -113,11 +114,12 @@ claim() {
   return 1
 }
 
-# value_args <value>: the usage-claim value flags for a device, a
-# reference, or a cause.
+# value_args <value>: the usage-claim value flags for a device, upkeep (the
+# computer), a reference, or a cause.
 value_args() {
   case "$1" in
     phone|computer) printf '%s\n' --device "$1" ;;
+    upkeep) printf '%s\n' --device computer ;;
     *) printf '%s\n%s\n' "$(fm_t3_origin_flag "$1")" "$1" ;;
   esac
 }

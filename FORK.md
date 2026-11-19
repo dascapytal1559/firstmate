@@ -292,6 +292,7 @@ T3 Code fork half: [Quiet workers, quiet wakes](https://github.com/dascapytal155
 
 Each piece of work names the T3 Code thread it comes from, and when, so T3 Code's Usage page can count it to the device of the latest typed message on that work.
 FirstMate names that thread when it launches a worker, steers one, files a note, queues an item, or claims a wake turn, and T3 Code turns it into the label; FirstMate no longer decides the cause itself.
+A worker FirstMate starts as its own upkeep, such as the bedtime routine's updates and nightly reviews, is launched as upkeep instead, so it counts to the computer whichever device the goodnight came from.
 This is an addition that only a T3 Code with the field uses.
 Details: [where work comes from](docs/t3code-backend.md#where-work-comes-from).
 

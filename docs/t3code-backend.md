@@ -116,13 +116,16 @@ A T3 without crew lineage, a firstmate not running in T3, or a home with no pinn
 ### Where work comes from
 
 T3 Code's Usage page counts each piece of work to the device of the latest typed message on it, until the next typed message; clicks and automatic notifications move nothing.
-Firstmate does not decide where work counts.
+Firstmate does not decide where work counts, except to say which work is its own upkeep.
 At each durable boundary it records an origin reference, the T3 thread the work comes from and when, `{"threadId", "at"?}`, which is exactly what T3's `fromThread` takes, and passes it through untouched; T3 turns it into a label when the work launches or the claim is made (the fork's `fork/README.md` "Phone vs computer split" owns the rule).
 Writing a reference needs no T3 call: the thread is the one T3 names in each agent's environment as `T3CODE_THREAD_ID`, and the time is now.
 [`bin/fm-t3-origin-lib.sh`](../bin/fm-t3-origin-lib.sh) is the one owner of the references:
 
 - A spawn sends this thread, as of when the spawn began, as the worker launch's `fromThread`, so the thread is born where that turn's work counts; the task record and the brief carry nothing.
   A relaunch keeps its recorded backend, which never launches a T3 thread, so it sends nothing.
+- A spawn with `--upkeep` sends T3's `upkeep` in place of that reference, so the thread is born counting to the computer as upkeep whichever turn launches it, and its review agents and the wakes about it follow it there.
+  Upkeep is work Firstmate runs because of a process set up on the computer, such as the bedtime routine's tool updates and nightly reviews, launched from a goodnight typed on the phone; what the captain asks for in that message, filing a voice journal, and work launched from a journal's items keep their device and launch without it.
+  A T3 without `upkeep` is sent the reference as before, with a note, and a start deferred for capacity or sizing keeps `upkeep` as its item's queued origin, so the item's later start is upkeep too and a wake about it before then counts to the computer.
 - A backlog item added with `fm-tasks-axi.sh add` keeps the reference of the turn that queued it, and its first launch sends that one, whatever turn launches it, such as a recovery wake after a restart.
 - A steer through `fm-send.sh` keeps the reference in the steer's inbox record, and every doorbell for that record sends it, so a re-ring binds to the turn that wrote the steer; T3 moves the worker only when that turn was typed.
 - A note written with `fm-inbox.sh note` keeps the writer's own thread and time, and the wake about the note claims it.
