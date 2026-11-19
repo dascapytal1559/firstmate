@@ -1681,6 +1681,50 @@ test_spawn_sends_this_thread_as_its_origin() {
   pass "fm-spawn.sh --backend t3code: this thread, as of the spawn's start, is the worker's birth, a queued item keeps its own, and a malformed reference refuses first"
 }
 
+# An upkeep start says upkeep on the launch in place of this thread, an item
+# queued as upkeep starts as upkeep without the flag, a T3 without upkeep is
+# sent this thread as before with a note, and a secondmate refuses it.
+test_spawn_launches_upkeep() {
+  local id out rc
+  id=$(t3_uid t3upkeep-spawn)
+  t3_case spawn-upkeep
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true;'
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --upkeep); rc=$?
+  expect_code 0 "$rc" "an upkeep spawn inside a T3 turn should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.upkeep === true && a.fromThread === undefined && a.causedBy === undefined)')" = true ] \
+    || fail "the launch says upkeep in place of this thread, got '$(t3_launch_field 'JSON.stringify({ upkeep: a.upkeep, fromThread: a.fromThread })')'"
+  assert_not_contains "$out" "cannot launch a thread as upkeep" "a T3 with upkeep needs no note"
+  id=$(t3_uid t3upkeep-queued)
+  t3_case spawn-upkeep-queued
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true;'
+  printf 'upkeep\n' > "$CASE_DIR/state/$id.queued-origin"
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a spawn of an item queued as upkeep should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.upkeep === true && a.fromThread === undefined)')" = true ] \
+    || fail "an item queued as upkeep starts as upkeep from any turn"
+  assert_absent "$CASE_DIR/state/$id.queued-origin" "the spawn drops the upkeep record once the thread carries it"
+  id=$(t3_uid t3upkeep-upstream)
+  t3_case spawn-upkeep-upstream
+  t3_worker_setup "$id"
+  t3_origin_world
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --upkeep); rc=$?
+  expect_code 0 "$rc" "an upkeep spawn on a T3 without upkeep should still launch"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.upkeep === undefined && a.fromThread.threadId === "coord")')" = true ] \
+    || fail "a T3 without upkeep is sent this thread, got '$(t3_launch_field 'JSON.stringify({ upkeep: a.upkeep, fromThread: a.fromThread })')'"
+  assert_contains "$out" "note: this T3 cannot launch a thread as upkeep" "the spawn says the work counts where this turn's does"
+  t3_case spawn-upkeep-secondmate
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CASE_DIR/state" FM_DATA_OVERRIDE="$CASE_DIR/data" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$(t3_uid t3upkeep-mate)" --secondmate --upkeep 2>&1); rc=$?
+  expect_code 1 "$rc" "a secondmate with --upkeep must refuse"$'\n'"$out"
+  assert_contains "$out" "--upkeep applies to a fresh ship or scout start" "the refusal names the flag"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused upkeep secondmate launches nothing, got '$(t3_dispatch_types)'"
+  pass "fm-spawn.sh --backend t3code --upkeep: the launch says upkeep where T3 offers it, a queued upkeep item keeps it, and a T3 without it gets this thread"
+}
+
 # A steer from inside a T3 turn keeps this thread and the steer's time in its
 # inbox record, and the record's doorbell carries it; one T3 refuses never
 # stops the doorbell.
@@ -3289,30 +3333,33 @@ t3_restart_at() {
   FM_T3_STARTED=$1 t3_world_set 'w.serverStartedAt = new Date(Number(process.env.FM_T3_STARTED) * 1000 + 250).toISOString()'
 }
 
-# A T3 restart ends every session it hosts. T3 resumes the runs it cut, but
-# only a status line the worker appends after the restart shows it checked
-# what the restart took. Recovery leaves such a worker alone, steers every
-# other working or waiting worker once (a busy resumed run and an idle worker
-# whose wait vanished alike), leaves decisions and finished work alone, and
-# keeps the steered workers' earlier claims untrusted until each answers.
+# A T3 restart ends every session it hosts. T3 resumes the runs it cut and
+# wakes the workers whose marked wait it cut; every other thread stays asleep.
+# Recovery steers only a worker whose thread T3 still shows as cut off (a
+# cancelled or interrupted turn nothing picked up again), reports a gone
+# thread, and leaves everyone else asleep with the last claim still trusted: a
+# resumed run, a failed run, an idle waiter, a decision, finished work. The
+# steered workers' earlier claims stay untrusted until each answers.
 test_t3_restart_recovery() {
-  local out now pause wr wb wp wf wn wd wg
-  local tr=mcp:aa000001-0000-4000-8000-000000000001 tb=mcp:aa000002-0000-4000-8000-000000000002
-  local tp=mcp:aa000003-0000-4000-8000-000000000003 tf=mcp:aa000004-0000-4000-8000-000000000004
+  local out now pause wcut wp wi wb wf wn wd wg
+  local tc=mcp:aa000001-0000-4000-8000-000000000001 tp=mcp:aa000003-0000-4000-8000-000000000003
+  local ti=mcp:aa000002-0000-4000-8000-000000000002 tb=mcp:aa000004-0000-4000-8000-000000000004
+  local tf=mcp:aa000008-0000-4000-8000-000000000008
   local tn=mcp:aa000005-0000-4000-8000-000000000005 td=mcp:aa000006-0000-4000-8000-000000000006
   local tg=mcp:aa000007-0000-4000-8000-000000000007
   t3_restart_home restart-recovery
-  t3_restart_world "$(t3_thread_json "$tr" completed false)" "$(t3_thread_json "$tb" completed false)" \
-    "$(t3_thread_json "$tp" completed false)" "$(t3_thread_json "$tf" completed false)" \
-    "$(t3_thread_json "$tn" completed false)" "$(t3_thread_json "$td" completed false)" \
-    "$(t3_thread_json "$tg" completed true)"
+  t3_restart_world "$(t3_thread_json "$tc" completed false)" "$(t3_thread_json "$tp" completed false)" \
+    "$(t3_thread_json "$ti" completed false)" "$(t3_thread_json "$tb" completed false)" \
+    "$(t3_thread_json "$tf" completed false)" "$(t3_thread_json "$tn" completed false)" \
+    "$(t3_thread_json "$td" completed false)" "$(t3_thread_json "$tg" completed true)"
   now=$(date +%s)
-  wr=$(t3_uid t3rsreported); wb=$(t3_uid t3rsbusy); wp=$(t3_uid t3rspaused); wf=$(t3_uid t3rsfuture)
-  wn=$(t3_uid t3rsdecide); wd=$(t3_uid t3rsdone); wg=$(t3_uid t3rsgone)
+  wcut=$(t3_uid t3rscut); wp=$(t3_uid t3rspaused); wi=$(t3_uid t3rsidle); wb=$(t3_uid t3rsbusy)
+  wf=$(t3_uid t3rsfailed); wn=$(t3_uid t3rsdecide); wd=$(t3_uid t3rsdone); wg=$(t3_uid t3rsgone)
   pause="paused [at=$((now - 3600))]: waiting on a background gate wait; resumes when it prints gate-open. until 2099-01-01T00:00Z"
-  t3_restart_task "$wr" "$tr" ship "working [at=$((now - 3600))]: implementing the fix"
-  t3_restart_task "$wb" "$tb" ship "working [at=$((now - 3600))]: running the full suite"
+  t3_restart_task "$wcut" "$tc" ship "working [at=$((now - 3600))]: implementing the fix"
   t3_restart_task "$wp" "$tp" scout "$pause"
+  t3_restart_task "$wi" "$ti" scout "paused [at=$((now - 3600))]: waiting on the captain's word. until 2099-01-01T00:00Z"
+  t3_restart_task "$wb" "$tb" ship "working [at=$((now - 3600))]: running the full suite"
   t3_restart_task "$wf" "$tf" ship "working [at=$((now - 3600))]: reading the code"
   t3_restart_task "$wn" "$tn" ship "needs-decision [at=$((now - 3600))]: which API shape?"
   t3_restart_task "$wd" "$td" scout "done [at=$((now - 3600))]: report written"
@@ -3326,28 +3373,31 @@ test_t3_restart_recovery() {
   assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "the running server reads same"
   assert_equals "$pause" "$(t3_declared_wait "$RS_STATE/$wp.status")" "before a restart the pause is a declared wait"
 
-  # The restart, two minutes ago. T3 resumed the two cut runs; one worker has
-  # since said where it stands, the other is still busy. The paused worker's
-  # unmarked wait did not wake it. One clock ran ahead.
+  # The restart, two minutes ago. T3 cut the implementing worker's turn and a
+  # paused worker's turn and did not pick either up again; it resumed the busy
+  # worker's run; the reader's last run failed on a limit; the idle waiter lost
+  # nothing. One worker even reported after the restart: a stamp proves nothing.
   t3_restart_at $((now - 120))
-  t3_world_set "for (const id of ['$tr', '$tb']) { w.threads[id].status = 'running'; w.threads[id].activeRunId = 'run-1'; }"
-  printf 'working [at=%s]: re-ran the build the restart cut\n' $((now - 60)) >> "$RS_STATE/$wr.status"
-  printf 'working [at=%s]: reading the code\n' $((now + 3600)) >> "$RS_STATE/$wf.status"
+  t3_world_set "w.threads['$tc'].status = 'cancelled'; w.threads['$tp'].status = 'interrupted';
+    w.threads['$tb'].status = 'running'; w.threads['$tb'].activeRunId = 'run-1'; w.threads['$tf'].status = 'failed';
+    for (const id of ['$tn', '$td']) w.threads[id].status = 'interrupted';"
+  printf 'working [at=%s]: carrying on\n' $((now - 60)) >> "$RS_STATE/$wcut.status"
   assert_equals "t3-restart: restarted" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" \
     "a new serverStartedAt reads restarted"
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_contains "$out" "the T3 server restarted at $(node -e 'process.stdout.write(new Date(Number(process.argv[1]) * 1000 + 250).toISOString())' $((now - 120)))" \
     "recovery names the restart by T3's own time"
-  assert_contains "$out" "$wr: reported since the restart" "a resumed worker that already reported is left alone"
-  assert_contains "$out" "$wb: sent the restart steer" "a resumed but busy worker is rung: a busy run is no proof"
-  assert_contains "$out" "$wp: sent the restart steer" "an idle worker whose wait vanished is rung"
-  assert_contains "$out" "$wf: sent the restart steer" "a claim stamped in the future proves nothing"
+  assert_contains "$out" "$wcut: sent the restart steer" "a worker whose turn T3 shows cut off is rung, whatever it reported"
+  assert_contains "$out" "$wp: sent the restart steer" "a paused worker whose turn was stopped is rung"
   assert_contains "$out" "$wg: its T3 thread $tg is gone or archived" "an archived worker thread is reported, not rung"
-  assert_equals "$(printf '%s\n%s\n%s\n' "$tb" "$tp" "$tf" | sort | tr '\n' ' ' | sed 's/ $//')" "$(t3_sent_threads)" \
-    "exactly the unreconciled working and waiting workers are rung, once each"
-  assert_absent "$RS_STATE/$wr.t3-restart" "a worker that reported since the restart keeps its claim"
-  assert_absent "$RS_STATE/$wn.t3-restart" "an open decision keeps its claim"
-  assert_absent "$RS_STATE/$wd.t3-restart" "finished work keeps its claim"
+  assert_not_contains "$out" "$wb" "a worker T3 resumed is left asleep and unmentioned"
+  assert_not_contains "$out" "$wi" "an idle waiter that lost nothing is left asleep and unmentioned"
+  assert_not_contains "$out" "$wf" "a failed run is usage-limit handling's, not a restart steer"
+  assert_equals "$(printf '%s\n%s\n' "$tc" "$tp" | sort | tr '\n' ' ' | sed 's/ $//')" "$(t3_sent_threads)" \
+    "exactly the workers whose turn is cut off are rung, once each"
+  for w in "$wi" "$wb" "$wf" "$wn" "$wd"; do
+    assert_absent "$RS_STATE/$w.t3-restart" "$w keeps its claim: nothing was steered"
+  done
   assert_grep 'doorbell=sent' "$RS_STATE/$wp.t3-restart" "the paused worker's marker records its ring"
   [ -n "$(find "$RS_STATE/$wp.inbox" -maxdepth 1 -name '*.msg' 2>/dev/null)" ] || fail "the recovery steer is a durable inbox record"
   assert_contains "$(cat "$RS_STATE/$wp.inbox"/*.msg)" "the T3 server restarted at" "the steer tells the worker what happened"
@@ -3357,35 +3407,89 @@ test_t3_restart_recovery() {
 
   # The rung workers end their turns without answering, the case the marker
   # exists for: their threads read idle again.
-  t3_world_set 'for (const t of Object.values(w.threads)) { t.status = "completed"; t.activeRunId = null; }'
+  t3_world_set 'for (const id of Object.keys(w.threads)) { w.threads[id].status = "completed"; w.threads[id].activeRunId = null; }'
   assert_equals "" "$(t3_declared_wait "$RS_STATE/$wp.status")" "a pause from before an unanswered restart is no declared wait"
   out=$(t3_crew_state "$wp")
   assert_contains "$out" "state: unknown" "an unanswered pre-restart pause is not current state: $out"
   assert_contains "$out" "predates a T3 server restart" "crew-state names why the pause is untrusted"
-  out=$(t3_crew_state "$wb")
-  assert_contains "$out" "state: unknown" "an unanswered pre-restart working claim is not current state: $out"
-  out=$(t3_crew_state "$wr")
-  assert_contains "$out" "re-ran the build the restart cut" "the reconciled worker's claim is current state: $out"
-  assert_not_contains "$out" "predates a T3 server restart" "the reconciled worker's claim is trusted: $out"
+  out=$(t3_crew_state "$wcut")
+  assert_contains "$out" "carrying on" "the rung worker's own later line is still its newest claim: $out"
+  assert_equals "paused [at=$((now - 3600))]: waiting on the captain's word. until 2099-01-01T00:00Z" "$(t3_declared_wait "$RS_STATE/$wi.status")" \
+    "a worker left asleep keeps its declared wait"
+  out=$(t3_crew_state "$wi")
+  assert_contains "$out" "state: paused" "a worker left asleep still reads paused: $out"
+  assert_not_contains "$out" "predates a T3 server restart" "its claim is trusted: $out"
   out=$(t3_crew_state "$wn")
   assert_contains "$out" "state: parked" "an open decision still reads parked: $out"
 
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_equals "" "$out" "a handled restart is not recovered twice"
-  [ "$(t3_sent_threads | wc -w | tr -d ' ')" = 3 ] || fail "a rerun rings nobody again, got '$(t3_sent_threads)'"
+  [ "$(t3_sent_threads | wc -w | tr -d ' ')" = 2 ] || fail "a rerun rings nobody again, got '$(t3_sent_threads)'"
 
   printf 'resolved [key=other]: answered elsewhere\n' >> "$RS_STATE/$wp.status"
   assert_equals "" "$(t3_declared_wait "$RS_STATE/$wp.status")" "a resolved line alone is not the worker's answer"
   printf 'paused [at=%s]: re-armed the gate wait. until 2099-01-01T00:00Z\n' "$now" >> "$RS_STATE/$wp.status"
   assert_contains "$(t3_declared_wait "$RS_STATE/$wp.status")" "re-armed the gate wait" "the worker's fresh pause is trusted again"
   assert_contains "$(t3_crew_state "$wp")" "state: paused" "after its answer the worker's pause is current state"
-  pass "t3code restart: a worker that reported since the restart is left alone; busy, idle, and waiting workers are rung once and untrusted until they answer"
+  pass "t3code restart: only a worker whose turn T3 shows cut off is rung, once, and untrusted until it answers; a gone thread is reported"
+}
+
+# The lab case: seven workers against one restart. T3 shows one turn
+# cancelled, one stopped, one resumed and running, and one failed on a limit;
+# three workers are idle, waiting on the captain, on a detached job, and on an
+# open decision. Exactly the cut turns are messaged, and a second run does
+# nothing.
+test_t3_restart_rings_only_cut_turns() {
+  local out now w
+  local tcan=mcp:aa000031-0000-4000-8000-000000000031 tstop=mcp:aa000032-0000-4000-8000-000000000032
+  local tres=mcp:aa000033-0000-4000-8000-000000000033 tfail=mcp:aa000034-0000-4000-8000-000000000034
+  local tcap=mcp:aa000035-0000-4000-8000-000000000035 tjob=mcp:aa000036-0000-4000-8000-000000000036
+  local tdec=mcp:aa000037-0000-4000-8000-000000000037
+  local wcan wstop wres wfail wcap wjob wdec
+  t3_restart_home restart-cut-only
+  t3_restart_world "$(t3_thread_json "$tcan" completed false)" "$(t3_thread_json "$tstop" completed false)" \
+    "$(t3_thread_json "$tres" completed false)" "$(t3_thread_json "$tfail" completed false)" \
+    "$(t3_thread_json "$tcap" completed false)" "$(t3_thread_json "$tjob" completed false)" \
+    "$(t3_thread_json "$tdec" completed false)"
+  now=$(date +%s)
+  wcan=$(t3_uid t3cutcan); wstop=$(t3_uid t3cutstop); wres=$(t3_uid t3cutres); wfail=$(t3_uid t3cutfail)
+  wcap=$(t3_uid t3cutcap); wjob=$(t3_uid t3cutjob); wdec=$(t3_uid t3cutdec)
+  t3_restart_task "$wcan" "$tcan" ship "working [at=$((now - 3600))]: implementing the fix"
+  t3_restart_task "$wstop" "$tstop" ship "working [at=$((now - 3600))]: reading the code"
+  t3_restart_task "$wres" "$tres" ship "working [at=$((now - 3600))]: running the full suite"
+  t3_restart_task "$wfail" "$tfail" scout "working [at=$((now - 3600))]: auditing the module"
+  t3_restart_task "$wcap" "$tcap" ship "paused [at=$((now - 3600))]: waiting on the captain's word. until 2099-01-01T00:00Z"
+  t3_restart_task "$wjob" "$tjob" ship "paused [at=$((now - 3600))]: waiting on the detached test job. until 2099-01-01T00:00Z"
+  t3_restart_task "$wdec" "$tdec" ship "needs-decision [at=$((now - 3600))]: which API shape?"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "the first recovery only records the server"
+
+  t3_restart_at $((now - 120))
+  t3_world_set "w.threads['$tcan'].status = 'cancelled'; w.threads['$tstop'].status = 'interrupted';
+    w.threads['$tres'].status = 'running'; w.threads['$tres'].activeRunId = 'run-1'; w.threads['$tfail'].status = 'failed';"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_contains "$out" "$wcan: sent the restart steer" "the cancelled turn is rung"
+  assert_contains "$out" "$wstop: sent the restart steer" "the stopped turn is rung"
+  assert_equals "$(printf '%s\n%s\n' "$tcan" "$tstop" | sort | tr '\n' ' ' | sed 's/ $//')" "$(t3_sent_threads)" \
+    "exactly the two cut turns are messaged"
+  for w in "$wres" "$wfail" "$wcap" "$wjob" "$wdec"; do
+    assert_absent "$RS_STATE/$w.t3-restart" "$w was left asleep with its claim trusted"
+    assert_not_contains "$out" "$w" "$w is not mentioned"
+  done
+  assert_contains "$(t3_crew_state "$wcap")" "state: paused" "the worker waiting on the captain still reads paused"
+  assert_contains "$(t3_crew_state "$wjob")" "state: paused" "the worker waiting on its detached job still reads paused"
+
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "a second run does nothing"
+  [ "$(t3_sent_threads | wc -w | tr -d ' ')" = 2 ] || fail "a second run messages nobody, got '$(t3_sent_threads)'"
+  assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "the restart is recorded as handled"
+  pass "t3code restart: of seven workers exactly the cancelled and the stopped turn are messaged, and a second run does nothing"
 }
 
 # With continuation off T3 resumes no run and sends no note, but its restart
 # identity still changes. The session start the captain's next message brings
-# finds the restart and rings every working or waiting worker, the one whose
-# run was cut included, since none was resumed to say where it stands.
+# finds the restart and rings the worker whose run was cut and not resumed; a
+# waiting worker whose thread shows nothing cut is left asleep.
 test_t3_restart_with_continuation_off() {
   local out now wk wp tk=mcp:aa000011-0000-4000-8000-000000000011 tp=mcp:aa000012-0000-4000-8000-000000000012
   t3_restart_home restart-continuation-off
@@ -3401,10 +3505,9 @@ test_t3_restart_with_continuation_off() {
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   assert_contains "$out" "the T3 server restarted at" "the restart is found though T3 told nobody"
   assert_contains "$out" "$wk: sent the restart steer" "the worker whose run was cut and not resumed is rung"
-  assert_contains "$out" "$wp: sent the restart steer" "the waiting worker is rung"
-  assert_equals "$(printf '%s\n%s\n' "$tk" "$tp" | sort | tr '\n' ' ' | sed 's/ $//')" "$(t3_sent_threads)" \
-    "every working and waiting worker is rung once"
-  pass "t3code restart: with continuation off the changed restart identity still rings every working and waiting worker"
+  assert_not_contains "$out" "$wp" "the waiting worker is left asleep"
+  assert_equals "$tk" "$(t3_sent_threads)" "only the cut worker is rung"
+  pass "t3code restart: with continuation off only the worker whose run was cut and not resumed is rung"
 }
 
 # A ring that does not send leaves the restart unrecorded, so the next recovery
@@ -3413,7 +3516,7 @@ test_t3_restart_with_continuation_off() {
 test_t3_restart_failed_ring_retries() {
   local out now wk tk=mcp:aa000021-0000-4000-8000-000000000021 sends
   t3_restart_home restart-retry
-  t3_world "$(t3_thread_json "$tk" completed false)"
+  t3_world "$(t3_thread_json "$tk" interrupted false)"
   now=$(date +%s)
   wk=$(t3_uid t3rsretry)
   t3_restart_task "$wk" "$tk" ship "working [at=$((now - 3600))]: implementing the fix"
@@ -3425,6 +3528,14 @@ test_t3_restart_failed_ring_retries() {
   out=$(FM_CONFIG_OVERRIDE="$(t3_down_config)" FM_HOME="$RS_HOME" FM_STATE_OVERRIDE="$RS_STATE" \
     "$ROOT/bin/fm-t3-restart.sh" check)
   assert_equals "t3-restart: unknown" "$out" "an unreachable server is unknown, never a restart"
+  # A thread T3 cannot be asked about is not known to be cut or not: the
+  # restart stays unhandled and nobody is rung.
+  t3_world_set 'w.failTools = { t3_thread_read: { code: "unavailable", message: "read unavailable" } }'
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_contains "$out" "$wk: its T3 thread $tk could not be read" "an unreadable thread is reported: $out"
+  assert_grep '2026-01-01T' "$RS_STATE/.t3code-server-started" "an unreadable thread leaves the old identity recorded"
+  [ -z "$(t3_sent_threads)" ] || fail "an unreadable thread rings nobody, got '$(t3_sent_threads)'"
+  t3_world_set 'delete w.failTools'
   # An inbox the steer cannot be written into is a steer that was not sent.
   mkdir -p "$RS_STATE/$wk.inbox"
   chmod 500 "$RS_STATE/$wk.inbox"
@@ -3438,7 +3549,52 @@ test_t3_restart_failed_ring_retries() {
   sends=$(t3_fake_calls t3_thread_send | grep -c . || true)
   out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
   [ "$(t3_fake_calls t3_thread_send | grep -c . || true)" = "$sends" ] || fail "once recorded, the restart rings nobody again"
-  pass "t3code restart: a failed ring keeps the restart pending for exactly that worker, and an unreadable server is no restart"
+  pass "t3code restart: an unreadable thread or a failed ring keeps the restart pending for exactly that worker, and an unreadable server is no restart"
+}
+
+# A steer that was not recorded reached nobody, so when a rerun finds the
+# worker no longer cut (something else gave it a turn) or its thread gone, it
+# leaves the worker asleep and its earlier claim is trusted again.
+test_t3_restart_failed_ring_then_left_asleep() {
+  local out now pr pg wr wg tr=mcp:aa000051-0000-4000-8000-000000000051 tg=mcp:aa000052-0000-4000-8000-000000000052
+  t3_restart_home restart-failed-then-asleep
+  t3_restart_world "$(t3_thread_json "$tr" completed false)" "$(t3_thread_json "$tg" completed false)"
+  now=$(date +%s)
+  wr=$(t3_uid t3rsready); wg=$(t3_uid t3rsgone)
+  pr="paused [at=$((now - 3600))]: waiting on CI; resumes when it is green. until 2099-01-01T00:00Z"
+  pg="paused [at=$((now - 3600))]: waiting on the review; resumes when it lands. until 2099-01-01T00:00Z"
+  t3_restart_task "$wr" "$tr" ship "$pr"
+  t3_restart_task "$wg" "$tg" scout "$pg"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_equals "" "$out" "the first recovery only records the server"
+
+  t3_restart_at $((now - 120))
+  t3_world_set "for (const id of ['$tr', '$tg']) w.threads[id].status = 'interrupted';"
+  mkdir -p "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  chmod 500 "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  chmod 700 "$RS_STATE/$wr.inbox" "$RS_STATE/$wg.inbox"
+  assert_contains "$out" "$wr: the restart steer was not recorded" "the first steer fails: $out"
+  assert_contains "$out" "$wg: the restart steer was not recorded" "the second steer fails: $out"
+  assert_grep 'doorbell=failed' "$RS_STATE/$wr.t3-restart" "the failed steer is marked"
+  assert_equals "" "$(t3_declared_wait "$RS_STATE/$wr.status")" "until recovery finishes the pause is not trusted"
+
+  # Before the rerun the captain gives one worker a turn, so its thread reads
+  # ready, and the other worker's thread is archived.
+  t3_world_set "w.threads['$tr'].status = 'completed'; w.threads['$tg'].status = 'completed'; w.threads['$tg'].archived = true;"
+  out=$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" recover 2>&1)
+  assert_not_contains "$out" "$wr" "the worker no longer cut is left asleep and unmentioned"
+  assert_contains "$out" "$wg: its T3 thread $tg is gone or archived" "the archived thread is reported"
+  [ -z "$(t3_sent_threads)" ] || fail "nobody is rung once neither thread reads cut, got '$(t3_sent_threads)'"
+  assert_absent "$RS_STATE/$wr.t3-restart" "the failed marker of a worker left asleep is dropped"
+  assert_absent "$RS_STATE/$wg.t3-restart" "the failed marker of a gone worker is dropped"
+  assert_equals "$pr" "$(t3_declared_wait "$RS_STATE/$wr.status")" "the worker left asleep keeps its declared wait"
+  assert_equals "$pg" "$(t3_declared_wait "$RS_STATE/$wg.status")" "the gone worker's pause is trusted again"
+  out=$(t3_crew_state "$wr")
+  assert_contains "$out" "state: paused" "the worker left asleep reads paused: $out"
+  assert_not_contains "$out" "predates a T3 server restart" "its claim is trusted: $out"
+  assert_equals "t3-restart: same" "$(t3_restart_env "$ROOT/bin/fm-t3-restart.sh" check)" "the rerun records the restart as handled"
+  pass "t3code restart: a failed steer's marker is dropped when a rerun leaves the worker asleep, so its claim is trusted again"
 }
 
 # Every recovery pins this home's own live T3 thread (the root thread running
@@ -3722,8 +3878,10 @@ test_t3_restart_inert_without_t3
 test_t3_main_guard_keeps_the_token_out_of_the_transcript
 test_t3_main_guard_lets_a_reopened_main_work
 test_t3_restart_recovery
+test_t3_restart_rings_only_cut_turns
 test_t3_restart_with_continuation_off
 test_t3_restart_failed_ring_retries
+test_t3_restart_failed_ring_then_left_asleep
 test_t3_restart_recover_pins_coordinator
 test_t3_restart_main_follows_t3s_note
 test_push_wait_wakes_on_an_approval_raised_mid_wait
@@ -3744,6 +3902,7 @@ test_spawn_external_forge_codex_ship_carries_push_guard
 test_kill_stops_delegated_threads
 test_turn_start_carries_its_origin_and_never_drops_the_message
 test_spawn_sends_this_thread_as_its_origin
+test_spawn_launches_upkeep
 test_send_records_its_origin_and_rings_with_it
 test_steer_rings_a_failed_thread
 test_steer_refuses_archived_or_missing_thread

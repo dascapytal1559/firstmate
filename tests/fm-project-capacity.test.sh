@@ -583,6 +583,29 @@ test_batch_reports_a_deferred_pair() {
   pass "a batch reports a capacity deferral as deferred, not failed"
 }
 
+# An upkeep start deferred at capacity records upkeep as its item's queued
+# origin, so whichever turn starts it later it is still upkeep; a batch passes
+# --upkeep to every pair, and a deferred plain start records nothing.
+test_deferred_upkeep_start_stays_upkeep() {
+  local case_dir home out rc=0
+  case_dir=$(make_case upkeep-deferred task-c task-d task-e)
+  home="$case_dir/home"
+  declare_capacity "$home" "project 1"
+  write_live "$home" live-a "$case_dir/project"
+  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$case_dir/project" --mode no-mistakes --yolo off --upkeep) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "an upkeep spawn beyond capacity was not deferred: $out"
+  assert_equals upkeep "$(cat "$home/state/task-c.queued-origin" 2>/dev/null)" "a deferred upkeep start did not record upkeep on its item"
+  rc=0
+  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" "task-d=$case_dir/project" --mode no-mistakes --yolo off --upkeep) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "an upkeep batch beyond capacity was not deferred: $out"
+  assert_equals upkeep "$(cat "$home/state/task-d.queued-origin" 2>/dev/null)" "a batch did not pass --upkeep to its pair"
+  rc=0
+  out=$(spawn_ship "$case_dir" task-e "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a plain spawn beyond capacity was not deferred: $out"
+  assert_absent "$home/state/task-e.queued-origin" "a deferred plain start recorded an origin"
+  pass "an upkeep start deferred at capacity stays upkeep for its later start"
+}
+
 # Orca owns its own worktrees and never takes the Treehouse allocation lock, so
 # a declared capacity is what makes an Orca spawn take the shared project lock,
 # even from an uncapped clone of a capped origin whose worker would still hold a
@@ -730,6 +753,7 @@ test_concurrent_spawns_cannot_both_take_the_last_place
 test_failed_spawn_after_admission_holds_no_place
 test_unreadable_declaration_refuses_every_spawn
 test_batch_reports_a_deferred_pair
+test_deferred_upkeep_start_stays_upkeep
 test_orca_spawn_is_admitted_under_the_shared_project_lock
 test_lane_capacity_gate_is_opt_in
 test_lane_capacity_gate_defers_without_leaving_anything_behind

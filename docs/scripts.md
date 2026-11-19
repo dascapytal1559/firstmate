@@ -102,7 +102,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-mcp.mjs`          | T3 Code `/mcp` client: captain-run sign-in, capability gate, and the thread verbs the t3code adapter calls (docs/t3code-backend.md) |
 | `fm-t3-answer.sh`        | Read or answer a recorded T3 worker's pending questions                              |
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
-| `fm-t3-restart.sh`       | After a T3 server restart, steer the T3 workers that have not reported since          |
+| `fm-t3-restart.sh`       | After a T3 server restart, steer only the T3 workers whose turn T3 shows as cut off |
 | `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its current state |
 | `fm-t3-bridge.sh`        | Keep T3's Bridge in line with the objectives file and the model routing table |

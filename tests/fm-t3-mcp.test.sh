@@ -1785,10 +1785,50 @@ test_launch_and_send_carry_the_origin() {
   pass "fm-t3-mcp launch/send: the reference rides only where declared, an older cause passes on unchanged, and a refused one is a typed failure with nothing created"
 }
 
+# --upkeep rides in place of the reference or cause where the launch declares
+# upkeep, and elsewhere the launch goes as without it, saying so.
+test_launch_says_upkeep_where_declared() {
+  local project ref cause thread
+  ref='{"threadId":"coord","at":"2026-11-18T09:00:00.000Z"}'
+  cause='{"threadId":"coord","runId":"run-c","messageId":"msg-c"}'
+  fresh_case upkeep-launch '{"causedBy":true,"fromThread":true,"upkeep":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title nightly --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --upkeep
+  expect_code 0 "$RC" "an upkeep launch succeeds: $ERR"
+  thread=$(field "$OUT" threadId)
+  assert_equals true "$(field "$OUT" upkeep)" "the result says the launch was upkeep"
+  assert_equals "" "$(field "$OUT" fromThread)" "and that no reference was sent"
+  assert_equals true "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" upkeep)" "the launch says upkeep"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "in place of the reference"
+  assert_equals true "$(t3_fake_field "threads.$thread.upkeep")" "T3 binds the thread's birth as upkeep"
+  mcp launch --project "$project" --title nightly --model-selection "$SEL" --worktree "$WT" --caused-by "$cause" --upkeep
+  expect_code 0 "$RC" "an upkeep launch beside an older cause succeeds: $ERR"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" causedBy)" "upkeep replaces an older cause too"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --from-thread "$ref"
+  expect_code 0 "$RC" "a launch without --upkeep succeeds: $ERR"
+  assert_equals false "$(field "$OUT" upkeep)" "a launch without --upkeep is not upkeep"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" upkeep)" "and says nothing of it"
+  assert_equals "$ref" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "it carries its reference"
+  fresh_case upkeep-undeclared '{"causedBy":true,"fromThread":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title nightly --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --upkeep
+  expect_code 0 "$RC" "a T3 without upkeep still launches: $ERR"
+  assert_equals false "$(field "$OUT" upkeep)" "the result says the launch was not upkeep"
+  assert_equals "$ref" "$(field "$OUT" fromThread)" "and names the reference it sent instead"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" upkeep)" "an undeclared upkeep is never sent"
+  assert_equals "$ref" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "the launch carries the reference as without --upkeep"
+  pass "fm-t3-mcp launch --upkeep: upkeep replaces the origin where T3 declares it, and a T3 without it gets the origin"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_usage_claim_targets_values_and_refusals
 test_restart_request_names_its_origin
 test_launch_and_send_carry_the_origin
+test_launch_says_upkeep_where_declared
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
 test_login_refuses_other_ceilings

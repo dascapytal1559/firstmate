@@ -1921,3 +1921,63 @@ This departs from upstream on purpose, and [FORK.md](../FORK.md#reported-landing
 
 The evidence is `tests/fm-merge-local.test.sh`: the twelve safety cases from the investigation, the 24-stage day as a made-up fixture, and the race cases the landing already had.
 Under the old code the same day needed a hand reset at 23 of its 24 landings.
+
+## 70. The bedtime routine counts to the computer (19 November 2026)
+
+A measurement of T3 Code's phone figure found the label follows the last-touch rule almost exactly, but the phone figure mostly measured the night.
+When he says he is going to bed, FirstMate updates its tools and starts one review per project over the day's landed work, and it started all of that inside the turn his goodnight began.
+So the whole routine, its review agents included, counted to the device he said goodnight on, which was nearly always the phone: in three nights it was 45% of everything labelled phone.
+
+His answer:
+
+> bedtime routine should mostly be on computer. The carve outs are the items mentioned in the journal. Just reason through it. You know, if something is, like, responsible because of a process we set up that runs on the computer. It's attributed to the computer, and by default, it attributes to the computer, where essentially identifying which area should be appropriately attributed to a phone, which journal passing and items mentioned in the journal should be attributed to a phone.
+>
+> (19 November 2026)
+
+What was built, on FirstMate's side:
+
+- **A spawn can say "upkeep".** `fm-spawn.sh --upkeep` launches the worker's T3 thread as FirstMate's own upkeep, so it counts to the computer whichever turn starts it, and its review agents and the wakes about it follow it there.
+- **It survives a wait.** A start held back for capacity or account room records upkeep on its backlog item, so the later start is upkeep even if nothing remembers the flag.
+- **A T3 without it changes nothing.** The launch then goes exactly as before, with a note.
+
+The choices made:
+
+- **A word on the launch, not an order of steps.** The other way needed no T3 change: the goodnight turn would only leave a follow-up, and a later wake would start the routine.
+  That works only while FirstMate keeps that order every night and no other notification shares the wake, so the launch says what the work is instead.
+- **The carve-outs need nothing.** Filing a voice journal and work started from its items already count to the phone, and what he asks for in the goodnight message itself keeps its device, so those start without the flag.
+- **The past stays as it is.** Closed days are final, so the change shows from the first night the T3 half is installed.
+
+The T3 Code half, accepting the word on a launch, is a separate change to the fork; until it lands, the flag only adds the note.
+The evidence is the touched suites, run against the fake T3 server, which now models the upkeep launch; no live T3 was called.
+
+## 71. A T3 restart wakes only the workers it cut (19 November 2026)
+
+After a T3 Code restart, FirstMate sent a "check where you stand" message to every worker whose last status line said working or waiting, whether or not the restart had taken anything from it.
+He noticed the bill:
+
+> The restarting of T3 triggers another round from all of its workers. And this triggering was very expensive because that that worker we were talking about had like 780,000 contacts. Is that something that we should look into optimizing? How will we do it?
+>
+> (19 November 2026)
+
+A read-only investigation replayed every restart from 29 October to 19 November against T3's own records.
+Of 39 such messages, 22 woke a worker that had lost nothing, and 4 were needed, all four with a trace T3 itself records.
+Both upstreams leave idle and waiting threads asleep after a restart; the blanket message was this fork's own addition from 28 October, written when T3 resumed nothing, and never narrowed once it did.
+His answer to the offered fix, wake only workers whose turn T3 shows as cut off and not picked up again:
+
+> yeah sure
+>
+> (19 November 2026)
+
+What was built, on FirstMate's side only:
+
+- **Ask T3, then decide.** Recovery reads each working or waiting worker's thread status and messages only a worker whose turn reads cancelled or interrupted. A resumed run, a run that failed on a usage limit, and an idle worker waiting on him, on FirstMate or on a detached job are left asleep with their last status line still trusted.
+- **Unreadable stays pending.** A thread that cannot be read leaves the restart unhandled so the next session start retries; a gone thread is reported as before.
+- **Less code.** The "reported since the restart" time-stamp rule is gone, because a worker T3 resumed no longer reads as cut. The message text, the marker and the untrusted-claim rule stay for the workers that are messaged.
+
+Replayed over the real record, this sends 2 messages instead of 39 and still catches every turn T3 shows as cut.
+Two cases it handles later rather than at once, each picked up by the worker's declared wait time: a background command a worker never marked as awaited, which last happened before 12 November, and, with T3's continuation setting off, a marked background wait the restart killed, since T3 then wakes nobody and the worker's thread reads idle.
+
+The choice to confirm: a worker he stopped by hand still reads as cut, so one whose last line says working is messaged at the next restart, as it is today.
+
+The evidence is the T3 backend suite against the fake T3 server: a seven-worker case (one cancelled, one stopped, one resumed and running, one failed on a limit, three idle) where exactly the two cut turns are messaged and a second run does nothing.
+[FORK.md](../FORK.md#restart-recovery) says how this now sits against both upstreams.

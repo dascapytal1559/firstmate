@@ -116,13 +116,16 @@ A T3 without crew lineage, a firstmate not running in T3, or a home with no pinn
 ### Where work comes from
 
 T3 Code's Usage page counts each piece of work to the device of the latest typed message on it, until the next typed message; clicks and automatic notifications move nothing.
-Firstmate does not decide where work counts.
+Firstmate does not decide where work counts, except to say which work is its own upkeep.
 At each durable boundary it records an origin reference, the T3 thread the work comes from and when, `{"threadId", "at"?}`, which is exactly what T3's `fromThread` takes, and passes it through untouched; T3 turns it into a label when the work launches or the claim is made (the fork's `fork/README.md` "Phone vs computer split" owns the rule).
 Writing a reference needs no T3 call: the thread is the one T3 names in each agent's environment as `T3CODE_THREAD_ID`, and the time is now.
 [`bin/fm-t3-origin-lib.sh`](../bin/fm-t3-origin-lib.sh) is the one owner of the references:
 
 - A spawn sends this thread, as of when the spawn began, as the worker launch's `fromThread`, so the thread is born where that turn's work counts; the task record and the brief carry nothing.
   A relaunch keeps its recorded backend, which never launches a T3 thread, so it sends nothing.
+- A spawn with `--upkeep` sends T3's `upkeep` in place of that reference, so the thread is born counting to the computer as upkeep whichever turn launches it, and its review agents and the wakes about it follow it there.
+  Upkeep is work Firstmate runs because of a process set up on the computer, such as the bedtime routine's tool updates and nightly reviews, launched from a goodnight typed on the phone; what the captain asks for in that message, filing a voice journal, and work launched from a journal's items keep their device and launch without it.
+  A T3 without `upkeep` is sent the reference as before, with a note, and a start deferred for capacity or sizing keeps `upkeep` as its item's queued origin, so the item's later start is upkeep too and a wake about it before then counts to the computer.
 - A backlog item added with `fm-tasks-axi.sh add` keeps the reference of the turn that queued it, and its first launch sends that one, whatever turn launches it, such as a recovery wake after a restart.
 - A steer through `fm-send.sh` keeps the reference in the steer's inbox record, and every doorbell for that record sends it, so a re-ring binds to the turn that wrote the steer; T3 moves the worker only when that turn was typed.
 - A note written with `fm-inbox.sh note` keeps the writer's own thread and time, and the wake about the note claims it.
@@ -335,7 +338,7 @@ Failures, retries, and a T3 without `t3_routing_set` are handled exactly as for 
 ## Restart and liveness behavior
 
 The T3 thread id, transcript, provider binding, and Treehouse worktree outlive a server connection.
-A server restart cancels in-flight runs even though the thread still exists, so a worker whose turn ended without a terminal status line may need a steer, which the [server restart](#server-restart) recovery sends.
+A server restart cancels in-flight runs even though the thread still exists, so a thread whose last run ended `cancelled` or `interrupted` and was not resumed reads cut, and its worker needs the steer that the [server restart](#server-restart) recovery sends.
 Thread persistence alone does not prove a live agent.
 
 `bin/backends/t3code.sh` owns one status table over the thread's V2 status, read with `t3_thread_read`:
@@ -366,7 +369,7 @@ A worker's long command started with [`bin/fm-job.sh`](../bin/fm-job.sh), such a
 Its result reaches the worker as a steering-inbox record that the watcher sends once the job ends, so a result that lands while T3 is down waits in the record and its doorbell starts the worker's next turn.
 Generated briefs tell workers to run any command longer than a few minutes this way and then watch it with `fm-job.sh follow`, so T3 shows the command and its output and the worker reads as working for a short test.
 A follow ends by itself after `FM_JOB_FOLLOW_MAX` seconds (default 540) when the job is still running: it says so and exits 75 without marking the result delivered, the worker declares the wait with a `paused:` line and ends its turn, and the watcher's result record starts its next turn when the job ends.
-A restart cuts only a follow, and the recovery steer below tells the worker to re-attach with `--from-end` while the job still runs.
+A restart cuts only a follow: the job keeps running and its result still reaches the worker, and a worker whose cut turn T3 did not resume gets the recovery steer below, which tells it to re-attach with `--from-end` while the job still runs.
 A follow is a running turn, so a restart staged to wait for an idle fleet, and T3's clean restart, wait for it to end, which the bound caps at about nine minutes; `bin/fm-fleet-idle.sh` leaves out only the job's own processes, so a worker waiting on a job with its turn ended reads idle at once.
 
 What T3 cannot see is Firstmate's durable record: a worker's last `working:` or `paused:` line still reads as current after the session behind it ended.
@@ -375,11 +378,18 @@ What T3 cannot see is Firstmate's durable record: a worker's last `working:` or 
 - **Pinning.** Every `recover` pins the home's own thread (the one the away daemon would find) as its project's coordinator where the server advertises `coordinatorRestartNote`, so the note reaches it after every start, even one that cut no crew run.
   The note is an ordinary user turn, not Firstmate operational input, so a main follows it whatever agent runs it, and Firstmate adds no hook of its own on the main.
   On the fork a pinned coordinator's notification-started turns end without an alert; the [T3 thread protocol](supervision-protocols/t3-thread.md), rendered into the session-start block of a main running as a T3 thread, owns when such a turn asks to alert.
-- **Recovery.** When `serverStartedAt` differs from the one the home last handled, every ship or scout whose current claim is `working:`, `paused:`, or nothing yet gets one recovery steer through `fm-send.sh`, whose doorbell reopens an idle session or steers a resumed run, and the digest lists them under `T3 RESTART`.
-  A worker whose current claim is stamped after the restart has already resumed and said where it stands, so it gets no steer; a busy resumed run without such a line is still steered, since being busy does not show it checked what the restart took.
-  Workers with an open decision, a captain-held wait, or a terminal line are left alone, and an archived thread is reported rather than rung.
+- **Recovery.** When `serverStartedAt` differs from the one the home last handled, `recover` reads the thread status of every ship or scout whose current claim is `working:`, `paused:`, or nothing yet, through the adapter's [status table](#restart-and-liveness-behavior).
+  Only a worker whose turn T3 shows as cut off and not picked up again (the `interrupted` word: cancelled, interrupted, or rolled back) gets one recovery steer through `fm-send.sh`, whose doorbell reopens the idle session, and the digest lists it under `T3 RESTART`.
+  Every other worker is left asleep with its last status line still trusted: a run T3 resumed or woke no longer reads cut, a failed run belongs to [usage-limit handling](#usage-limit-stops), and an idle worker that lost nothing, such as one waiting on the captain, on Firstmate, or on a detached job, has nothing to check.
+  This is what T3 itself does after a restart, which leaves every thread asleep except the runs it cut and the workers whose marked wait it cut.
+  An archived or missing thread is reported rather than rung, and a thread that cannot be read leaves the restart unrecorded, so the next session start retries.
+  Workers with an open decision, a captain-held wait, or a terminal line are not looked at.
+  A worker stopped by hand reads cut too, so one whose last line still says `working:` is steered at the next restart.
+  Two cases are left for later, both a worker that ended its turn normally on a background wait the restart killed, so its thread reads idle rather than cut: one it never marked with `t3_background_wait`, which T3 records but wakes nobody for, and, with continuation off, a marked one too, since T3 then wakes nobody at all.
+  Either worker is found by the watcher's recheck at its declared `until`, else within its four-hour wait cadence.
 - **Untrusted claims.** Until a steered worker appends a new status line, its earlier pause is no longer a declared wait for the watcher or the away daemon, and `fm-crew-state.sh` reports its earlier `working:` or `paused:` claim as unknown, so the ordinary stale handling applies instead of the four-hour pause cadence.
-- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers every working or waiting worker, since T3 resumed none of them.
+  A worker whose steer was not recorded, and that a later `recover` leaves asleep because its thread no longer reads cut, has its claim trusted again.
+- **Continuation off.** Nothing wakes the main until the captain next writes to it, when the harness's own [session-start path](sessionstart-nudge.md) applies; the session start it then runs still finds the restart from `serverStartedAt` and steers each worker whose run was cut, since T3 resumed none of them, and leaves the idle ones asleep, including a worker whose marked background wait the restart killed, which waits for its paused `until` or the four-hour wait cadence.
 
 <a id="clean-restart"></a>
 

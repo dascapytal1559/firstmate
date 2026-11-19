@@ -66,6 +66,7 @@
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
 //       [--parent <thread-id>] [--from-thread <reference> | --caused-by <cause-json>]
+//       [--upkeep]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
@@ -81,7 +82,12 @@
 //     refuses exits 3 (origin_refused) with no thread launched.
 //     --caused-by passes on a cause recorded before references existed
 //     (parseCause), sent as causedBy the same way and refused the same way
-//     (cause_refused). Reads the thread and its configuration
+//     (cause_refused). --upkeep launches FirstMate's own upkeep, work a
+//     process set up on the computer runs: where the launch schema declares
+//     upkeep it is sent as upkeep:true, so T3 counts the thread's work to the
+//     computer as upkeep whichever turn launches it, and --from-thread or
+//     --caused-by is not sent; elsewhere they ride as without it. The
+//     result's upkeep says which. Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
 //     read reports one), instance, model, every requested option value,
@@ -504,7 +510,7 @@ const EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "thought_level", "thinki
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REPEATABLE = new Set(["option", "thread", "escalated"]);
 // Flags that take no value: flags[key] is true when given.
-const SWITCHES = new Set(["if-unclaimed"]);
+const SWITCHES = new Set(["if-unclaimed", "upkeep"]);
 // Every MCP session this invocation opened, ended when the verb returns.
 const SESSIONS = new Set();
 
@@ -1391,9 +1397,11 @@ async function launch(flags) {
   // A T3 without crew lineage drops an undeclared argument, so the parent
   // rides, and is proven, only where the launch schema declares it.
   const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
-  // An older T3 refuses an undeclared key, so the reference (or a cause
-  // recorded before references existed) rides only where declared.
-  const { from, cause } = declaredOrigin(session, "t3_thread_launch", wanted);
+  // An older T3 refuses an undeclared key, so upkeep, and otherwise the
+  // reference (or a cause recorded before references existed), rides only
+  // where declared; upkeep names no origin, so it replaces them.
+  const upkeep = flags.upkeep === true && toolOffers(session, "t3_thread_launch", "upkeep");
+  const { from, cause } = declaredOrigin(session, "t3_thread_launch", upkeep ? NO_ORIGIN : wanted);
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1410,6 +1418,7 @@ async function launch(flags) {
     ...(parent !== null ? { parentThreadId: parent } : {}),
     ...(from !== null ? { fromThread: from } : {}),
     ...(cause !== null ? { causedBy: cause } : {}),
+    ...(upkeep ? { upkeep: true } : {}),
   };
   let out;
   try {
@@ -1458,6 +1467,7 @@ async function launch(flags) {
     parentThreadId: parent,
     fromThread: from,
     causedBy: cause,
+    upkeep,
     environmentId: g.environmentId,
     origin: session.origin,
     serverVersion: g.serverVersion,
@@ -1566,6 +1576,9 @@ function originFlags(flags) {
   if (flags["from-thread"] !== undefined && flags["caused-by"] !== undefined) usage("give at most one of --from-thread or --caused-by");
   return { from: fromThreadFlag(flags), cause: causeFlag(flags) };
 }
+
+// An origin that names nothing.
+const NO_ORIGIN = { from: null, cause: null };
 
 // What of <wanted> rides <tool>: each only where its schema declares it, since
 // an older T3 refuses an undeclared key.
