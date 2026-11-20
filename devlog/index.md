@@ -1981,3 +1981,26 @@ The choice to confirm: a worker he stopped by hand still reads as cut, so one wh
 
 The evidence is the T3 backend suite against the fake T3 server: a seven-worker case (one cancelled, one stopped, one resumed and running, one failed on a limit, three idle) where exactly the two cut turns are messaged and a second run does nothing.
 [FORK.md](../FORK.md#restart-recovery) says how this now sits against both upstreams.
+
+## 72. Journal items count as Journal whenever they start (20 November 2026)
+
+T3 Code's Usage page now splits usage by process.
+The ask:
+
+> also can we add breakdown by process: journal, routine, others
+
+Offered a separate slice for supervision, his choice was "Journal, Routines, Other, exactly as you said".
+
+T3 decides the process from the label it already keeps on each turn and launch, so most of it needed nothing from FirstMate: a voice journal's filing turn is already claimed for the phone, which T3 now labels as journal work, and every worker launched in that turn inherits it.
+The gap was a journal item started later, such as one he approves the next morning or a recovery start after a restart: that worker counted wherever the starting turn did, usually as Other.
+
+What was built, on FirstMate's side:
+
+- **A spawn can say "journal".** `fm-spawn.sh --journal` launches the worker's T3 thread as journal work, whichever turn starts it, mirroring `--upkeep` for the bedtime routine.
+- **It survives a wait.** A start held back for capacity or account room records journal on its backlog item, so the later start is journal work too, and a wake about it before then counts to the phone.
+- **One label at a time.** `--journal` beside `--upkeep` is refused before anything launches, since T3 refuses that launch.
+- **A T3 without it changes nothing.** The launch then goes as before, with a note.
+
+The choice made: an item started inside the journal's own filing turn still needs no flag, because that turn's own label keeps the device the journal actually came from, while `--journal` always counts to the phone.
+
+The evidence is the touched suites, run against the fake T3 server, which now models the journal launch; no live T3 was called.

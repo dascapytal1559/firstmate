@@ -135,6 +135,11 @@
 //     fromThread or causedBy with an "upkeep: ..." invalid_request before
 //     anything is created, and stores upkeep:true on the launched thread.
 //     Without it the argument is dropped.
+//   - a T3 with journal launches (world journal) declares journal on
+//     t3_thread_launch, refuses it beside fromThread, causedBy or upkeep with
+//     a "journal: ..." invalid_request before anything is created, and
+//     stores journal:true on the launched thread. Without it the argument is
+//     dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -200,7 +205,8 @@ const TOOL_SCHEMAS = {
     type: "object",
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
       "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
-      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : []), ...(w.upkeep ? ["upkeep"] : [])].map((k) => [k, {}])),
+      ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : []), ...(w.upkeep ? ["upkeep"] : []),
+      ...(w.journal ? ["journal"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_send: (w) => ({
     type: "object",
@@ -583,6 +589,10 @@ async function callTool(w, name, a) {
       if (upkeep && (fromThread !== undefined || cause !== undefined)) {
         return [err("invalid_request", "upkeep: a launch counted as upkeep names no origin; omit fromThread and causedBy."), false];
       }
+      const journal = w.journal ? a.journal === true : false;
+      if (journal && (fromThread !== undefined || cause !== undefined || upkeep)) {
+        return [err("invalid_request", "journal: a launch counted as journal names no origin and is not upkeep; omit fromThread, causedBy and upkeep."), false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -609,6 +619,7 @@ async function callTool(w, name, a) {
       if (cause !== undefined || w.bindCause !== undefined) n.causedBy = w.bindCause ?? cause;
       if (fromThread !== undefined) n.fromThread = fromThread;
       if (upkeep) n.upkeep = true;
+      if (journal) n.journal = true;
       threads[id] = n;
       if (a.message) startRun(n, a.message, undefined, cause, fromThread);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];

@@ -66,7 +66,7 @@
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
 //       [--parent <thread-id>] [--from-thread <reference> | --caused-by <cause-json>]
-//       [--upkeep]
+//       [--upkeep | --journal]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
@@ -87,7 +87,11 @@
 //     upkeep it is sent as upkeep:true, so T3 counts the thread's work to the
 //     computer as upkeep whichever turn launches it, and --from-thread or
 //     --caused-by is not sent; elsewhere they ride as without it. The
-//     result's upkeep says which. Reads the thread and its configuration
+//     result's upkeep says which. --journal launches work from a voice
+//     journal's items the same way, sent as journal:true where the launch
+//     schema declares journal, so T3 counts it to the phone as journal work;
+//     the result's journal says which. Given together they are a usage
+//     error, since T3 refuses that launch. Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
 //     read reports one), instance, model, every requested option value,
@@ -510,7 +514,7 @@ const EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "thought_level", "thinki
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REPEATABLE = new Set(["option", "thread", "escalated"]);
 // Flags that take no value: flags[key] is true when given.
-const SWITCHES = new Set(["if-unclaimed", "upkeep"]);
+const SWITCHES = new Set(["if-unclaimed", "upkeep", "journal"]);
 // Every MCP session this invocation opened, ended when the verb returns.
 const SESSIONS = new Set();
 
@@ -1386,6 +1390,7 @@ async function launch(flags) {
   const instructions = launchInstructions(flags);
   if (flags.parent !== undefined && !flags.parent) usage("--parent needs a thread id");
   const wanted = originFlags(flags);
+  if (flags.upkeep === true && flags.journal === true) usage("--upkeep and --journal are exclusive");
   let session;
   let g;
   try {
@@ -1397,11 +1402,13 @@ async function launch(flags) {
   // A T3 without crew lineage drops an undeclared argument, so the parent
   // rides, and is proven, only where the launch schema declares it.
   const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
-  // An older T3 refuses an undeclared key, so upkeep, and otherwise the
-  // reference (or a cause recorded before references existed), rides only
-  // where declared; upkeep names no origin, so it replaces them.
+  // An older T3 refuses an undeclared key, so upkeep or journal, and
+  // otherwise the reference (or a cause recorded before references existed),
+  // rides only where declared; either label names no origin, so it replaces
+  // them.
   const upkeep = flags.upkeep === true && toolOffers(session, "t3_thread_launch", "upkeep");
-  const { from, cause } = declaredOrigin(session, "t3_thread_launch", upkeep ? NO_ORIGIN : wanted);
+  const journal = flags.journal === true && toolOffers(session, "t3_thread_launch", "journal");
+  const { from, cause } = declaredOrigin(session, "t3_thread_launch", upkeep || journal ? NO_ORIGIN : wanted);
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1419,6 +1426,7 @@ async function launch(flags) {
     ...(from !== null ? { fromThread: from } : {}),
     ...(cause !== null ? { causedBy: cause } : {}),
     ...(upkeep ? { upkeep: true } : {}),
+    ...(journal ? { journal: true } : {}),
   };
   let out;
   try {
@@ -1468,6 +1476,7 @@ async function launch(flags) {
     fromThread: from,
     causedBy: cause,
     upkeep,
+    journal,
     environmentId: g.environmentId,
     origin: session.origin,
     serverVersion: g.serverVersion,

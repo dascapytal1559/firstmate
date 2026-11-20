@@ -122,6 +122,12 @@ test_origin_records() {
   out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-u; fm_t3_origin_landed "$state"')
   assert_equals "" "$out" "upkeep is never a landed reference"
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-u'
+  printf '%s\n' "$REF_T" > "$state/item-j.queued-origin"
+  out=$(lib "$state" 'fm_t3_origin_queue_journal "$state" item-j; fm_t3_origin_queued "$state" item-j; printf " "; fm_t3_origin_of_task "$state" item-j')
+  assert_equals "journal journal" "$out" "an item queued as journal replaces its reference, and a task with no thread yet reads journal"
+  out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-j; fm_t3_origin_landed "$state"')
+  assert_equals "" "$out" "journal is never a landed reference"
+  lib "$state" 'fm_t3_origin_queue_forget "$state" item-j'
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-1; fm_t3_origin_queue_forget "$state" item-3'
   [ ! -e "$state/item-1.queued-origin" ] && [ ! -e "$state/item-3.queued-cause" ] || fail "forget drops the queued records of both kinds"
   out=$(lib "$state" 'fm_t3_origin_of_task "$state" ../item-1')
@@ -179,6 +185,19 @@ test_wake_about_an_upkeep_item_claims_the_computer() {
   assert_equals '{"device":"computer"}' "$(claims run:coord:run-c)" "the turn counts to the computer: $(claims run:coord:run-c)"
   [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "the claim logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
   pass "fm-t3-usage-claim wake: an item queued as upkeep counts its wake to the computer"
+}
+
+# A wake about an item queued as journal, before it has a thread, counts its
+# turn to the phone, which T3 files as journal.
+test_wake_about_a_journal_item_claims_the_phone() {
+  fresh_case wake-journal
+  printf 'journal\n' > "$STATE_DIR/item.queued-origin"
+  meta_with_thread tk t-tk
+  as_agent "$CLAIM" wake --task item --task tk
+  expect_code 0 "$RC" "a wake claim exits 0: $ERR"
+  assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "the turn counts to the phone: $(claims run:coord:run-c)"
+  [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "the claim logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
+  pass "fm-t3-usage-claim wake: an item queued as journal counts its wake to the phone"
 }
 
 test_wake_about_nothing_claims_nothing() {
@@ -336,6 +355,7 @@ fm_test_run \
   test_origin_records \
   test_wake_tries_candidates_until_one_binds \
   test_wake_about_an_upkeep_item_claims_the_computer \
+  test_wake_about_a_journal_item_claims_the_phone \
   test_wake_about_nothing_claims_nothing \
   test_drain_claims_inbox_notes \
   test_claims_are_best_effort_and_logged_once \
