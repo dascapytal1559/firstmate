@@ -183,7 +183,8 @@ No slash-skill invocation form was verified, so skill invocation stays natural l
 `--continue` and `--conversation` resume were never exercised; recovery uses deterministic relaunch from the brief on disk.
 Inside T3 Code, that the Stop payload's `transcriptPath` names the transcript above and that the final reply is written before the hook runs are unproven until a live session; until then the Antigravity mirror writer is not a verified writer.
 That the CLI leaves a detached waiter running once its Stop hook returns is unproven until a live session in a T3 Code build carrying #36495.
-That live check must also cover a wake rung while the Stop hook is still open: one already pending at turn end, which the waiter delivers before `bin/fm-agy-t3-ring.sh start` returns, and one closing just after its `waiting` return. Whether T3 or Antigravity turns that message, sent into the ending ACP prompt, into a fresh turn is unproven; if it is dropped, the waiter has already exited as delivered and the session is unsupervised until the captain's next message, with nothing recorded.
+That live check must also cover a wake rung while the Stop hook is still open: one already pending at turn end, which the waiter delivers before `bin/fm-agy-t3-ring.sh start` returns, and one closing just after its `waiting` return.
+Whether T3 or Antigravity turns that message, sent into the ending ACP prompt, into a fresh turn is unproven; if it is dropped, the waiter has already exited as delivered and the session is unsupervised until the captain's next message, with nothing recorded.
 
 ## Refreshing this record
 
