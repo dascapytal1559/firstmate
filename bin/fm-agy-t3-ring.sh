@@ -78,6 +78,14 @@
 # watcher cycle, waiter, or turn remains: the Antigravity main session is
 # unsupervised, and the wake waits in the durable queue, until the captain's
 # next message starts a turn whose Stop hook reads the latch and parks in place.
+#
+# WINDOW. A wake can be rung while the Stop hook is still open: the cycle closes
+# at once on a wake already pending at turn end, so the waiter delivers before
+# `start` returns, or a wake closes just after the `waiting` return, before the
+# ACP prompt has actually ended. That send reaches the ending turn, and relies
+# on T3 or Antigravity turning it into a fresh turn. If either drops it, the
+# waiter has already exited as delivered: the main session is unsupervised until
+# the captain's next message, and nothing records it. Unproven live.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
