@@ -385,14 +385,19 @@ chmod +x "$JQ_SHIM/jq"
 test_dialog_text_never_enters_process_arguments() {
   local home
   home=$(make_home argv)
-  PATH="$JQ_SHIM:$PATH" as_session "$home" '
+  agy_step "$home/transcript.jsonl" 0 USER_INPUT "$(agy_request 'agy-captain-secret-41d0')"
+  agy_step "$home/transcript.jsonl" 1 PLANNER_RESPONSE 'agy-main-secret-b27e'
+  PATH="$JQ_SHIM:$PATH" as_session "$home" "$AGY_STOP"'
     printf "%s" "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt_id\":\"p1\",\"prompt\":\"captain-secret-7f3a\"}" \
       | FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$MIRROR" hook claude
     printf "%s" "{\"hook_event_name\":\"Stop\",\"prompt_id\":\"p1\",\"last_assistant_message\":\"main-secret-9c1e\"}" \
       | FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$MIRROR" hook claude
+    agy_stop c "$FM_HOME/transcript.jsonl"
   ' || fail "a writer failed"
   assert_equals "captain|captain-secret-7f3a
-main|main-secret-9c1e" "$(entries "$home")" "both entries must be recorded"
+main|main-secret-9c1e
+captain|agy-captain-secret-41d0
+main|agy-main-secret-b27e" "$(entries "$home")" "every entry must be recorded"
   [ -s "$home/jq-argv.log" ] || fail "the writers must have run through the recording jq"
   ! grep -q 'secret' "$home/jq-argv.log" || fail "dialog text must never appear in a jq argument list"
   pass "mirror: captain prompts and main replies reach the mirror without ever entering a process argument list"
@@ -622,7 +627,7 @@ test_only_proven_writers_are_verified() {
   for harness in claude cursor; do
     "$MIRROR" verified "$harness" || fail "$harness has proven writers but is not verified"
   done
-  for harness in codex grok opencode omp pi kimi unknown; do
+  for harness in codex grok opencode omp pi kimi agy unknown; do
     if "$MIRROR" verified "$harness"; then
       fail "$harness has no proven writer but is verified"
     fi
@@ -631,7 +636,125 @@ test_only_proven_writers_are_verified() {
   pass "only Claude and Cursor, the primaries with proven writers, have a verified dialog mirror"
 }
 
+# --- Antigravity (fork): the Stop payload names the conversation's transcript --
+
+# Inside an as_session script: one Antigravity Stop payload for <conversation>
+# naming <transcript>, through the mirror's hook writer.
+AGY_STOP='agy_stop() {  # <conversation> <transcript>
+  jq -cn --arg c "$1" --arg t "$2" "{hookEventName: \"Stop\", conversationId: \$c, transcriptPath: \$t, executionNum: 0, terminationReason: \"NO_TOOL_CALL\"}" \
+    | FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$MIRROR" hook agy
+}
+'
+
+# agy_step <file> <index> <type> <content> [<tool-calls-json>]: one made-up step
+# in Antigravity's transcript format (docs/verification/agy.md).
+agy_step() {
+  jq -cn --argjson i "$2" --arg type "$3" --arg c "$4" --argjson tools "${5:-null}" '
+    {step_index: $i, source: (if $type == "USER_INPUT" then "USER_EXPLICIT" else "MODEL" end),
+     type: $type, status: "DONE", created_at: "2026-11-20T00:00:00Z", content: $c}
+    + (if $tools == null then {} else {tool_calls: $tools} end)' >> "$1"
+}
+
+# agy_request <text> [<t3-wrapped>]: a USER_INPUT step's content as Antigravity
+# records it, optionally with the instructions T3 Code puts around a first prompt.
+agy_request() {
+  if [ -n "${2:-}" ]; then
+    printf '<USER_REQUEST>\n<t3_code_instructions>\nRules — keep “quotes” and é intact\n</t3_code_instructions>\n<user_request>\n%s\n</user_request>\n<runtime_info>\nmade up\n</runtime_info>\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnow\n</ADDITIONAL_METADATA>' "$1"
+  else
+    printf '<USER_REQUEST>\n%s\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnow\n</ADDITIONAL_METADATA>' "$1"
+  fi
+}
+
+test_antigravity_stop_mirrors_each_turn_from_its_transcript() {
+  local home logs full compact doorbell ids
+  home=$(make_home antigravity)
+  logs="$home/brain/conv-1/.system_generated/logs"
+  mkdir -p "$logs"
+  full="$logs/transcript_full.jsonl"
+  compact="$logs/transcript.jsonl"
+  agy_step "$full" 0 USER_INPUT "$(agy_request 'hi there' t3)"
+  agy_step "$full" 1 PLANNER_RESPONSE 'Let me look first.' '[{"name":"run_command","args":{}}]'
+  agy_step "$full" 2 GENERIC 'tool output'
+  agy_step "$full" 3 PLANNER_RESPONSE $'Ready, captain.\n\n'
+  # The compact copy truncates long fields; the writer reads the full one.
+  jq -c 'if .step_index == 0 then .content = "<USER_REQUEST>\n<t3_code" | .truncated_fields = ["content"] else . end' \
+    "$full" > "$compact"
+  LOGS=$logs as_session "$home" "$AGY_STOP"'agy_stop conv-1 "$LOGS/transcript.jsonl"' || fail "the Antigravity writer failed"
+  assert_equals "captain|hi there
+main|Ready, captain." "$(entries "$home")" \
+    "the first turn must mirror the captain's own words from inside T3's wrapper, and the turn's final reply"
+
+  agy_step "$full" 4 USER_INPUT "$(agy_request 'ship it — now')"
+  agy_step "$full" 5 PLANNER_RESPONSE 'On it.'
+  doorbell=$(printf 'A supervision wake is waiting.' | FM_HOME="$home" "$ROOT/bin/fm-operational-input.sh" record watcher) \
+    || fail "fixture: this home's doorbell could not be written"
+  LOGS=$logs as_session "$home" "$AGY_STOP"'agy_stop conv-1 "$LOGS/transcript.jsonl"; agy_stop conv-1 "$LOGS/transcript.jsonl"' \
+    || fail "the Antigravity writer failed"
+  agy_step "$full" 6 USER_INPUT "$(agy_request "$doorbell")"
+  agy_step "$full" 7 PLANNER_RESPONSE 'Handled the wake.'
+  LOGS=$logs as_session "$home" "$AGY_STOP"'agy_stop conv-1 "$LOGS/transcript.jsonl"' || fail "the Antigravity writer failed"
+  assert_equals "captain|hi there
+main|Ready, captain.
+captain|ship it — now
+main|On it.
+main|Handled the wake." "$(entries "$home")" \
+    "each turn must be mirrored once, and a rung doorbell is machinery while its reply is MAIN's"
+  ids=$(jq -r .id "$home/state/.host-mirror.jsonl" | tr '\n' ' ')
+  assert_equals "conv-1:0 conv-1:3 conv-1:4 conv-1:5 conv-1:7 " "$ids" "each entry must carry its conversation and step"
+  pass "mirror: an Antigravity Stop mirrors each turn's captain prompt and final reply from the transcript once"
+}
+
+test_antigravity_writer_is_inert_without_its_conditions() {
+  local home logs other
+  home=$(make_home antigravity-no-host 0)
+  logs="$home/logs"
+  mkdir -p "$logs"
+  agy_step "$logs/transcript.jsonl" 0 USER_INPUT "$(agy_request 'not mirrored')"
+  agy_step "$logs/transcript.jsonl" 1 PLANNER_RESPONSE 'nor this'
+  LOGS=$logs as_session "$home" "$AGY_STOP"'agy_stop c "$LOGS/transcript.jsonl"' || fail "the Antigravity writer failed"
+  assert_absent "$home/state/.host-mirror.jsonl" "a home that does not run the host for agy must mirror nothing"
+
+  other=$(make_home antigravity-bad-payloads)
+  cp "$logs/transcript.jsonl" "$other/transcript.jsonl"
+  OTHER=$other as_session "$other" '
+    for payload in "{\"hookEventName\":\"Stop\"}" "{\"hookEventName\":\"Stop\",\"transcriptPath\":\"transcript.jsonl\"}" \
+      "{\"hookEventName\":\"Stop\",\"transcriptPath\":\"$OTHER/missing.jsonl\"}" "not json"; do
+      printf "%s" "$payload" | FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$MIRROR" hook agy || exit 1
+    done
+  ' || fail "an Antigravity payload without a usable transcript must still exit 0"
+  assert_absent "$other/state/.host-mirror.jsonl" "a payload without an absolute, readable transcript must mirror nothing"
+
+  printf '%s' "{\"hookEventName\":\"Stop\",\"transcriptPath\":\"$logs/transcript.jsonl\"}" \
+    | FM_HOME="$other" FM_ROOT_OVERRIDE="$PRIMARY_ROOT" "$MIRROR" hook agy
+  assert_absent "$other/state/.host-mirror.jsonl" "a session that does not hold the fleet lock must mirror nothing"
+  pass "mirror: the Antigravity writer needs the host, an absolute readable transcript, and the fleet lock"
+}
+
+# The tracked Antigravity Stop registration (.agents/hooks.json, run from
+# .agents/ as agy runs it) feeds the writer before anything else it decides.
+test_antigravity_stop_registration_writes_the_mirror() {
+  local home logs cmd out
+  home=$(make_home antigravity-registration)
+  logs="$home/logs"
+  mkdir -p "$logs" "$PRIMARY_ROOT/.agents"
+  agy_step "$logs/transcript.jsonl" 0 USER_INPUT "$(agy_request 'registered captain')"
+  agy_step "$logs/transcript.jsonl" 1 PLANNER_RESPONSE 'registered main'
+  cmd=$(jq -r '[.[] | .Stop // empty | .[].command | select(contains("fm-turnend-guard-agy.sh"))][0] // empty' "$ROOT/.agents/hooks.json")
+  [ -n "$cmd" ] || fail "the Antigravity Stop registration is missing from .agents/hooks.json"
+  out=$(LOGS=$logs CMD=$cmd as_session "$home" '
+    jq -cn --arg t "$LOGS/transcript.jsonl" "{hookEventName: \"Stop\", conversationId: \"c\", transcriptPath: \$t, terminationReason: \"NO_TOOL_CALL\", executionNum: 0}" \
+      | FM_ROOT_OVERRIDE="$PRIMARY_ROOT" bash -c "cd \"$PRIMARY_ROOT/.agents\" && $CMD"
+  ') || fail "the Antigravity Stop registration failed"
+  assert_equals "{}" "$out" "with nothing to supervise the Stop hook must end the turn"
+  assert_equals "captain|registered captain
+main|registered main" "$(entries "$home")" "the tracked Stop registration must write the turn to the mirror"
+  pass "mirror: the tracked Antigravity Stop registration writes the turn's dialog"
+}
+
 test_every_harness_registration_writes_the_mirror
+test_antigravity_stop_mirrors_each_turn_from_its_transcript
+test_antigravity_writer_is_inert_without_its_conditions
+test_antigravity_stop_registration_writes_the_mirror
 test_writers_are_inert_on_a_home_that_opted_out
 test_only_proven_writers_are_verified
 test_home_that_opted_out_is_untouched

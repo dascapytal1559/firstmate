@@ -34,6 +34,12 @@
 #     loud ceiling notice; past the ceiling, pass through with {}.
 #   - Record a unique claim in state/.agy-park-owner before parking and yield
 #     cleanly with {} if a newer Stop hook superseded this park while waiting.
+#
+# Fork additions (FORK.md "Antigravity main in T3 Code"): every payload first
+# feeds the dialog mirror's Antigravity writer (bin/fm-host-mirror.sh hook agy),
+# and inside a T3 Code thread bin/fm-agy-t3-ring.sh takes the park out of the
+# hook, so the turn ends with {} at once; the park above runs only when that
+# ring does not apply or could not start.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,6 +83,10 @@ PAYLOAD=$(cat 2>/dev/null || true)
 [ -n "$PAYLOAD" ] || allow_stop
 command -v jq >/dev/null 2>&1 || allow_stop
 
+# Fork: the dialog mirror's Antigravity writer reads this turn from the
+# transcript the payload names; it judges its own scope and stays silent.
+printf '%s' "$PAYLOAD" | "$SCRIPT_DIR/fm-host-mirror.sh" hook agy >/dev/null 2>&1 || true
+
 fm_primary_scope_matches "$FM_ROOT" "$STATE" || allow_stop
 
 TERM_REASON=$(printf '%s' "$PAYLOAD" | jq -r '.terminationReason // empty' 2>/dev/null || true)
@@ -106,6 +116,15 @@ if [ -n "$EXEC_NUM" ] && [ "$EXEC_NUM" -ge "$LOOP_CEILING" ]; then
 fi
 
 if ! fm_supervision_needed "$STATE" "$GRACE"; then
+  rm -f "$STATE/.turnend-blocks" 2>/dev/null || true
+  allow_stop
+fi
+
+# Fork: inside a T3 Code thread a parked Stop hook holds the thread's prompt
+# open, so the turn would never end there. bin/fm-agy-t3-ring.sh owns that
+# case: when it reports a live detached waiter the turn ends now, and otherwise
+# the park below runs exactly as before.
+if "$SCRIPT_DIR/fm-agy-t3-ring.sh" start </dev/null >/dev/null 2>&1; then
   rm -f "$STATE/.turnend-blocks" 2>/dev/null || true
   allow_stop
 fi

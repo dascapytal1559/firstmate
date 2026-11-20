@@ -8,7 +8,7 @@ Verified as a full Firstmate harness (Primary, Secondmate, and Crewmate/Scout).
 
 | Fact | Value |
 |---|---|
-| Binary | Absolute `agy` from `PATH`, refused if absent; a Go-compiled single binary, so the live process name is exactly `agy` with `argv[0]=agy`. |
+| Binary | Absolute `agy` from `PATH`, refused if absent; a Go-compiled single binary, so the live process name is exactly `agy` with `argv[0]=agy`. T3 Code (this fork's primary host) installs the same CLI under the release asset's name, `antigravity`, and serves its threads through `antigravity acp`. |
 | Launch | `agy --prompt-interactive "<brief>" --model <id> --effort <level> --dangerously-skip-permissions`, with the resolved absolute binary; the brief auto-submits with no extra Enter. The spawn pre-registers the worktree in agy's trust store first, then waits for a busy turn (answering the folder-trust dialog if it renders anyway) before reporting success. |
 | Busy state | No hook or plugin writer, so nothing is armed and no record is seeded; on Herdr the native `working` status classifies busy, and everywhere else the `agy-regex` rendered-tail fallback in `../../../../../bin/fm-busy-lib.sh` does. |
 | Rendered tail | Busy status row carries `esc to cancel` on the left; the idle row shows `? for shortcuts` instead. The `Generating...` word beside the braille spinner is free-floating output and is not a signal. |
@@ -38,7 +38,7 @@ The unauthenticated failure mode was not observed, so treat any auth prompt or r
 
 ## Detection
 
-Detected by ancestry alone: `../../../../../bin/fm-harness.sh` matches the anchored process name `agy`, never `*agy*`.
+Detected by ancestry alone: `../../../../../bin/fm-harness.sh` matches the anchored process name `agy` or `antigravity`, never `*agy*` or `*antigravity*`.
 No environment marker is promoted: `AGENT=1` observed on a live TUI is an inherited launcher value, not an agy identity, and agy does not clear an inherited `CLAUDECODE` - but a structural agy ancestor now outranks that retained marker, which `../../../../../bin/fm-harness.sh` decides without depending on the spawn's own launch-boundary marker clearing.
 agy is included in the session-lock name vocabulary in `../../../../../bin/fm-session-lock-lib.sh`, allowing an agy session to hold a home session lock.
 
@@ -57,4 +57,6 @@ SessionStart executes `bin/fm-sessionstart-agy.sh` to inject the session-start d
 PreToolUse invokes `bin/fm-arm-pretool-check.sh --agy`, `bin/fm-cd-pretool-check.sh --agy`, and `bin/fm-subagent-pretool-check.sh --agy`.
 Stop executes `bin/fm-turnend-guard-agy.sh`, which parks on a home-scoped watcher cycle through `bin/fm-watch-arm.sh` (or `bin/fm-supervision-host.sh park` on a home that runs the host) under the registered 28800s hook timeout and delivers actionable wake output; only an optional `FM_AGY_PARK_TIMEOUT` bound re-arms via `{"decision":"continue","reason":"..."}` with `[supervision-park]`, and `FM_AGY_TURNEND_LOOP_CEILING` (default 180) bounds hook-driven turns.
 A bounded 3-block repair nag is enforced via `bin/fm-turnend-guard.sh --agy` before failing open with `{}`.
+Inside a T3 Code thread (this fork) that park would hold the thread's ACP prompt open, so `bin/fm-agy-t3-ring.sh` hands the cycle to one detached waiter that rings the thread on a real wake, and the turn ends with `{}` at once; its header owns the ring and its fallback to the park.
+The Stop hook also feeds the dialog mirror's Antigravity writer (`bin/fm-host-mirror.sh hook agy`), which reads each turn from the transcript the payload names and is not yet a verified mirror.
 See `../../../../../docs/supervision-protocols/agy.md` for the complete supervision protocol.

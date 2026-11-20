@@ -118,6 +118,42 @@ SH
   pass "fm-harness.sh: ancestry rejects unrelated agy mentions"
 }
 
+# T3 Code installs the Antigravity CLI under the name of Google's release asset
+# and serves its threads through `antigravity acp`; that process is agy, while
+# look-alikes (the IDE's capitalized binary, a suffixed helper, and a helper
+# T3 runs from the CLI's own providers/antigravity/ data directory) are not.
+test_agy_ancestry_detects_the_t3_antigravity_name() {
+  local fakebin out t3_cli helper comm
+  fakebin=$(fm_fakebin "$TMP_ROOT/anc-antigravity")
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf '%s\n' "${FAKE_PS_COMM:?}"; exit 0 ;;
+  *"args="*) printf '%s\n' "${FAKE_PS_ARGS:?}"; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  t3_cli=/Users/someone/.t3-fork/tools/antigravity-acp/darwin-arm64/versions/d9825e/antigravity
+  out=$(FAKE_PS_COMM=$t3_cli FAKE_PS_ARGS="$t3_cli acp --gemini-dir /p --app-data-dir antigravity-acp" \
+    PATH="$fakebin:$PATH" "$HARNESS")
+  assert_equals agy "$out" "T3 Code's antigravity process must be detected as agy"
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-session-lock-lib.sh"
+  fm_harness_process_matches "$t3_cli" "$t3_cli acp" \
+    || fail "the session lock must accept T3 Code's antigravity process as a harness"
+
+  helper=/Users/someone/.t3-fork/userdata/providers/antigravity/ac0a3d/antigravity-acp/bin/agentapi
+  for comm in /Applications/Antigravity.app/Contents/MacOS/Antigravity /usr/local/bin/antigravity-helper "$helper"; do
+    out=$(FAKE_PS_COMM=$comm FAKE_PS_ARGS="$comm --serve" PATH="$fakebin:$PATH" "$HARNESS")
+    [ "$out" != agy ] || fail "$comm must not detect agy"
+    if fm_harness_process_matches "$comm" "$comm --serve"; then
+      fail "the session lock must not accept $comm as a harness"
+    fi
+  done
+  pass "fm-harness.sh: T3 Code's antigravity CLI process is agy, and its look-alikes are not"
+}
+
 test_agy_claims_no_inherited_launcher_marker() {
   local fakebin out
   # AGENT=1 was observed on a live agy TUI as inherited launcher state, so it
@@ -916,6 +952,7 @@ test_agy_spawn_arms_no_busy_wiring() {
 
 test_agy_ancestry_detects_the_native_command_name
 test_agy_ancestry_rejects_unrelated_mentions
+test_agy_ancestry_detects_the_t3_antigravity_name
 test_agy_claims_no_inherited_launcher_marker
 test_agy_control_mechanics_are_the_verified_ones
 test_agy_busy_tail_needs_the_pinned_status_row

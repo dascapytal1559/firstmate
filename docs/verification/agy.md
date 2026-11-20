@@ -162,11 +162,27 @@ In primary and secondmate homes, watcher commands are classified by the shared a
 Supervision continuity uses synchronous Stop-hook parking via `bin/fm-turnend-guard-agy.sh`, running `bin/fm-watch-arm.sh` (or the supervision host) which waits under the 28800s hook timeout until woken by an incoming event (bounded only when the optional `FM_AGY_PARK_TIMEOUT` is set) and falls back to bounded repair nagging via `bin/fm-turnend-guard.sh --agy`.
 Session lock verification recognizes `agy` process ancestry via `bin/fm-session-lock-lib.sh`.
 
+## Primary inside T3 Code (this fork)
+
+Read on macOS on 2026-11-20 from a T3 Code (Fork) install whose managed Antigravity CLI is version 1.5.13, from the recorded transcript of a FirstMate session that ran there that day, and from the CLI's embedded hook reference; no model call was made.
+
+| Fact | Evidence |
+|---|---|
+| T3 Code runs the CLI as `antigravity` | The managed install's completion record names the executable `antigravity` at version 1.5.13 with no harness sibling, and the fork's driver launches it as `antigravity acp --gemini-dir <profile> --app-data-dir antigravity-acp`. |
+| Hooks are synchronous only | The CLI's embedded hook reference lists, under its current limitations, "Hooks run synchronously and block the agent loop (no async execution)". |
+| Hooks run under T3 Code | The session's `transcript.jsonl` shows the `SessionStart` digest injected at step 1 and two `Stop hook blocked termination: firstmate watcher wake` continuations inside one prompt, which is the turn T3 kept showing as thinking. |
+| Transcript format | `<appDataDir>/brain/<conversation>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl`, one step per line with `step_index`, `source`, `type`, `content`, and `tool_calls`; a captain prompt is a `USER_INPUT` step wrapped in `<USER_REQUEST>`, the first one of a T3 Code session around T3's instructions with the prompt in `<user_request>`, and a final reply is a `PLANNER_RESPONSE` with content and no tool calls. The mirror writer's parser returned every prompt and final reply of that transcript. |
+| Thread id in tool shells | The installed app bundle (built 01:25 that day) merges only the thread's own environment into the CLI's spawn environment, so `T3CODE_THREAD_ID` never reaches it; [pingdotgg/t3code#36495](https://github.com/pingdotgg/t3code/pull/36495), merged 2026-11-18 and in the fork from its 20 Nov upstream merge, passes it. |
+
+`tests/fm-agy-t3-ring.test.sh` pins the ring with a compiled process named `antigravity` and a fake T3 Code server; `tests/fm-host-mirror.test.sh` pins the transcript writer on made-up transcripts in the format above.
+
 ## What is still unproven
 
 The unauthenticated failure mode was never observed; this host's agy runs signed in, so any auth prompt is a fail-loud credential blocker, not a handled dialog.
 No slash-skill invocation form was verified, so skill invocation stays natural language.
 `--continue` and `--conversation` resume were never exercised; recovery uses deterministic relaunch from the brief on disk.
+Inside T3 Code, that the Stop payload's `transcriptPath` names the transcript above and that the final reply is written before the hook runs are unproven until a live session; until then the Antigravity mirror writer is not a verified writer.
+That the CLI leaves a detached waiter running once its Stop hook returns is unproven until a live session in a T3 Code build carrying #36495.
 
 ## Refreshing this record
 
