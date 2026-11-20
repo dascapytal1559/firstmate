@@ -1725,6 +1725,60 @@ test_spawn_launches_upkeep() {
   pass "fm-spawn.sh --backend t3code --upkeep: the launch says upkeep where T3 offers it, a queued upkeep item keeps it, and a T3 without it gets this thread"
 }
 
+# A journal start mirrors upkeep: the launch says journal in place of this
+# thread, an item queued as journal starts as journal without the flag, a T3
+# without journal is sent this thread with a note, and a secondmate start
+# and --upkeep beside it refuse.
+test_spawn_launches_journal() {
+  local id out rc
+  id=$(t3_uid t3journal-spawn)
+  t3_case spawn-journal
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true; w.journal = true;'
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --journal); rc=$?
+  expect_code 0 "$rc" "a journal spawn inside a T3 turn should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.journal === true && a.upkeep === undefined && a.fromThread === undefined && a.causedBy === undefined)')" = true ] \
+    || fail "the launch says journal in place of this thread, got '$(t3_launch_field 'JSON.stringify({ journal: a.journal, upkeep: a.upkeep, fromThread: a.fromThread })')'"
+  assert_not_contains "$out" "cannot launch a thread as journal work" "a T3 with journal needs no note"
+  id=$(t3_uid t3journal-queued)
+  t3_case spawn-journal-queued
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.journal = true;'
+  printf 'journal\n' > "$CASE_DIR/state/$id.queued-origin"
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a spawn of an item queued as journal should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.journal === true && a.fromThread === undefined)')" = true ] \
+    || fail "an item queued as journal starts as journal from any turn"
+  assert_absent "$CASE_DIR/state/$id.queued-origin" "the spawn drops the journal record once the thread carries it"
+  id=$(t3_uid t3journal-upstream)
+  t3_case spawn-journal-upstream
+  t3_worker_setup "$id"
+  t3_origin_world
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --journal); rc=$?
+  expect_code 0 "$rc" "a journal spawn on a T3 without journal should still launch"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.journal === undefined && a.fromThread.threadId === "coord")')" = true ] \
+    || fail "a T3 without journal is sent this thread, got '$(t3_launch_field 'JSON.stringify({ journal: a.journal, fromThread: a.fromThread })')'"
+  assert_contains "$out" "note: this T3 cannot launch a thread as journal work" "the spawn says the work counts where this turn's does"
+  t3_case spawn-journal-secondmate
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CASE_DIR/state" FM_DATA_OVERRIDE="$CASE_DIR/data" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$(t3_uid t3journal-mate)" --secondmate --journal 2>&1); rc=$?
+  expect_code 1 "$rc" "a secondmate with --journal must refuse"$'\n'"$out"
+  assert_contains "$out" "--journal applies to a fresh ship or scout start" "the refusal names the flag"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused journal secondmate launches nothing, got '$(t3_dispatch_types)'"
+  id=$(t3_uid t3journal-both)
+  t3_case spawn-journal-both
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true; w.journal = true;'
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --journal --upkeep); rc=$?
+  expect_code 1 "$rc" "--journal beside --upkeep must refuse"$'\n'"$out"
+  assert_contains "$out" "--upkeep and --journal are exclusive" "the refusal names both flags"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused label pair launches nothing, got '$(t3_dispatch_types)'"
+  pass "fm-spawn.sh --backend t3code --journal: the launch says journal where T3 offers it, a queued journal item keeps it, a T3 without it gets this thread, and it never rides beside upkeep"
+}
+
 # A steer from inside a T3 turn keeps this thread and the steer's time in its
 # inbox record, and the record's doorbell carries it; one T3 refuses never
 # stops the doorbell.
@@ -3903,6 +3957,7 @@ test_kill_stops_delegated_threads
 test_turn_start_carries_its_origin_and_never_drops_the_message
 test_spawn_sends_this_thread_as_its_origin
 test_spawn_launches_upkeep
+test_spawn_launches_journal
 test_send_records_its_origin_and_rings_with_it
 test_steer_rings_a_failed_thread
 test_steer_refuses_archived_or_missing_thread

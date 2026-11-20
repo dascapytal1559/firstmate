@@ -1824,11 +1824,53 @@ test_launch_says_upkeep_where_declared() {
   pass "fm-t3-mcp launch --upkeep: upkeep replaces the origin where T3 declares it, and a T3 without it gets the origin"
 }
 
+# --journal rides like --upkeep: in place of the reference where the launch
+# declares journal, the reference elsewhere, and never beside --upkeep.
+test_launch_says_journal_where_declared() {
+  local project ref thread
+  ref='{"threadId":"coord","at":"2026-11-18T09:00:00.000Z"}'
+  fresh_case journal-launch '{"causedBy":true,"fromThread":true,"upkeep":true,"journal":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title item --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --journal
+  expect_code 0 "$RC" "a journal launch succeeds: $ERR"
+  thread=$(field "$OUT" threadId)
+  assert_equals true "$(field "$OUT" journal)" "the result says the launch was journal work"
+  assert_equals false "$(field "$OUT" upkeep)" "and not upkeep"
+  assert_equals "" "$(field "$OUT" fromThread)" "and that no reference was sent"
+  assert_equals true "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" journal)" "the launch says journal"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "in place of the reference"
+  assert_equals true "$(t3_fake_field "threads.$thread.journal")" "T3 binds the thread's birth as journal work"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --from-thread "$ref"
+  expect_code 0 "$RC" "a launch without --journal succeeds: $ERR"
+  assert_equals false "$(field "$OUT" journal)" "a launch without --journal is not journal work"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" journal)" "and says nothing of it"
+  local before
+  before=$(t3_fake_calls t3_thread_launch | wc -l)
+  mcp launch --project "$project" --title both --model-selection "$SEL" --worktree "$WT" --upkeep --journal
+  expect_code 2 "$RC" "--upkeep beside --journal is a usage error"
+  assert_contains "$OUT$ERR" "exclusive" "the refusal says the two are exclusive"
+  assert_equals "$before" "$(t3_fake_calls t3_thread_launch | wc -l)" "a refused label pair launches nothing"
+  fresh_case journal-undeclared '{"causedBy":true,"fromThread":true,"upkeep":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title item --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --journal
+  expect_code 0 "$RC" "a T3 without journal still launches: $ERR"
+  assert_equals false "$(field "$OUT" journal)" "the result says the launch was not journal work"
+  assert_equals "$ref" "$(field "$OUT" fromThread)" "and names the reference it sent instead"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" journal)" "an undeclared journal is never sent"
+  assert_equals "$ref" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "the launch carries the reference as without --journal"
+  pass "fm-t3-mcp launch --journal: journal replaces the origin where T3 declares it, a T3 without it gets the origin, and it never rides beside upkeep"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_usage_claim_targets_values_and_refusals
 test_restart_request_names_its_origin
 test_launch_and_send_carry_the_origin
 test_launch_says_upkeep_where_declared
+test_launch_says_journal_where_declared
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
 test_login_refuses_other_ceilings

@@ -23,6 +23,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Nightly clear check](FORK.md#nightly-clear-check): a nightly check lists every clear of FirstMate's session and flags one that may have lost the thread.
 - [Nightly usage-labels check](FORK.md#nightly-usage-labels-check): a nightly check raises one backlog item when any of the day's T3 Code usage has no phone or computer label.
 - [Pointer to the previous dialog](FORK.md#pointer-to-the-previous-dialog): a fresh FirstMate session is told where the previous conversation is saved.
+- [Antigravity main in T3 Code](FORK.md#antigravity-main-in-t3-code): FirstMate's own session can run on Antigravity in a T3 Code thread, with turns that end and supervision between them.
 - [Alerts only when needed](FORK.md#alerts-only-when-needed): a turn nobody typed into sounds only when it needs the captain.
 - [Work records its cause](FORK.md#work-records-its-cause): each worker, steer, note, and wake names the T3 thread it comes from, for T3's phone and computer split.
 - [Live thread on record](FORK.md#live-thread-on-record): anything that must reach FirstMate can find its live T3 thread.

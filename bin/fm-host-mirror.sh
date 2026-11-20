@@ -23,6 +23,16 @@
 # submits its Stop-hook rewake inside <task-notification>, with no other field
 # to tell it from a typed prompt (tests/fm-host-mirror-live-e2e.test.sh proves
 # it).
+# Antigravity (fork) writes through its Stop hook (bin/fm-turnend-guard-agy.sh
+# passes every payload to `hook agy`). Its payload carries no dialog text, only
+# transcriptPath, so the writer reads the conversation's own JSONL transcript
+# (transcript_full.jsonl beside it when present, the untruncated copy), at most
+# its last 2000 steps: the turn is every step after the final reply that
+# precedes the newest USER_INPUT step, its captain text is each USER_INPUT
+# step's <USER_REQUEST> body (the <user_request> inside it when T3 Code wraps
+# its first prompt in instructions), its MAIN text is the turn's last
+# PLANNER_RESPONSE with content and no tool calls, and each id is
+# "<conversationId>:<step_index>".
 # Every writer is a silent no-op unless this home runs the supervision host
 # for the writer's primary (fm_supervision_host_enabled, checked before
 # anything else runs: by default on Claude, never with an `off` file), the
@@ -89,7 +99,8 @@
 # first captain prompt (docs/supervision-host.md "The dialog mirror"): Claude
 # and Cursor. The host runs the attended posture only on those
 # (fm_supervision_host_attended_ready), and every other primary keeps the
-# attended behavior it has without the host.
+# attended behavior it has without the host. The Antigravity writer is not on
+# the list until a live session proves it.
 #
 # Usage:
 #   fm-host-mirror.sh hook <harness>        a prompt-submit or turn-end hook payload on stdin
@@ -266,11 +277,56 @@ append_entry() {  # <captain|main> <text> [<id>]
   fm_lock_release "$LOCK"
 }
 
+# The Antigravity writer's turn (WRITERS above): one compact JSON entry
+# {tag, id, text} per line, oldest first. Needs --arg conv; reads steps with -Rn.
+# The text after the first $o and before the last $c is cut with split, never
+# with index offsets: jq 1.7 reports a string index in bytes but slices in
+# characters, so any multi-byte character before the tag shifts the cut.
+# shellcheck disable=SC2016  # $conv, $s, $u, $b, $o, $c, $r and $t are jq variables.
+AGY_TURN='def between($o; $c): if contains($o) then (split($o)[1:] | join($o))
+      | if contains($c) then split($c)[:-1] | join($c) else null end
+    else null end;
+  def request: (between("<USER_REQUEST>"; "</USER_REQUEST>") // .) as $r
+    | ($r | between("<user_request>"; "</user_request>") // $r)
+    | sub("\\A\\s+"; "") | sub("\\s+\\z"; "");
+  def final: .type == "PLANNER_RESPONSE" and ((.content // "") | type == "string" and length > 0)
+    and ((.tool_calls // []) | length == 0);
+  [inputs | fromjson? | select(type == "object")] as $s
+  | ([range(0; $s | length) | select($s[.].type == "USER_INPUT")] | last) as $u
+  | if $u == null then empty else
+      ([range(0; $u) | select($s[.] | final)] | last // -1) as $b
+      | $s[$b + 1:]
+      | (.[] | select(.type == "USER_INPUT" and (.content | type) == "string")
+          | (.content | request) as $t | select($t != "")
+          | {tag: "captain", id: "\($conv):\(.step_index)", text: $t}),
+        ([.[] | select(final)] | last // empty
+          | {tag: "main", id: "\($conv):\(.step_index)", text: (.content | sub("\\s+\\z"; ""))})
+    end'
+
+agy_turn_entries() {  # <payload>
+  local transcript conv full
+  transcript=$(printf '%s' "$1" | jq -r 'if type == "object" then (.transcriptPath // empty | strings) else empty end' 2>/dev/null)
+  case "$transcript" in /*) ;; *) return 0 ;; esac
+  conv=$(printf '%s' "$1" | jq -r '(.conversationId // "") | tostring' 2>/dev/null)
+  full="${transcript%/*}/transcript_full.jsonl"
+  [ -f "$full" ] && [ -r "$full" ] || full=$transcript
+  [ -f "$full" ] && [ -r "$full" ] || return 0
+  tail -n 2000 "$full" 2>/dev/null | jq -Rnc --arg conv "$conv" "$AGY_TURN" 2>/dev/null
+}
+
 case "$1" in
   hook)
     [ "$#" -eq 2 ] || exit 0
     PAYLOAD=$(cat 2>/dev/null || true)
     [ -n "$PAYLOAD" ] || exit 0
+    if [ "$2" = agy ]; then
+      writer_in_scope || exit 0
+      agy_turn_entries "$PAYLOAD" | while IFS= read -r ENTRY; do
+        append_entry "$(printf '%s' "$ENTRY" | jq -r .tag)" "$(printf '%s' "$ENTRY" | jq -r .text)" \
+          "$(printf '%s' "$ENTRY" | jq -r .id)" || true
+      done
+      exit 0
+    fi
     if [ "$2" = claude ]; then
       # shellcheck source=bin/fm-hook-host-lib.sh
       . "$SCRIPT_DIR/fm-hook-host-lib.sh"

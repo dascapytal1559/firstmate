@@ -32,13 +32,17 @@ unset _FM_SESSION_LOCK_LIB_DIR
 # Known harness command names; extend when a new adapter is verified. omp and
 # agy are anchored exactly like pi: their process names are the bare words `omp`
 # (verified, omp 18.1.11) and `agy`, and a substring match would claim ompd or
-# comp.
-FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$'
+# comp. `antigravity` is the same Antigravity CLI under the name of Google's
+# release asset, which is how T3 Code installs and runs it (`antigravity acp`).
+FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$|^omp$|^agy$|^antigravity$'
 
 # The same harnesses as exact executable names. Keep in sync with
 # FM_HARNESS_RE. Used only for the stricter path evidence below, where the
 # loose regex would also match ordinary firstmate paths such as
-# bin/fm-claude-stop-autoarm.sh.
+# bin/fm-claude-stop-autoarm.sh. `antigravity` is deliberately absent: its
+# basename alone identifies it, while T3 Code keeps that CLI's own data and
+# helper binaries under a providers/antigravity/ directory, so a component
+# match would claim every helper started from there.
 FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi omp agy)
 
 # Print the exact harness name carried by executable path $1 - its own basename
@@ -883,6 +887,22 @@ fm_session_lock_owned_by_self() {
   fm_harness_pid_listed "$lock_pid" "$pids" && return 0
   fm_session_lock_same_session "$state" "$pids" || return 1
   fm_harness_pid_alive "$lock_pid"
+}
+
+# True when state dir $1 still records session-lock holder $2, whose live
+# identity (fm_session_pid_identity) is still exactly $3. This is the ownership
+# test for a process with no harness ancestry of its own, such as a detached
+# waiter its session started: the starter captured both values while
+# fm_session_lock_owned_by_self held, so a changed lock line, an exited holder,
+# or a reused pid each fail closed. Callers source bin/fm-wake-lib.sh, which owns
+# the identity format.
+fm_session_lock_held_by() {  # <state> <pid> <identity>
+  local state=$1 pid=${2:-} identity=${3:-} lock_pid current
+  fm_session_pid_valid "$pid" && [ -n "$identity" ] || return 1
+  lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+  [ "$lock_pid" = "$pid" ] || return 1
+  current=$(fm_session_pid_identity "$pid" 2>/dev/null) || return 1
+  [ "$current" = "$identity" ]
 }
 
 # True when state dir $1 records a lock owner outside this process's contiguous

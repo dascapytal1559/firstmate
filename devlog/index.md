@@ -1981,3 +1981,56 @@ The choice to confirm: a worker he stopped by hand still reads as cut, so one wh
 
 The evidence is the T3 backend suite against the fake T3 server: a seven-worker case (one cancelled, one stopped, one resumed and running, one failed on a limit, three idle) where exactly the two cut turns are messaged and a second run does nothing.
 [FORK.md](../FORK.md#restart-recovery) says how this now sits against both upstreams.
+
+## 72. Journal items count as Journal whenever they start (20 November 2026)
+
+T3 Code's Usage page now splits usage by process.
+The ask:
+
+> also can we add breakdown by process: journal, routine, others
+
+Offered a separate slice for supervision, his choice was "Journal, Routines, Other, exactly as you said".
+
+T3 decides the process from the label it already keeps on each turn and launch, so most of it needed nothing from FirstMate: a voice journal's filing turn is already claimed for the phone, which T3 now labels as journal work, and every worker launched in that turn inherits it.
+The gap was a journal item started later, such as one he approves the next morning or a recovery start after a restart: that worker counted wherever the starting turn did, usually as Other.
+
+What was built, on FirstMate's side:
+
+- **A spawn can say "journal".** `fm-spawn.sh --journal` launches the worker's T3 thread as journal work, whichever turn starts it, mirroring `--upkeep` for the bedtime routine.
+- **It survives a wait.** A start held back for capacity or account room records journal on its backlog item, so the later start is journal work too, and a wake about it before then counts to the phone.
+- **One label at a time.** `--journal` beside `--upkeep` is refused before anything launches, since T3 refuses that launch.
+- **A T3 without it changes nothing.** The launch then goes as before, with a note.
+
+The choice made: an item started inside the journal's own filing turn still needs no flag, because that turn's own label keeps the device the journal actually came from, while `--journal` always counts to the phone.
+
+The evidence is the touched suites, run against the fake T3 server, which now models the journal launch; no live T3 was called.
+
+## 73. FirstMate can run on Antigravity inside T3 Code (20 November 2026)
+
+![Before: the Stop hook waits inside the turn, so T3 shows it thinking and its 15-minute quiet bound fails the turn. After: the hook hands the wait to a detached waiter, the turn ends at once, and a real wake is rung into FirstMate's own thread](media/agy-t3-ring.svg)
+
+On 20 November the main FirstMate thread was switched from Claude to Antigravity (Gemini 4 Neon) in T3 Code.
+Within minutes:
+
+> I see endless thinking
+>
+> (20 November 2026)
+
+Then:
+
+> Lets revert for now and give me a way for claude to fix this issue
+
+And back on Claude:
+
+> Lets fix this
+
+The Antigravity session's own notes named four blockers, and each traced to one cause:
+
+- **Not recognized.** T3 Code installs the Antigravity CLI under the name of Google's release, `antigravity`, while FirstMate knew it only as `agy`, so the session could not take its lock. FirstMate now accepts that exact name and nothing that merely contains it.
+- **Endless thinking.** Antigravity runs every hook synchronously, as its own hook reference says, and FirstMate's Stop hook waited for the next wake inside the hook. In a terminal that is harmless; in T3 Code it kept the turn open, so T3 showed FirstMate thinking between turns, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent. Now, inside a T3 Code thread, the hook hands the wait to one detached waiter and the turn ends at once; the waiter rings FirstMate's own thread when a real wake arrives, the shape upstream already uses for Codex. If the waiter cannot start, that session falls back to the old wait, and outside T3 Code nothing changes. Two gaps remain, each leaving FirstMate unsupervised until the captain's next message: if T3 refuses the ring three times, the waiter exits and nothing rings the thread again, with the wake held in its queue, and that next turn's end falls back to the old wait; and a wake rung while the Stop hook is still open goes into the ending turn, so if T3 or Antigravity drops it, nothing records it. How the second behaves live is unproven.
+- **No thread id in tool shells.** The T3 Code app installed that morning was built before the upstream T3 Code fix that passes the thread id to Antigravity's tools (merged 18 November and already in the fork's source); a rebuild carries it, and nothing on FirstMate's side needed changing.
+- **No dialog record.** The previous-dialog pointer had no Antigravity writer. The Stop hook now records each turn's prompts and final reply from the conversation's own transcript, on a home that runs the supervision host. It stays an unverified writer until a live session proves it, so until then the supervision session still hands every attended wake to the main session on Antigravity.
+
+The evidence: six waiter cases against a fake T3 server, driven by a compiled process named `antigravity` that holds the lock, covering the clean turn end, one waiter across turns, the ring, a refused ring (where the case itself starts the next turn, standing in for the captain), a moved lock, and a waiter that never confirms; the dialog writer on made-up transcripts in Antigravity's format; and the writer's parser run read-only over the real transcript of that session, where every prompt and final reply came out.
+What remains is the captain's live check on a rebuilt T3 Code.
+[FORK.md](../FORK.md#antigravity-main-in-t3-code) says how this sits against upstream.

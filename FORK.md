@@ -278,12 +278,31 @@ A fresh FirstMate session, after an automatic clear or the captain's own `/clear
 Upstream already records the captain's prompts and FirstMate's final replies for its supervision host, and treats a restart as a non-event; that dialog record is upstream's, and the pointer below is this fork's.
 The fork's session start adds one short `PREVIOUS DIALOG` section that names that saved dialog and a command that prints its newest entries, and says to read it only when the captain's first message seems to answer or refer to something it does not quote.
 It does not carry the dialog itself: the captain usually replies by quoting a message, and T3 Code puts the quoted text into that message, so the dialog is rarely needed, and carrying it cost about 1,900 tokens at every session start.
-It prints nothing when no earlier session was recorded, so it needs a primary whose dialog upstream records, Claude or Cursor, with the supervision host on.
+It prints nothing when no earlier session was recorded, so it needs a primary whose dialog is recorded, Claude or Cursor by upstream or Antigravity by this fork (below), with the supervision host on.
 Approved by the captain on 2026-11-15, with the automatic clearing above, and changed from carrying the last exchange to this pointer on 2026-11-17 at the captain's request.
 Details: [the dialog mirror](docs/supervision-host.md#the-dialog-mirror) and [`fm-host-mirror.sh`](bin/fm-host-mirror.sh).
 
 Upstream: partly ([#5707](https://github.com/kunchenguid/firstmate/pull/5707) records the dialog).
 T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#auto-clearing-cold-clear).
+
+### Antigravity main in T3 Code
+
+FirstMate's own session can run on Antigravity (Gemini) in a T3 Code thread: it takes the session lock, each turn ends cleanly, and supervision keeps running between turns.
+Upstream supports Antigravity as a primary in its own terminal, where the Stop hook parks supervision in place, because Antigravity runs every hook synchronously and offers no asynchronous wake.
+In a T3 Code thread that park kept the thread's turn open, so T3 showed FirstMate thinking without end, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent.
+So inside a T3 Code thread the fork's Stop hook ends the turn at once and hands supervision to one detached waiter, the shape of upstream's asynchronous Codex park.
+When a real wake arrives, the waiter rings FirstMate's own thread with a Firstmate operational doorbell, which starts a turn or reaches the one running; a quiet fleet spends no turns.
+If the waiter cannot start, that session falls back to upstream's park; outside a T3 Code thread nothing changes.
+If T3 refuses the waiter's message, three tries in a row, the waiter exits and nothing rings the thread again: FirstMate is unsupervised, with the wake held in its durable queue, until the captain's next message, whose turn end then falls back to upstream's park.
+A wake rung while the Stop hook is still open (one already pending at turn end, or one arriving just as the hook returns) reaches the turn that is ending, and relies on T3 or Antigravity turning it into a fresh turn; if it is dropped, FirstMate is likewise unsupervised until the captain's next message, and nothing records it.
+A live session has not yet shown which happens.
+T3 Code runs the Antigravity CLI under the name `antigravity`, which FirstMate now recognizes as Antigravity alongside `agy`.
+The Stop hook also records the captain's prompts and FirstMate's replies from the conversation's own transcript, so the [previous-dialog pointer](#pointer-to-the-previous-dialog) works after an Antigravity session.
+It needs a T3 Code build that passes the thread id to Antigravity's tools ([pingdotgg/t3code#36495](https://github.com/pingdotgg/t3code/pull/36495)), and the dialog record needs a home that runs the supervision host (`config/supervision-host`).
+Asked for by the captain on 2026-11-20.
+Details: [`fm-agy-t3-ring.sh`](bin/fm-agy-t3-ring.sh) and [the Antigravity protocol](docs/supervision-protocols/agy.md).
+
+Upstream: none; upstream runs an Antigravity primary only in its own terminal.
 
 ### Alerts only when needed
 

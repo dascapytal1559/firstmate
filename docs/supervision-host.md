@@ -73,7 +73,7 @@ The host's header owns the output contract they read.
 | omp | the watch extension, `.omp/extensions/fm-primary-omp-watch.ts`, which restarts its own successor after each close | the extension's `watcher` follow-up |
 | Grok | the model's tracked background call, rendered as `bin/fm-supervision-host.sh park` at session start | the background task's completion notification |
 | Codex | the foreground checkpoint, `bin/fm-watch-checkpoint.sh`, or the native Stop park on a home that [opts in](configuration.md#codex-native-stop-park-configcodex-stop-park) | checkpoint output, or the native thread queue; see [the Codex protocol](supervision-protocols/codex.md) |
-| Antigravity (`agy`) | the Stop-hook park, `bin/fm-turnend-guard-agy.sh` | the park's `watcher` follow-up |
+| Antigravity (`agy`) | the Stop-hook park, `bin/fm-turnend-guard-agy.sh`; inside a T3 Code thread (fork) its detached waiter, `bin/fm-agy-t3-ring.sh` | the park's `watcher` follow-up; in a T3 Code thread a watcher doorbell rung into the thread |
 
 Hook, plugin, extension, and checkpoint owners pass their harness as the primary pin.
 Grok's model-owned call relies on primary detection.
@@ -164,6 +164,7 @@ Claude and Cursor have writers, proven against the real harness to record the se
 Codex has no verified dialog-mirror writer yet, including on its native Stop-park path, so attended host handling remains pass-through.
 Grok and OpenCode have no writer, because their session takes the fleet lock during its first turn, so that turn's captain prompt could never be recorded.
 omp has no verified writer, because no omp was available to prove one against.
+Antigravity (this fork) has a writer in its Stop hook that reads each turn from the conversation's own transcript, which feeds the `PREVIOUS DIALOG` pointer, but it is not verified until a live session proves it, so attended host handling stays pass-through there too.
 
 ## One wake
 

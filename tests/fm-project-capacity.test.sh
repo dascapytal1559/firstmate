@@ -606,6 +606,24 @@ test_deferred_upkeep_start_stays_upkeep() {
   pass "an upkeep start deferred at capacity stays upkeep for its later start"
 }
 
+# A journal start deferred at capacity records journal as its item's queued
+# origin, exactly as upkeep does, and a batch passes --journal to every pair.
+test_deferred_journal_start_stays_journal() {
+  local case_dir home out rc=0
+  case_dir=$(make_case journal-deferred task-c task-d)
+  home="$case_dir/home"
+  declare_capacity "$home" "project 1"
+  write_live "$home" live-a "$case_dir/project"
+  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" task-c "$case_dir/project" --mode no-mistakes --yolo off --journal) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a journal spawn beyond capacity was not deferred: $out"
+  assert_equals journal "$(cat "$home/state/task-c.queued-origin" 2>/dev/null)" "a deferred journal start did not record journal on its item"
+  rc=0
+  out=$(run_spawn "$case_dir" "$home" "$case_dir/unused" "task-d=$case_dir/project" --mode no-mistakes --yolo off --journal) || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a journal batch beyond capacity was not deferred: $out"
+  assert_equals journal "$(cat "$home/state/task-d.queued-origin" 2>/dev/null)" "a batch did not pass --journal to its pair"
+  pass "a journal start deferred at capacity stays journal for its later start"
+}
+
 # Orca owns its own worktrees and never takes the Treehouse allocation lock, so
 # a declared capacity is what makes an Orca spawn take the shared project lock,
 # even from an uncapped clone of a capped origin whose worker would still hold a
@@ -754,6 +772,7 @@ test_failed_spawn_after_admission_holds_no_place
 test_unreadable_declaration_refuses_every_spawn
 test_batch_reports_a_deferred_pair
 test_deferred_upkeep_start_stays_upkeep
+test_deferred_journal_start_stays_journal
 test_orca_spawn_is_admitted_under_the_shared_project_lock
 test_lane_capacity_gate_is_opt_in
 test_lane_capacity_gate_defers_without_leaving_anything_behind

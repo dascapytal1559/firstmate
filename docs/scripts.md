@@ -117,6 +117,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-job.sh`              | Run a worker's long command as a detached job that an app restart cannot stop, record it, deliver its result through the steering inbox, and hold a plain cleanup until it ends |
 | `fm-gate-refuse-lib.sh`  | Shared gate-context lifecycle boundary for real and lab homes                      |
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
+| `fm-agy-t3-ring.sh`      | Inside a T3 Code thread, take the Antigravity primary's watcher cycle out of its Stop hook into one detached waiter that rings the thread on a wake (fork) |
 | `fm-codex-stop-park.sh`  | On an opted-in home, register verified native Codex sessions and park supervision in the asynchronous Stop hook, delivering wakes through the native thread queue |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe watcher: absorb benign wakes, detect stalled local-secondmate wake queues, and exit on actionable ones |

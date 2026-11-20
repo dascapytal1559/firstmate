@@ -593,6 +593,40 @@ test_host_outside_the_lock_owner_stands_down() {
   pass "host: a host outside the session-lock owner stands down without arming"
 }
 
+# An owner with no harness ancestry (the Antigravity T3 ring, bin/fm-agy-t3-ring.sh)
+# binds the host to the lock holder it proved instead: that binding owns
+# supervision only while the lock still names that holder under that identity.
+# The owner polls its own ownership and stops the host, so stopping a bound host
+# must stop its cycle too.
+test_host_bound_to_the_lock_holder_owns_supervision_outside_its_tree() {
+  local home out other identity host watcher
+  home=$(make_home lock-bound attended)
+  "$FAKE_CLAUDE" -c 'sleep 60; :' &
+  other=$!
+  printf '%s\n' "$other" >> "$home/claude-pids"
+  printf '%s\n' "$other" > "$home/state/.lock"
+  identity=$(bash -c '. "$1/bin/fm-wake-lib.sh"; fm_pid_identity "$2"' _ "$ROOT" "$other") \
+    || fail "fixture: could not read the holder's identity"
+  out=$(FM_HOME="$home" FM_SUPERVISION_HOST_LOCK_PID="$other" FM_SUPERVISION_HOST_LOCK_IDENTITY="not-its-identity" \
+    PATH="$home/fakebin:$PATH" "$HOST" park 2>&1)
+  assert_contains "$out" "supervision-host stood down: this session does not own supervision" \
+    "a binding whose identity no longer matches the holder must stand down"
+  watcher_live "$home" && fail "a host with a stale binding started a watcher"
+
+  FM_HOME="$home" FM_CREW_STATE_BIN="$home/fakebin/fm-crew-state.sh" PATH="$home/fakebin:$PATH" \
+    FM_SUPERVISION_HOST_PRIMARY=agy FM_SUPERVISION_HOST_LOCK_PID="$other" FM_SUPERVISION_HOST_LOCK_IDENTITY="$identity" \
+    "$HOST" park > "$home/host.out" 2>&1 &
+  host=$!
+  wait_until 150 watcher_live "$home" || fail "a host bound to the live lock holder must own a watcher cycle: $(cat "$home/host.out")"
+  watcher=$(cat "$home/state/.watch.lock/pid")
+  assert_no_re 'stood down' "$home/host.out" "a host bound to the live lock holder must not stand down"
+  kill -TERM "$host"
+  wait_until 200 sh -c '! kill -0 "$1" 2>/dev/null && ! kill -0 "$2" 2>/dev/null' _ "$host" "$watcher" \
+    || fail "a bound host stopped by its owner must stop its watcher too"
+  kill -TERM "$other" 2>/dev/null || true
+  pass "host: a host bound to the live lock holder owns supervision outside its tree, and a stale binding stands down"
+}
+
 test_tagged_lock_holder_reaches_the_engine_whole() {
   local home first
   home=$(make_home tagged-holder away)
@@ -682,5 +716,6 @@ fm_test_run \
   test_unchanged_held_outcome_reaches_the_captain_once_until_a_new_event \
   test_unverified_engine_hands_every_away_wake_to_main \
   test_host_outside_the_lock_owner_stands_down \
+  test_host_bound_to_the_lock_holder_owns_supervision_outside_its_tree \
   test_tagged_lock_holder_reaches_the_engine_whole \
   test_superseded_host_leaves_the_owner_untouched

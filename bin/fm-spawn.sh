@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait] [--upkeep]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait] [--upkeep]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--branch-prefix <prefix>] [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait] [--upkeep|--journal]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--base-branch <branch>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--dispatch-override <reason>] [--fable-floor-override <reason>] [--hermes-profile <name>] [--account <entry>] [--t3-instance <id>] [--backend <name>] [--herdr-resume-lock-wait] [--upkeep|--journal]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -796,6 +796,16 @@
 #   it defers (project or lane capacity, worker sizing) records upkeep as the
 #   item's queued origin, so the item's later start is upkeep without the
 #   flag. Refused on --secondmate and on a relaunch.
+#   --journal starts a ship or scout from a voice journal's items outside the
+#   journal's own filing turn, such as an item approved later or a recovery
+#   start, so it counts as journal work to the phone whichever turn starts
+#   it (docs/t3code-backend.md "Where work comes from"). It mirrors --upkeep
+#   exactly: on backend t3code the launch says journal in place of the
+#   origin where T3 offers it, a T3 without it is sent that origin with a
+#   note, a deferred start records journal as the item's queued origin, and
+#   it is refused on --secondmate, on a relaunch, and beside --upkeep. A
+#   start in the filing turn needs neither: its origin is that turn, which
+#   T3 already counts as journal.
 set -eu
 
 # Template replacements must stay literal on Bash 5.2+ and stock macOS Bash.
@@ -1075,6 +1085,7 @@ ACCOUNT_SET=0
 T3_INSTANCE_ARG=
 T3_INSTANCE_SET=0
 UPKEEP=0
+JOURNAL=0
 # bin/fm-size.sh's exit when no Claude account has room for the start.
 SPAWN_SIZING_QUEUED_EXIT=76
 RELAUNCH=0
@@ -1169,6 +1180,7 @@ for a in "$@"; do
   --relaunch) RELAUNCH=1 ;;
   --herdr-resume-lock-wait) HERDR_RESUME_LOCK_WAIT=1 ;;
   --upkeep) UPKEEP=1 ;;
+  --journal) JOURNAL=1 ;;
   --harness) want_value=harness ;;
   --harness=*)
     HARNESS_ARG=${a#--harness=}
@@ -1317,9 +1329,18 @@ if [ "$T3_INSTANCE_SET" -eq 1 ]; then
     exit 1
   }
 fi
-# Upkeep is the birth of a fresh ship or scout thread (header).
+# Upkeep and journal are the birth of a fresh ship or scout thread, and one
+# thread is born as only one of them (header).
 [ "$UPKEEP" -eq 0 ] || { [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ]; } || {
   echo "error: --upkeep applies to a fresh ship or scout start; a secondmate's own work is not upkeep, and a relaunch keeps its thread's birth" >&2
+  exit 1
+}
+[ "$JOURNAL" -eq 0 ] || { [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ]; } || {
+  echo "error: --journal applies to a fresh ship or scout start; a secondmate's own work is not journal work, and a relaunch keeps its thread's birth" >&2
+  exit 1
+}
+[ "$UPKEEP" -eq 0 ] || [ "$JOURNAL" -eq 0 ] || {
+  echo "error: --upkeep and --journal are exclusive; a thread is born as upkeep or as journal work, not both" >&2
   exit 1
 }
 # A parent-delivered carrier replaces this home's own resolution, so it is
@@ -2277,6 +2298,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ "$BASE_BRANCH_SET" -eq 0 ] || shared_args+=(--base-branch "$BASE_BRANCH")
   [ "$HERDR_RESUME_LOCK_WAIT" -eq 0 ] || shared_args+=(--herdr-resume-lock-wait)
   [ "$UPKEEP" -eq 0 ] || shared_args+=(--upkeep)
+  [ "$JOURNAL" -eq 0 ] || shared_args+=(--journal)
   [ "$ACCOUNT_SET" -eq 0 ] || shared_args+=(--account "$ACCOUNT_ARG")
   [ "$T3_INSTANCE_SET" -eq 0 ] || shared_args+=(--t3-instance "$T3_INSTANCE_ARG")
   for pair in "${POS[@]}"; do
@@ -2318,21 +2340,23 @@ fm_task_id_creation_valid "$ID" || {
 # Where this task comes from (bin/fm-t3-origin-lib.sh), settled before
 # anything is leased or written, so its time is when the spawn began. A
 # backlog item queued with a reference sends that one, and one queued as
-# upkeep starts as upkeep, whatever turn launches it, unless
-# FM_T3_FROM_THREAD says otherwise.
+# upkeep or journal starts as that, whatever turn launches it, unless
+# FM_T3_FROM_THREAD or this start's own --upkeep or --journal says otherwise.
 SPAWN_ORIGIN=$(fm_t3_origin_resolve) || exit 1
 if [ -z "${FM_T3_FROM_THREAD:-}" ]; then
   SPAWN_QUEUED_ORIGIN=$(fm_t3_origin_queued "$STATE" "$ID")
   case "$SPAWN_QUEUED_ORIGIN" in
     '') ;;
-    upkeep) UPKEEP=1 ;;
+    upkeep) [ "$JOURNAL" -eq 1 ] || UPKEEP=1 ;;
+    journal) [ "$UPKEEP" -eq 1 ] || JOURNAL=1 ;;
     *) SPAWN_ORIGIN=$SPAWN_QUEUED_ORIGIN ;;
   esac
 fi
 # spawn_defer <status>: leave the item queued for a later start; an upkeep
-# start records upkeep on it, so that start is upkeep too (header).
+# or journal start records that on it, so that start is one too (header).
 spawn_defer() {
   [ "$UPKEEP" -eq 0 ] || fm_t3_origin_queue_upkeep "$STATE" "$ID"
+  [ "$JOURNAL" -eq 0 ] || fm_t3_origin_queue_journal "$STATE" "$ID"
   exit "$1"
 }
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" = ship ]; then
@@ -6602,8 +6626,9 @@ spawn_t3code_env_assemble() {
 # mis-bound thread may not read back archived; in each case the abort keeps
 # the lease (spawn_abort_cleanup).
 spawn_t3code_launch_thread() {
-  local title=$W worktree='' branch_dir=$PROJ_ABS env_file='' instructions_file='' upkeep='' rc=0
-  [ "$UPKEEP" -eq 0 ] || upkeep=upkeep
+  local title=$W worktree='' branch_dir=$PROJ_ABS env_file='' instructions_file='' label='' rc=0
+  [ "$UPKEEP" -eq 0 ] || label=upkeep
+  [ "$JOURNAL" -eq 0 ] || label=journal
   if [ "$KIND" != secondmate ]; then
     # The thread title is the crew card's label in T3, so it reads as the
     # backlog item's title, falling back to the window alias. It is display
@@ -6627,7 +6652,7 @@ require("fs").writeFileSync(file, JSON.stringify(env), { mode: 0o600 });
   T3CODE_CREATE_UNCERTAIN=1
   T=$(fm_backend_t3code_thread_create "$T3CODE_PROJECT_ID" "$title" \
     "$(git -C "$branch_dir" branch --show-current 2>/dev/null || true)" "$worktree" "$T3CODE_MODEL_SELECTION" \
-    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD" "$SPAWN_ORIGIN" "$upkeep") || rc=$?
+    "$env_file" "$instructions_file" "$T3CODE_PARENT_THREAD" "$SPAWN_ORIGIN" "$label") || rc=$?
   rm -f "$env_file" "$instructions_file"
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 1 ] || T3CODE_CREATE_UNCERTAIN=0

@@ -264,8 +264,11 @@ harness_process_verdict() {  # <pid>
     # publishes no harness-identity marker of its own (a live 1.2.0 TUI
     # carries no AGY_* or ANTIGRAVITY_* variable; AGENT=1 seen there is an
     # inherited launcher value, not an agy identity), so like muse it is
-    # detected by ancestry alone.
-    agy) echo "comm agy"; return ;;
+    # detected by ancestry alone. `antigravity` is the same CLI under the name
+    # of Google's release asset: T3 Code's managed install records the 1.5.13
+    # executable as `antigravity` and serves its threads through
+    # `antigravity acp`, so a tool shell there has no ancestor named agy.
+    agy|antigravity) echo "comm agy"; return ;;
     # polytoken (Polytoken CLI) is a daemon-plus-TUI whose per-session daemon
     # process name is exactly `polytoken` (verified live on 0.8.19: a TUI
     # session's daemon runs as comm `polytoken` at ppid 1, and a shell tool

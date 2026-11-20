@@ -138,7 +138,10 @@
 #
 # OWNERSHIP. Before activation, every successor cycle, and every engine turn
 # the host proves this session still holds the fleet lock
-# (bin/fm-session-lock-lib.sh) and, when launched by the auto-arm, that the
+# (bin/fm-session-lock-lib.sh; an owner with no harness ancestry, the
+# Antigravity T3 ring in bin/fm-agy-t3-ring.sh, instead names the holder it
+# proved as FM_SUPERVISION_HOST_LOCK_PID and FM_SUPERVISION_HOST_LOCK_IDENTITY,
+# held through fm_session_lock_held_by) and, when launched by the auto-arm, that the
 # auto-arm generation it serves (FM_SUPERVISION_HOST_AUTOARM_GEN owned by
 # FM_SUPERVISION_HOST_OWNER_PID) is still current; otherwise it stands down
 # with a "supervision-host:" line and leaves the decision to its owner; a
@@ -247,6 +250,8 @@ COOLDOWN=$FM_SUPERVISION_HOST_COOLDOWN
 COOLDOWN_MAX=3600
 AUTOARM_GEN=${FM_SUPERVISION_HOST_AUTOARM_GEN:-}
 AUTOARM_OWNER=${FM_SUPERVISION_HOST_OWNER_PID:-}
+LOCK_HOLDER_PID=${FM_SUPERVISION_HOST_LOCK_PID:-}
+LOCK_HOLDER_IDENTITY=${FM_SUPERVISION_HOST_LOCK_IDENTITY:-}
 PRIMARY=${FM_SUPERVISION_HOST_PRIMARY:-}
 [ -n "$PRIMARY" ] || PRIMARY=$(fm_supervision_host_primary)
 # The owner's predecessor arm belongs to the first cycle only.
@@ -487,7 +492,11 @@ retire_arm() {  # <pid> <output-file>
 }
 
 host_still_owner() {
-  fm_session_lock_owned_by_self "$STATE" || return 1
+  if [ -n "$LOCK_HOLDER_PID" ]; then
+    fm_session_lock_held_by "$STATE" "$LOCK_HOLDER_PID" "$LOCK_HOLDER_IDENTITY" || return 1
+  else
+    fm_session_lock_owned_by_self "$STATE" || return 1
+  fi
   [ -n "$AUTOARM_GEN" ] || return 0
   fm_autoarm_ledger_read "$STATE" || return 1
   [ "$FM_AUTOARM_GEN" = "$AUTOARM_GEN" ] && [ "$FM_AUTOARM_OWNER" = "$AUTOARM_OWNER" ] \

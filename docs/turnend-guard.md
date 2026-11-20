@@ -568,6 +568,7 @@ It polls the child every `FM_AGY_PARK_POLL` seconds (default 2) and waits on it 
 Before parking, the hook stands down with `{}` in crewmate or scout linked worktrees, passes through non-normal termination reasons, and verifies session-lock ownership so a foreign session never steals supervision.
 When `executionNum` reaches the loop ceiling (`FM_AGY_TURNEND_LOOP_CEILING`, default 180) while supervision is still needed, it returns one ceiling notice instead of parking; past the ceiling it emits `{}`.
 Each invocation publishes a unique claim in `state/.agy-park-owner` and yields cleanly with `{}` if a newer Stop hook supersedes this park while waiting.
+Inside a T3 Code thread (this fork) the hook first offers the cycle to `bin/fm-agy-t3-ring.sh`, whose detached waiter takes that same claim and rings the thread on a wake, and ends the turn with `{}` at once; the park above runs only when the ring does not apply or could not start, and that script's header owns the ring and its fallback.
 
 ### Adapter failures in the pull guard
 
