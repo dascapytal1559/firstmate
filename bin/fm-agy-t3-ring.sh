@@ -72,6 +72,12 @@
 # notice; the next Stop then parks in place, where the bounded repair nag of
 # bin/fm-turnend-guard.sh --agy applies. A new session, or removing the file,
 # starts unlatched.
+#
+# GAP. Nothing re-rings a failed delivery. Once all three sends of a wake fail,
+# or the cycle-failure notice cannot be sent, the waiter has exited and no
+# watcher cycle, waiter, or turn remains: the Antigravity main session is
+# unsupervised, and the wake waits in the durable queue, until the captain's
+# next message starts a turn whose Stop hook reads the latch and parks in place.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

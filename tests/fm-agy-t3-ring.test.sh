@@ -275,7 +275,9 @@ test_outside_t3_the_hook_parks_in_place() {
   pass "agy T3 ring: outside a T3 thread the Stop hook parks in place exactly as before"
 }
 
-test_a_failed_send_latches_the_blocking_park() {
+# Nothing re-rings a refused send: turn 2 is started by hand, standing in for
+# the captain's next message, which is the only thing that ends the gap.
+test_a_failed_send_latches_the_park_for_the_captains_next_turn() {
   local session
   make_case send-fails held
   t3_fake_set 'w.tokens = []'
@@ -290,7 +292,7 @@ test_a_failed_send_latches_the_blocking_park() {
   turn "$HOME_DIR" 2
   assert_equals continue "$(jq -r '.decision // empty' "$HOME_DIR/out.2")" "a latched session must park in place and wake in the turn"
   end_session "$HOME_DIR"
-  pass "agy T3 ring: a send T3 refuses latches the session to the blocking park, which still delivers the next wake"
+  pass "agy T3 ring: a send T3 refuses latches the session to the blocking park, which the captain's next turn runs"
 }
 
 test_the_waiter_stands_down_when_the_lock_moves() {
@@ -357,7 +359,7 @@ test_an_unconfirmed_start_falls_back_to_the_blocking_park() {
 
 test_t3_turn_ends_at_once_and_the_waiter_rings_the_wake
 test_outside_t3_the_hook_parks_in_place
-test_a_failed_send_latches_the_blocking_park
+test_a_failed_send_latches_the_park_for_the_captains_next_turn
 test_the_waiter_stands_down_when_the_lock_moves
 test_a_host_home_runs_the_host_bound_to_the_lock_holder
 test_an_unconfirmed_start_falls_back_to_the_blocking_park

@@ -292,7 +292,8 @@ Upstream supports Antigravity as a primary in its own terminal, where the Stop h
 In a T3 Code thread that park kept the thread's turn open, so T3 showed FirstMate thinking without end, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent.
 So inside a T3 Code thread the fork's Stop hook ends the turn at once and hands supervision to one detached waiter, the shape of upstream's asynchronous Codex park.
 When a real wake arrives, the waiter rings FirstMate's own thread with a Firstmate operational doorbell, which starts a turn or reaches the one running; a quiet fleet spends no turns.
-If the waiter cannot start or T3 refuses the message, that session falls back to upstream's park, and outside a T3 Code thread nothing changes.
+If the waiter cannot start, that session falls back to upstream's park; outside a T3 Code thread nothing changes.
+If T3 refuses the waiter's message, three tries in a row, the waiter exits and nothing rings the thread again: FirstMate is unsupervised, with the wake held in its durable queue, until the captain's next message, whose turn end then falls back to upstream's park.
 T3 Code runs the Antigravity CLI under the name `antigravity`, which FirstMate now recognizes as Antigravity alongside `agy`.
 The Stop hook also records the captain's prompts and FirstMate's replies from the conversation's own transcript, so the [previous-dialog pointer](#pointer-to-the-previous-dialog) works after an Antigravity session.
 It needs a T3 Code build that passes the thread id to Antigravity's tools ([pingdotgg/t3code#36495](https://github.com/pingdotgg/t3code/pull/36495)), and the dialog record needs a home that runs the supervision host (`config/supervision-host`).

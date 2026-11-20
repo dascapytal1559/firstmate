@@ -27,6 +27,7 @@ When this session owns supervision and away mode is not active:
 10. Inside a T3 Code thread (this fork), the Stop hook does not park the turn: it hands the cycle to one detached waiter (`bin/fm-agy-t3-ring.sh`) and the turn ends at once.
    A wake then arrives as a message in this thread, a `Firstmate operational input waiting` doorbell naming a watcher record: read that record and handle it as step 3 says, draining first and never running `bin/fm-watch-arm.sh` after it.
    A `firstmate watcher auto-arm FAILED` record means the waiter could not keep a cycle: drain, inspect the watcher startup path, and do not arm by hand; this session's later turn ends park in place as steps 2 to 8 describe.
+   If T3 refuses a wake's message three times, or that failure notice, the waiter exits and nothing rings this thread again, so the session is unsupervised until the captain's next message; that turn's end parks in place, and the wake stays in the durable queue meanwhile.
 
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` remains the verified arm wrapper that the Stop hook runs as its own tracked child; a home that runs the supervision host parks on `bin/fm-supervision-host.sh park` in the arm's place.
 Re-arm attaches to an existing healthy cycle when one is already present and follows its verified successor chain.
