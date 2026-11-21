@@ -397,6 +397,33 @@ test_a_ring_t3_keeps_refusing_gives_up_visibly() {
   pass "agy T3 ring: a ring T3 keeps refusing gives up at its bound, and the next Stop hook hands back the wake with the notice"
 }
 
+# A wake the ring gave up on belongs to the session that held it: once that
+# session has ended, a new session on the same home does not get its notice
+# back from the Stop hook, and finds the wake in the durable queue instead.
+test_a_given_up_wake_is_not_handed_to_a_later_session() {
+  local first
+  make_case given-up-later-session held
+  t3_fake_set 'w.tokens = []'
+  start_session "$HOME_DIR"
+  first=$(cat "$HOME_DIR/session-pid")
+  turn "$HOME_DIR" 1
+  : > "$HOME_DIR/state/arm-release"
+  wait_for 600 ring_outcome_is "$HOME_DIR" delivery-failed || fail "a ring T3 keeps refusing must give up: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  assert_contains "$(cat "$HOME_DIR/state/.agy-t3-ring-wake")" "GAVE UP" "the held wake must record that the ring gave up"
+  end_session "$HOME_DIR"
+  wait_for 50 sh -c '! kill -0 "$1" 2>/dev/null' _ "$first" || fail "the first session did not end"
+  rm -f "$HOME_DIR"/end "$HOME_DIR"/session-pid "$HOME_DIR"/turn.* "$HOME_DIR"/out.* "$HOME_DIR"/rc.* \
+    "$HOME_DIR"/err.* "$HOME_DIR/state/arm-release"
+  start_session "$HOME_DIR"
+  [ "$(cat "$HOME_DIR/session-pid")" != "$first" ] || fail "the second session must be a new process"
+  turn "$HOME_DIR" 1
+  assert_equals "{}" "$(cat "$HOME_DIR/out.1")" "a later session's Stop hook must not hand back the earlier session's notice: $(cat "$HOME_DIR/out.1")"
+  assert_absent "$HOME_DIR/state/.agy-t3-ring-wake" "the earlier session's held wake must be discarded"
+  ring_outcome_is "$HOME_DIR" waiting || fail "the later session must get its own waiter: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  end_session "$HOME_DIR"
+  pass "agy T3 ring: a wake held under one session is discarded, not handed back, in a later session"
+}
+
 test_the_waiter_stands_down_when_the_lock_moves() {
   local waiter other
   make_case lock-moves held
@@ -465,6 +492,7 @@ test_a_wake_pending_at_turn_end_is_handed_to_the_stop_hook
 test_a_wake_closing_as_the_turn_ends_waits_for_an_idle_thread
 test_a_send_t3_cannot_take_is_retried_until_it_lands
 test_a_ring_t3_keeps_refusing_gives_up_visibly
+test_a_given_up_wake_is_not_handed_to_a_later_session
 test_the_waiter_stands_down_when_the_lock_moves
 test_a_host_home_runs_the_host_bound_to_the_lock_holder
 test_an_unconfirmed_start_falls_back_to_the_blocking_park

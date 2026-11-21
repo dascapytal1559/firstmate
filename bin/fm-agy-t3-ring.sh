@@ -64,11 +64,16 @@
 # next Stop starts the next.
 #
 # THE HELD WAKE. An actionable close, or the failure notice below, is first
-# written to state/.agy-t3-ring-wake, and the record reads holding. One of two
-# owners then takes it, each by an atomic rename, so it is delivered once:
-#   - a Stop hook that runs `start` hands it back (exit 3), so a wake that
-#     closes while a turn is still open, such as one already pending at turn
-#     end, carries on in that turn and is never rung into it;
+# written to state/.agy-t3-ring-wake, stamped with the waiter's anchor (the
+# lock holder's pid and identity, as LATCH records them), and the record reads
+# holding. One of two owners then takes it, each by an atomic rename, so it is
+# delivered once:
+#   - a Stop hook of the same session that runs `start` hands it back (exit
+#     3), so a wake that closes while a turn is still open, such as one already
+#     pending at turn end, carries on in that turn and is never rung into it;
+#     a `start` under another anchor discards it instead, since its notice
+#     speaks for the session that wrote it and the durable queue still holds
+#     the wake for the new session's start drain;
 #   - the waiter rings it, but only when T3 reads the thread with no turn
 #     running (fm_backend_t3code_probe idle, ready, interrupted, or error), so
 #     the message starts a fresh turn instead of being steered into one that
@@ -95,9 +100,10 @@
 # Giving up puts a "GAVE UP" notice in front of the held wake, records
 # delivery-failed, and latches this lock holder to the blocking park. Nothing
 # rings the thread after that, so the session stays unsupervised until the
-# captain's next message; that turn's Stop hook hands back the notice and the
-# wake before later turn ends park in place, and the wake also stays in the
-# durable queue for the next drain or session start.
+# captain's next message in it; that turn's Stop hook hands back the notice and
+# the wake before later turn ends park in place. The wake also stays in the
+# durable queue for the next drain, or for a new session's start, which never
+# sees the notice.
 #
 # LATCH. A give-up, a cycle that still failed after its retry, and a start that
 # did not confirm all latch this lock holder to the blocking park through
@@ -233,16 +239,18 @@ ours() {
 }
 
 # Take the held wake into HELD_TEXT, from a waiter's held file, or from its
-# in-flight send when no waiter is alive to finish it.
+# in-flight send when no waiter is alive to finish it. A wake held under
+# another anchor is discarded.
 take_held() {
-  local mine="$HELD.taken.$$"
+  local mine="$HELD.taken.$$" anchor='' identity=''
   HELD_TEXT=
   if ! mv "$HELD" "$mine" 2>/dev/null; then
     ! fm_pid_alive "$(cat "$CLAIM/pid" 2>/dev/null || true)" \
       && mv "$HELD.sending" "$mine" 2>/dev/null || return 1
   fi
-  HELD_TEXT=$(cat "$mine" 2>/dev/null || true)
+  { IFS= read -r anchor && IFS= read -r identity && HELD_TEXT=$(cat); } 2>/dev/null < "$mine"
   rm -f "$mine" 2>/dev/null
+  [ "$anchor" = "$ANCHOR" ] && [ "$identity" = "$ANCHOR_IDENTITY" ] || { HELD_TEXT=; return 1; }
   [ -n "$HELD_TEXT" ]
 }
 
@@ -422,12 +430,19 @@ ring() {
   done
 }
 
+# hold <text>: write the held wake, stamped with this waiter's anchor.
+hold() {
+  local tmp="$HELD.tmp.$$"
+  { printf '%s\n%s\n%s\n' "$ANCHOR" "$ANCHOR_IDENTITY" "$1" > "$tmp" && mv -f "$tmp" "$HELD"; } 2>/dev/null \
+    && return 0
+  rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
 # deliver <body>: hold the wake, then ring it, or give up visibly.
 deliver() {
-  local tmp="$HELD.tmp.$$"
   WAKE_BODY=$1
-  { printf '%s\n' "$WAKE_BODY" > "$tmp" && mv -f "$tmp" "$HELD"; } 2>/dev/null || {
-    rm -f "$tmp" 2>/dev/null
+  hold "$WAKE_BODY" || {
     record delivery-failed
     latch
     exit 1
@@ -436,9 +451,9 @@ deliver() {
   ring && return 0
   # Rewrite the held wake with the notice in front, unless a Stop hook took it.
   if mv "$HELD" "$HELD.sending" 2>/dev/null; then
-    { printf '%s\n\n%s\n' "firstmate T3 ring GAVE UP - the detached Antigravity T3 waiter could not ring this thread after $FAILURES tries (T3 unreachable, its credential refused, or every try reaching a turn already running), so supervision went quiet and the wake below waited for this turn. This session's later turn ends park supervision inside the Stop hook; remove state/.agy-t3-ring-fallback once T3 takes messages again to return to the ring." \
-      "$WAKE_BODY" > "$tmp" && mv -f "$tmp" "$HELD"; } 2>/dev/null \
-      || { rm -f "$tmp" 2>/dev/null; mv -f "$HELD.sending" "$HELD" 2>/dev/null; }
+    hold "firstmate T3 ring GAVE UP - the detached Antigravity T3 waiter could not ring this thread after $FAILURES tries (T3 unreachable, its credential refused, or every try reaching a turn already running), so supervision went quiet and the wake below waited for this turn. This session's later turn ends park supervision inside the Stop hook; remove state/.agy-t3-ring-fallback once T3 takes messages again to return to the ring.
+
+$WAKE_BODY" || mv -f "$HELD.sending" "$HELD" 2>/dev/null
     rm -f "$HELD.sending" 2>/dev/null
   elif [ ! -e "$HELD.sending" ]; then
     record handed-over
