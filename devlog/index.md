@@ -2027,10 +2027,39 @@ And back on Claude:
 The Antigravity session's own notes named four blockers, and each traced to one cause:
 
 - **Not recognized.** T3 Code installs the Antigravity CLI under the name of Google's release, `antigravity`, while FirstMate knew it only as `agy`, so the session could not take its lock. FirstMate now accepts that exact name and nothing that merely contains it.
-- **Endless thinking.** Antigravity runs every hook synchronously, as its own hook reference says, and FirstMate's Stop hook waited for the next wake inside the hook. In a terminal that is harmless; in T3 Code it kept the turn open, so T3 showed FirstMate thinking between turns, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent. Now, inside a T3 Code thread, the hook hands the wait to one detached waiter and the turn ends at once; the waiter rings FirstMate's own thread when a real wake arrives, the shape upstream already uses for Codex. If the waiter cannot start, that session falls back to the old wait, and outside T3 Code nothing changes. Two gaps remain, each leaving FirstMate unsupervised until the captain's next message: if T3 refuses the ring three times, the waiter exits and nothing rings the thread again, with the wake held in its queue, and that next turn's end falls back to the old wait; and a wake rung while the Stop hook is still open goes into the ending turn, so if T3 or Antigravity drops it, nothing records it. How the second behaves live is unproven.
+- **Endless thinking.** Antigravity runs every hook synchronously, as its own hook reference says, and FirstMate's Stop hook waited for the next wake inside the hook. In a terminal that is harmless; in T3 Code it kept the turn open, so T3 showed FirstMate thinking between turns, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent. Now, inside a T3 Code thread, the hook hands the wait to one detached waiter and the turn ends at once; the waiter rings FirstMate's own thread when a real wake arrives, the shape upstream already uses for Codex. If the waiter cannot start, that session falls back to the old wait, and outside T3 Code nothing changes. Two gaps were left, each leaving FirstMate unsupervised until the captain's next message: if T3 refused the ring three times, the waiter exited and nothing rang the thread again, with the wake held in its queue, and that next turn's end fell back to the old wait; and a wake rung while the Stop hook was still open went into the ending turn, so if T3 or Antigravity dropped it, nothing recorded it. Entry 74 closes both.
 - **No thread id in tool shells.** The T3 Code app installed that morning was built before the upstream T3 Code fix that passes the thread id to Antigravity's tools (merged 18 November and already in the fork's source); a rebuild carries it, and nothing on FirstMate's side needed changing.
 - **No dialog record.** The previous-dialog pointer had no Antigravity writer. The Stop hook now records each turn's prompts and final reply from the conversation's own transcript, on a home that runs the supervision host. It stays an unverified writer until a live session proves it, so until then the supervision session still hands every attended wake to the main session on Antigravity.
 
 The evidence: six waiter cases against a fake T3 server, driven by a compiled process named `antigravity` that holds the lock, covering the clean turn end, one waiter across turns, the ring, a refused ring (where the case itself starts the next turn, standing in for the captain), a moved lock, and a waiter that never confirms; the dialog writer on made-up transcripts in Antigravity's format; and the writer's parser run read-only over the real transcript of that session, where every prompt and final reply came out.
 What remains is the captain's live check on a rebuilt T3 Code.
 [FORK.md](../FORK.md#antigravity-main-in-t3-code) says how this sits against upstream.
+
+## 74. The Antigravity ring no longer goes quiet (22 November 2026)
+
+![A wake the waiter catches is held in a file: a Stop hook that is still open hands it back to its own turn, and otherwise the waiter rings it once T3 reports the thread idle, retrying for about 20 minutes and leaving a GAVE UP note for the next turn end if T3 never takes it](media/agy-t3-ring-held-wake.svg)
+
+The 21 November nightly review found the two gaps entry 73 left in the ring, where FirstMate on Antigravity inside T3 Code could end up with no watcher, no waiter, and no turn coming while a wake waited.
+The captain does not run FirstMate on Antigravity today, but asked for the fix anyway:
+
+> Okay, in that case, let's proceed to build it. While I don't plan to currently use it, I do think it's a respectable stance to ensure that anti gravity, which is a very popular provider these days can work with FirstMate. I think that's admirable for our fork to support.
+>
+> (22 November 2026)
+
+What was built, all in the waiter and its Stop hook:
+
+- **One held wake.** When the waiter's watcher closes on a wake, the waiter keeps it in a file and gives it to whichever owner comes first: a Stop hook, or a fresh turn the waiter rings.
+- **A Stop hook that is still open takes it back.** A wake already pending at turn end closes the watcher while the hook is open, so the hook now hands it back to its own turn, as the old in-hook wait did, instead of it being rung into the prompt that is closing.
+- **A ring only into an idle thread.** A wake that closes just as the hook returns waits until T3 reports the thread idle, so the ring always starts a fresh turn.
+  A ring T3 says it steered into a running turn is not trusted: the wake is held again, and that turn's own Stop hook can take it.
+- **Retries with a bound.** A ring T3 cannot take is retried after 5 seconds, then after waits that double up to 5 minutes, ten tries over about 20 minutes, so a T3 restart costs only a late wake.
+  Waiting on a running turn is not a failed try.
+- **A give-up you can see.** If all ten fail, a "GAVE UP" note goes in front of the held wake, and the captain's next turn end hands both back before later turn ends fall back to the old in-hook wait.
+
+The choice made: the review offered two fixes for the ending-turn gap, handing a caught wake back to the Stop hook or waiting for an idle thread, and they are both here because each covers a moment the other cannot.
+Only the open hook can catch a wake pending at turn end, and only the idle check can catch one that closes after the hook returned.
+Both share the one held wake, which also carries the retries.
+
+The evidence is four new cases against the fake T3 server, which now runs each turn as a T3 run that stays active while its Stop hook runs: a wake pending at turn end, a wake closing as the turn ends, T3 down for a few tries and then back, and T3 refusing every try.
+Each failed on the old code at its own gap and passes now, beside the six earlier cases.
+The fake server cannot show Antigravity's own prompt, so two things stay unproven until a live session: that T3 reads the thread as running for as long as the Stop hook is open, and that a ring sent once the thread is idle starts a turn Antigravity runs.

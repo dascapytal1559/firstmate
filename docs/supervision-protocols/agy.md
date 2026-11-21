@@ -25,10 +25,9 @@ When this session owns supervision and away mode is not active:
    [`watcher-continuity.md`](../watcher-continuity.md) owns the exact session-lock recovery boundary.
 9. Waiting on the hook-owned park is silent: do not send idle progress while the watcher is parked.
 10. Inside a T3 Code thread (this fork), the Stop hook does not park the turn: it hands the cycle to one detached waiter (`bin/fm-agy-t3-ring.sh`) and the turn ends at once.
-   A wake then arrives as a message in this thread, a `Firstmate operational input waiting` doorbell naming a watcher record: read that record and handle it as step 3 says, draining first and never running `bin/fm-watch-arm.sh` after it.
-   A `firstmate watcher auto-arm FAILED` record means the waiter could not keep a cycle: drain, inspect the watcher startup path, and do not arm by hand; this session's later turn ends park in place as steps 2 to 8 describe.
-   If T3 refuses a wake's message three times, or that failure notice, the waiter exits and nothing rings this thread again, so the session is unsupervised until the captain's next message; that turn's end parks in place, and the wake stays in the durable queue meanwhile.
-   A wake rung while this turn's Stop hook is still open (already pending at turn end, or arriving just as the hook returns) is sent into the ending turn and relies on T3 or Antigravity starting a fresh turn from it; if it is dropped, the session is likewise unsupervised until the captain's next message, with nothing recorded.
+   A wake then arrives as a message in this thread, a `Firstmate operational input waiting` doorbell naming a watcher record, or, when it closed while a turn was still open, as that turn's Stop hook follow-up: handle either as step 3 says, draining first and never running `bin/fm-watch-arm.sh` after it.
+   A `firstmate watcher auto-arm FAILED` notice means the waiter could not keep a cycle: drain, inspect the watcher startup path, and do not arm by hand; this session's later turn ends park in place as steps 2 to 8 describe.
+   A `firstmate T3 ring GAVE UP` notice means the waiter could not reach this thread through T3 for about 20 minutes, so supervision was quiet until this turn and the wake below the notice waited: drain and handle it, check T3 and this home's T3 credential, and expect later turn ends to park in place as steps 2 to 8 describe.
 
 The watcher itself remains `bin/fm-watch.sh`, and `bin/fm-watch-arm.sh` remains the verified arm wrapper that the Stop hook runs as its own tracked child; a home that runs the supervision host parks on `bin/fm-supervision-host.sh park` in the arm's place.
 Re-arm attaches to an existing healthy cycle when one is already present and follows its verified successor chain.

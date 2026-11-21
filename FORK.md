@@ -291,15 +291,16 @@ FirstMate's own session can run on Antigravity (Gemini) in a T3 Code thread: it 
 Upstream supports Antigravity as a primary in its own terminal, where the Stop hook parks supervision in place, because Antigravity runs every hook synchronously and offers no asynchronous wake.
 In a T3 Code thread that park kept the thread's turn open, so T3 showed FirstMate thinking without end, delivered each wake inside that same turn, and, by its 15-minute quiet bound for Antigravity, would fail the turn and replace the agent.
 So inside a T3 Code thread the fork's Stop hook ends the turn at once and hands supervision to one detached waiter, the shape of upstream's asynchronous Codex park.
-When a real wake arrives, the waiter rings FirstMate's own thread with a Firstmate operational doorbell, which starts a turn or reaches the one running; a quiet fleet spends no turns.
+When a real wake arrives, the waiter rings FirstMate's own thread with a Firstmate operational doorbell, which starts a fresh turn; a quiet fleet spends no turns.
 If the waiter cannot start, that session falls back to upstream's park; outside a T3 Code thread nothing changes.
-If T3 refuses the waiter's message, three tries in a row, the waiter exits and nothing rings the thread again: FirstMate is unsupervised, with the wake held in its durable queue, until the captain's next message, whose turn end then falls back to upstream's park.
-A wake rung while the Stop hook is still open (one already pending at turn end, or one arriving just as the hook returns) reaches the turn that is ending, and relies on T3 or Antigravity turning it into a fresh turn; if it is dropped, FirstMate is likewise unsupervised until the captain's next message, and nothing records it.
-A live session has not yet shown which happens.
+The waiter never sends into a turn that is ending: a wake that closes while a Stop hook is still open, such as one already pending at turn end, goes back to that hook and carries on in that turn, and otherwise the waiter rings only once T3 reports the thread idle, and trusts the ring only when T3 reports a fresh turn.
+If T3 cannot take the message, the waiter keeps the wake and retries with growing waits for about 20 minutes, so a brief outage costs only a late wake.
+If it still gives up, FirstMate is unsupervised until the captain's next message, whose turn end hands back the wake with a notice that the ring gave up and then falls back to upstream's park.
+A live session has not yet shown that T3 reads the thread as running for as long as the Stop hook is open.
 T3 Code runs the Antigravity CLI under the name `antigravity`, which FirstMate now recognizes as Antigravity alongside `agy`.
 The Stop hook also records the captain's prompts and FirstMate's replies from the conversation's own transcript, so the [previous-dialog pointer](#pointer-to-the-previous-dialog) works after an Antigravity session.
 It needs a T3 Code build that passes the thread id to Antigravity's tools ([pingdotgg/t3code#36495](https://github.com/pingdotgg/t3code/pull/36495)), and the dialog record needs a home that runs the supervision host (`config/supervision-host`).
-Asked for by the captain on 2026-11-20.
+Asked for by the captain on 2026-11-20; the ending-turn and failed-ring gaps were closed at the captain's request on 2026-11-22.
 Details: [`fm-agy-t3-ring.sh`](bin/fm-agy-t3-ring.sh) and [the Antigravity protocol](docs/supervision-protocols/agy.md).
 
 Upstream: none; upstream runs an Antigravity primary only in its own terminal.

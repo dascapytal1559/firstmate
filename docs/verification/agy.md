@@ -174,7 +174,7 @@ Read on macOS on 2026-11-20 from a T3 Code (Fork) install whose managed Antigrav
 | Transcript format | `<appDataDir>/brain/<conversation>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl`, one step per line with `step_index`, `source`, `type`, `content`, and `tool_calls`; a captain prompt is a `USER_INPUT` step wrapped in `<USER_REQUEST>`, the first one of a T3 Code session around T3's instructions with the prompt in `<user_request>`, and a final reply is a `PLANNER_RESPONSE` with content and no tool calls. The mirror writer's parser returned every prompt and final reply of that transcript. |
 | Thread id in tool shells | The installed app bundle (built 01:25 that day) merges only the thread's own environment into the CLI's spawn environment, so `T3CODE_THREAD_ID` never reaches it; [pingdotgg/t3code#36495](https://github.com/pingdotgg/t3code/pull/36495), merged 2026-11-18 and in the fork from its 20 Nov upstream merge, passes it. |
 
-`tests/fm-agy-t3-ring.test.sh` pins the ring with a compiled process named `antigravity` and a fake T3 Code server; `tests/fm-host-mirror.test.sh` pins the transcript writer on made-up transcripts in the format above.
+`tests/fm-agy-t3-ring.test.sh` pins the ring with a compiled process named `antigravity` and a fake T3 Code server that models each turn as a run active while its Stop hook runs, and T3's started and steered replies; `tests/fm-host-mirror.test.sh` pins the transcript writer on made-up transcripts in the format above.
 
 ## What is still unproven
 
@@ -183,8 +183,8 @@ No slash-skill invocation form was verified, so skill invocation stays natural l
 `--continue` and `--conversation` resume were never exercised; recovery uses deterministic relaunch from the brief on disk.
 Inside T3 Code, that the Stop payload's `transcriptPath` names the transcript above and that the final reply is written before the hook runs are unproven until a live session; until then the Antigravity mirror writer is not a verified writer.
 That the CLI leaves a detached waiter running once its Stop hook returns is unproven until a live session in a T3 Code build carrying #36495.
-That live check must also cover a wake rung while the Stop hook is still open: one already pending at turn end, which the waiter delivers before `bin/fm-agy-t3-ring.sh start` returns, and one closing just after its `waiting` return.
-Whether T3 or Antigravity turns that message, sent into the ending ACP prompt, into a fresh turn is unproven; if it is dropped, the waiter has already exited as delivered and the session is unsupervised until the captain's next message, with nothing recorded.
+The ring sends nothing into a turn T3 reads as running: a wake that closes while the Stop hook is open goes back to that hook, and the waiter rings only a thread T3 reads as idle.
+That T3 reads the thread as running for as long as the Stop hook is open, and that a ring sent once it reads idle starts a turn Antigravity runs, are unproven until that live session, because the fake T3 server models T3's run states and replies, not Antigravity's ACP prompt.
 
 ## Refreshing this record
 
