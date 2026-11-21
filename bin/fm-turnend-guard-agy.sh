@@ -38,8 +38,9 @@
 # Fork additions (FORK.md "Antigravity main in T3 Code"): every payload first
 # feeds the dialog mirror's Antigravity writer (bin/fm-host-mirror.sh hook agy),
 # and inside a T3 Code thread bin/fm-agy-t3-ring.sh takes the park out of the
-# hook, so the turn ends with {} at once; the park above runs only when that
-# ring does not apply or could not start.
+# hook, so the turn ends with {} at once, or continues with a wake its waiter
+# held; the park above runs only when that ring does not apply or could not
+# start.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -122,12 +123,14 @@ fi
 
 # Fork: inside a T3 Code thread a parked Stop hook holds the thread's prompt
 # open, so the turn would never end there. bin/fm-agy-t3-ring.sh owns that
-# case: when it reports a live detached waiter the turn ends now, and otherwise
-# the park below runs exactly as before.
-if "$SCRIPT_DIR/fm-agy-t3-ring.sh" start </dev/null >/dev/null 2>&1; then
-  rm -f "$STATE/.turnend-blocks" 2>/dev/null || true
-  allow_stop
-fi
+# case: when it reports a live detached waiter the turn ends now, when it hands
+# back a wake that waiter held the turn carries on with it, and otherwise the
+# park below runs exactly as before.
+RING_WAKE=$("$SCRIPT_DIR/fm-agy-t3-ring.sh" start </dev/null 2>/dev/null)
+case $? in
+  0) rm -f "$STATE/.turnend-blocks" 2>/dev/null || true; allow_stop ;;
+  3) rm -f "$STATE/.turnend-blocks" 2>/dev/null || true; continue_turn "$RING_WAKE" ;;
+esac
 
 mkdir -p "$STATE" 2>/dev/null || true
 PARK_OWNER_FILE="$STATE/.agy-park-owner"

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="470" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">FirstMate on Antigravity in T3 Code: where a wake goes</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">The waiter holds each wake until one of two owners takes it, so no wake is rung into a turn that is ending.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <rect x="24" y="160" width="260" height="96" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="40" y="184" font-weight="600">A wake arrives</text>
+    <text x="40" y="206">the waiter's watcher cycle closes</text>
+    <text x="40" y="226">on it, and the waiter holds it in</text>
+    <text x="40" y="246">a file</text>
+
+    <rect x="340" y="88" width="290" height="96" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="356" y="112" font-weight="600">A Stop hook is still open</text>
+    <text x="356" y="134">it takes the wake and hands it back,</text>
+    <text x="356" y="154">so the turn carries on with it, as</text>
+    <text x="356" y="174">the old in-hook wait did</text>
+
+    <rect x="340" y="232" width="290" height="96" rx="8" fill="#dafbe1" stroke="#4ac26b"/>
+    <text x="356" y="256" font-weight="600">T3 reports the thread idle</text>
+    <text x="356" y="278">the waiter rings it, and trusts the</text>
+    <text x="356" y="298">ring only when T3 says it started</text>
+    <text x="356" y="318">a fresh turn</text>
+
+    <rect x="680" y="232" width="256" height="96" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="696" y="256" font-weight="600">T3 cannot take it</text>
+    <text x="696" y="278">the wake stays held; next try after</text>
+    <text x="696" y="298">5 s, doubling to 5 min: ten tries,</text>
+    <text x="696" y="318">about 20 minutes</text>
+
+    <rect x="680" y="368" width="256" height="76" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="696" y="392" font-weight="600">Ten tries fail</text>
+    <text x="696" y="414">a GAVE UP note joins the held wake</text>
+    <text x="696" y="434">for the captain's next turn end</text>
+  </g>
+  <g stroke="#8c959f" stroke-width="1.5" fill="none">
+    <path d="M284 196 L340 140"/>
+    <path d="M284 220 L340 276"/>
+    <path d="M630 268 L680 268"/>
+    <path d="M680 296 L630 296"/>
+    <path d="M808 328 L808 368"/>
+  </g>
+  <g font-size="12" fill="#57606a">
+    <text x="636" y="262">fails</text>
+    <text x="636" y="312">retry</text>
+  </g>
+  <text x="24" y="462" font-size="12" fill="#57606a">While a turn runs, the waiter waits without counting a failure; that turn's own Stop hook takes the wake if it gets there first.</text>
+</svg>

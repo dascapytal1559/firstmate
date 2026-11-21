@@ -9,7 +9,10 @@
 # Code's managed install gives the Antigravity CLI, that holds the fleet lock,
 # runs the tracked Stop registration from .agents/ for each turn the case asks
 # for, and stays alive until the case ends it, so the waiter's anchor lives as
-# long as the session does. T3 Code is tests/t3-fake-server.mjs.
+# long as the session does. T3 Code is tests/t3-fake-server.mjs, where each turn
+# is a run that is active while its Stop hook runs, as T3 holds Antigravity's
+# ACP prompt open until the hook returns; a case can keep it active after the
+# hook, as the prompt still finishing.
 # shellcheck disable=SC2016 # single-quoted scripts expand inside the fake session
 set -u
 
@@ -104,6 +107,8 @@ STOP_CMD=$(jq -r '[.[] | .Stop // empty | .[].command | select(contains("fm-turn
 # appends its pid to state/arm-ran. <kind>:
 #   held     start, then close actionably once state/arm-release exists
 #   instant  start and close actionably at once
+#   pending  close actionably at once, before confirming a cycle: a wake
+#            already pending at turn end
 #   silent-then-instant  the first run prints nothing and waits; later runs are instant
 write_arm() {  # <home> <kind>
   cat > "$1/bin/fm-watch-arm.sh" <<SH
@@ -115,7 +120,7 @@ if [ "\$kind" = silent-then-instant ] && [ "\$(wc -l < "\$FM_HOME/state/arm-ran"
   while :; do sleep 0.05; done
 fi
 trap 'printf "%s\n" "\$\$" >> "\$FM_HOME/state/arm-stopped"; exit 143' TERM
-printf 'watcher: started pid=%s (beacon fresh)\n' "\$\$"
+[ "\$kind" = pending ] || printf 'watcher: started pid=%s (beacon fresh)\n' "\$\$"
 if [ "\$kind" = held ]; then
   while [ ! -e "\$FM_HOME/state/arm-release" ]; do sleep 0.05; done
 fi
@@ -171,10 +176,34 @@ start_session() {
   wait_for 100 test -s "$home/session-pid" || fail "the fake antigravity session did not start"
 }
 
-# turn <home> <n>: end turn n and wait for its Stop hook to return.
-turn() {
+# run_begin <n> / run_end <n>: turn n's run on the fake thread, active from
+# before its Stop hook until run_end. A send to the thread while it is active
+# is steered into it, as T3 steers Antigravity's open prompt.
+run_begin() {
+  FM_TURN_RUN="run:turn-$1" t3_fake_set 'const t = w.threads["thread-fm"]; const id = process.env.FM_TURN_RUN;
+    t.runs = [{ runId: id, status: "running", ordinal: (t.runs || []).length + 1, startedAt: new Date().toISOString(), completedAt: null }, ...(t.runs || [])];
+    t.activeRunId = id; t.latestRunId = id; t.status = "running";'
+}
+run_end() {
+  FM_TURN_RUN="run:turn-$1" t3_fake_set 'const t = w.threads["thread-fm"]; const id = process.env.FM_TURN_RUN;
+    for (const r of t.runs || []) if (r.runId === id) { r.status = "completed"; r.completedAt = new Date().toISOString(); }
+    const a = (t.runs || []).find((r) => r.status === "running");
+    t.activeRunId = a ? a.runId : null; t.status = a ? "running" : "completed";'
+}
+
+# turn_open <home> <n>: end turn n with its run still active, and wait for its
+# Stop hook to return.
+turn_open() {
+  run_begin "$2"
   : > "$1/turn.$2"
   wait_for 600 test -s "$1/rc.$2" || fail "turn $2's Stop hook did not return within 60s"
+}
+
+# turn <home> <n>: end turn n and wait for its Stop hook to return; its run
+# ends with the hook.
+turn() {
+  turn_open "$1" "$2"
+  run_end "$2"
 }
 
 end_session() {
@@ -208,6 +237,9 @@ ring_field() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$1/state/.agy-t3-
 ring_outcome_is() { [ "$(ring_field "$1" outcome)" = "$2" ]; }
 send_count() { t3_fake_calls t3_thread_send | grep -c . || true; }
 sends_are() { [ "$(send_count)" = "$1" ]; }
+failures_at_least() { [ "$(ring_field "$1" failures)" -ge "$2" ] 2>/dev/null; }
+# How T3 took the one accepted send: started, steered, or queued.
+send_delivery() { jq -r '.delivery // empty' "$1"/state/t3code-sends/*.accepted 2>/dev/null; }
 arm_runs() { wc -l < "$1/state/arm-ran" 2>/dev/null | tr -d ' '; }
 
 # The record path an operational doorbell names, per bin/fm-operational-input.sh.
@@ -275,24 +307,121 @@ test_outside_t3_the_hook_parks_in_place() {
   pass "agy T3 ring: outside a T3 thread the Stop hook parks in place exactly as before"
 }
 
-# Nothing re-rings a refused send: turn 2 is started by hand, standing in for
-# the captain's next message, which is the only thing that ends the gap.
-test_a_failed_send_latches_the_park_for_the_captains_next_turn() {
-  local session
-  make_case send-fails held
+# A wake already pending at turn end closes the cycle while the Stop hook is
+# still open: the hook hands it back as its own decision, and nothing is rung
+# into the turn that is ending.
+test_a_wake_pending_at_turn_end_is_handed_to_the_stop_hook() {
+  make_case pending-at-turn-end pending
+  start_session "$HOME_DIR"
+  turn_open "$HOME_DIR" 1
+  assert_equals continue "$(jq -r '.decision // empty' "$HOME_DIR/out.1")" \
+    "a wake caught while the Stop hook is open must continue the turn: $(cat "$HOME_DIR/out.1")"
+  assert_contains "$(jq -r .reason "$HOME_DIR/out.1")" "signal: state/task1.status" "the handed-back wake must carry its reason"
+  sends_are 0 || fail "nothing may be rung into the turn that is ending (sends: $(send_count))"
+  wait_for 100 ring_outcome_is "$HOME_DIR" handed-over || fail "the waiter must record that the hook took its wake: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  run_end 1
+  sleep 2
+  sends_are 0 || fail "a wake the hook took must not also be rung"
+  assert_absent "$HOME_DIR/state/.agy-t3-ring-wake" "a handed-back wake must not stay held"
+  end_session "$HOME_DIR"
+  pass "agy T3 ring: a wake pending at turn end is handed back to the Stop hook, not rung into the ending turn"
+}
+
+# A wake closing just after the hook returned waiting, while T3 still runs the
+# ending turn, is held until T3 reads the thread idle and then starts a fresh
+# turn.
+test_a_wake_closing_as_the_turn_ends_waits_for_an_idle_thread() {
+  make_case closing-at-turn-end held
+  start_session "$HOME_DIR"
+  turn_open "$HOME_DIR" 1
+  assert_equals "{}" "$(cat "$HOME_DIR/out.1")" "the turn must end at once beside the waiting waiter"
+  : > "$HOME_DIR/state/arm-release"
+  wait_for 100 ring_outcome_is "$HOME_DIR" holding || fail "the waiter must hold a wake while its turn is still running: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  sleep 3
+  sends_are 0 || fail "a wake must not be rung into the turn that is ending (sends: $(send_count))"
+  run_end 1
+  wait_for 200 sends_are 1 || fail "the held wake was not rung once the thread was idle (sends: $(send_count))"
+  wait_for 100 ring_outcome_is "$HOME_DIR" delivered || fail "the waiter must record the delivery"
+  assert_equals started "$(send_delivery "$HOME_DIR")" "the ring must start a fresh turn"
+  assert_contains "$(rung_body "$HOME_DIR")" "signal: state/task1.status" "the rung wake must carry its reason"
+  end_session "$HOME_DIR"
+  pass "agy T3 ring: a wake closing as the turn ends waits for an idle thread, then starts a fresh turn"
+}
+
+# T3 briefly unreachable: the waiter keeps the wake and retries, and the ring
+# lands once T3 is back, with no turn started by hand.
+test_a_send_t3_cannot_take_is_retried_until_it_lands() {
+  make_case t3-down held
+  start_session "$HOME_DIR" FM_AGY_T3_RING_SEND_BACKOFF=1
+  turn "$HOME_DIR" 1
+  assert_equals "{}" "$(cat "$HOME_DIR/out.1")" "the turn must end at once while the waiter waits"
+  t3_fake_stop
+  : > "$HOME_DIR/state/arm-release"
+  wait_for 300 failures_at_least "$HOME_DIR" 2 || fail "the waiter must keep retrying while T3 is unreachable: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  ring_outcome_is "$HOME_DIR" holding || fail "the waiter must still hold the wake: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  t3_fake_restart "$TMP_ROOT/server"
+  wait_for 600 sends_are 1 || fail "the wake was not rung once T3 came back (sends: $(send_count))"
+  wait_for 100 ring_outcome_is "$HOME_DIR" delivered || fail "the waiter must record the delivery: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  assert_equals started "$(send_delivery "$HOME_DIR")" "the late ring must start a fresh turn"
+  assert_absent "$HOME_DIR/state/.agy-t3-ring-fallback" "a ring that landed must not latch the blocking park"
+  end_session "$HOME_DIR"
+  pass "agy T3 ring: a ring T3 cannot take is retried with backoff and lands once T3 is back"
+}
+
+# T3 refusing every try: the waiter gives up at its bound, keeps the wake with a
+# notice, and latches the blocking park. Nothing can start a turn then, so the
+# case starts turn 2 by hand, standing in for the captain's next message.
+test_a_ring_t3_keeps_refusing_gives_up_visibly() {
+  local session reason
+  make_case send-refused held
   t3_fake_set 'w.tokens = []'
   start_session "$HOME_DIR"
   session=$(cat "$HOME_DIR/session-pid")
   turn "$HOME_DIR" 1
   assert_equals "{}" "$(cat "$HOME_DIR/out.1")" "the turn must end at once while the waiter waits"
   : > "$HOME_DIR/state/arm-release"
-  wait_for 300 ring_outcome_is "$HOME_DIR" delivery-failed || fail "a refused send must be recorded as failed: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
-  assert_equals "$session" "$(sed -n 1p "$HOME_DIR/state/.agy-t3-ring-fallback")" "the failure must latch this session to the blocking park"
+  wait_for 600 ring_outcome_is "$HOME_DIR" delivery-failed || fail "a ring T3 keeps refusing must give up: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  assert_equals 10 "$(ring_field "$HOME_DIR" failures)" "the waiter must give up at its stated bound of ten tries"
+  assert_equals "$session" "$(sed -n 1p "$HOME_DIR/state/.agy-t3-ring-fallback")" "giving up must latch this session to the blocking park"
+  assert_contains "$(cat "$HOME_DIR/state/.agy-t3-ring-wake")" "GAVE UP" "the held wake must record that the ring gave up"
   write_arm "$HOME_DIR" instant
   turn "$HOME_DIR" 2
-  assert_equals continue "$(jq -r '.decision // empty' "$HOME_DIR/out.2")" "a latched session must park in place and wake in the turn"
+  assert_equals continue "$(jq -r '.decision // empty' "$HOME_DIR/out.2")" "the next Stop hook must hand back the wake that waited"
+  reason=$(jq -r .reason "$HOME_DIR/out.2")
+  assert_contains "$reason" "GAVE UP" "the next Stop hook must say the ring gave up"
+  assert_contains "$reason" "signal: state/task1.status" "the next Stop hook must carry the wake that waited"
+  assert_absent "$HOME_DIR/state/.agy-t3-ring-wake" "the handed-back wake must not stay held"
+  turn "$HOME_DIR" 3
+  assert_contains "$(jq -r .reason "$HOME_DIR/out.3")" "This Stop hook owns watcher continuity" "a latched session must then park in place"
   end_session "$HOME_DIR"
-  pass "agy T3 ring: a send T3 refuses latches the session to the blocking park, which the captain's next turn runs"
+  pass "agy T3 ring: a ring T3 keeps refusing gives up at its bound, and the next Stop hook hands back the wake with the notice"
+}
+
+# A wake the ring gave up on belongs to the session that held it: once that
+# session has ended, a new session on the same home does not get its notice
+# back from the Stop hook, and finds the wake in the durable queue instead.
+test_a_given_up_wake_is_not_handed_to_a_later_session() {
+  local first
+  make_case given-up-later-session held
+  t3_fake_set 'w.tokens = []'
+  start_session "$HOME_DIR"
+  first=$(cat "$HOME_DIR/session-pid")
+  turn "$HOME_DIR" 1
+  : > "$HOME_DIR/state/arm-release"
+  wait_for 600 ring_outcome_is "$HOME_DIR" delivery-failed || fail "a ring T3 keeps refusing must give up: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  assert_contains "$(cat "$HOME_DIR/state/.agy-t3-ring-wake")" "GAVE UP" "the held wake must record that the ring gave up"
+  end_session "$HOME_DIR"
+  wait_for 50 sh -c '! kill -0 "$1" 2>/dev/null' _ "$first" || fail "the first session did not end"
+  rm -f "$HOME_DIR"/end "$HOME_DIR"/session-pid "$HOME_DIR"/turn.* "$HOME_DIR"/out.* "$HOME_DIR"/rc.* \
+    "$HOME_DIR"/err.* "$HOME_DIR/state/arm-release"
+  start_session "$HOME_DIR"
+  [ "$(cat "$HOME_DIR/session-pid")" != "$first" ] || fail "the second session must be a new process"
+  turn "$HOME_DIR" 1
+  assert_equals "{}" "$(cat "$HOME_DIR/out.1")" "a later session's Stop hook must not hand back the earlier session's notice: $(cat "$HOME_DIR/out.1")"
+  assert_absent "$HOME_DIR/state/.agy-t3-ring-wake" "the earlier session's held wake must be discarded"
+  ring_outcome_is "$HOME_DIR" waiting || fail "the later session must get its own waiter: $(cat "$HOME_DIR/state/.agy-t3-ring.json")"
+  end_session "$HOME_DIR"
+  pass "agy T3 ring: a wake held under one session is discarded, not handed back, in a later session"
 }
 
 test_the_waiter_stands_down_when_the_lock_moves() {
@@ -359,7 +488,11 @@ test_an_unconfirmed_start_falls_back_to_the_blocking_park() {
 
 test_t3_turn_ends_at_once_and_the_waiter_rings_the_wake
 test_outside_t3_the_hook_parks_in_place
-test_a_failed_send_latches_the_park_for_the_captains_next_turn
+test_a_wake_pending_at_turn_end_is_handed_to_the_stop_hook
+test_a_wake_closing_as_the_turn_ends_waits_for_an_idle_thread
+test_a_send_t3_cannot_take_is_retried_until_it_lands
+test_a_ring_t3_keeps_refusing_gives_up_visibly
+test_a_given_up_wake_is_not_handed_to_a_later_session
 test_the_waiter_stands_down_when_the_lock_moves
 test_a_host_home_runs_the_host_bound_to_the_lock_holder
 test_an_unconfirmed_start_falls_back_to_the_blocking_park

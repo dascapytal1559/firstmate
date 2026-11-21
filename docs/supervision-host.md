@@ -73,7 +73,7 @@ The host's header owns the output contract they read.
 | omp | the watch extension, `.omp/extensions/fm-primary-omp-watch.ts`, which restarts its own successor after each close | the extension's `watcher` follow-up |
 | Grok | the model's tracked background call, rendered as `bin/fm-supervision-host.sh park` at session start | the background task's completion notification |
 | Codex | the foreground checkpoint, `bin/fm-watch-checkpoint.sh`, or the native Stop park on a home that [opts in](configuration.md#codex-native-stop-park-configcodex-stop-park) | checkpoint output, or the native thread queue; see [the Codex protocol](supervision-protocols/codex.md) |
-| Antigravity (`agy`) | the Stop-hook park, `bin/fm-turnend-guard-agy.sh`; inside a T3 Code thread (fork) its detached waiter, `bin/fm-agy-t3-ring.sh` | the park's `watcher` follow-up; in a T3 Code thread a watcher doorbell rung into the thread |
+| Antigravity (`agy`) | the Stop-hook park, `bin/fm-turnend-guard-agy.sh`; inside a T3 Code thread (fork) its detached waiter, `bin/fm-agy-t3-ring.sh` | the park's `watcher` follow-up; in a T3 Code thread a watcher doorbell rung into the thread once it is idle, or the Stop hook's follow-up for a wake that closed while the turn was open |
 
 Hook, plugin, extension, and checkpoint owners pass their harness as the primary pin.
 Grok's model-owned call relies on primary detection.
