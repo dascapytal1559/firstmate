@@ -2054,7 +2054,7 @@ What was built, all in the waiter and its Stop hook:
   A ring T3 says it steered into a running turn is not trusted: the wake is held again, and that turn's own Stop hook can take it.
 - **Retries with a bound.** A ring T3 cannot take is retried after 5 seconds, then after waits that double up to 5 minutes, ten tries over about 20 minutes, so a T3 restart costs only a late wake.
   Waiting on a running turn is not a failed try.
-- **A give-up you can see.** If all ten fail, a "GAVE UP" note goes in front of the held wake, and the captain's next turn end hands both back before later turn ends fall back to the old in-hook wait.
+- **A give-up you can see.** If all ten fail, a "GAVE UP" note goes in front of the held wake, and the captain's next turn end in that session hands both back before later turn ends fall back to the old in-hook wait; a new session finds the wake in its queue at start instead, without the note.
 
 The choice made: the review offered two fixes for the ending-turn gap, handing a caught wake back to the Stop hook or waiting for an idle thread, and they are both here because each covers a moment the other cannot.
 Only the open hook can catch a wake pending at turn end, and only the idle check can catch one that closes after the hook returned.
