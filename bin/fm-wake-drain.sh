@@ -879,14 +879,17 @@ print_status_presentation() {  # [<deduped-raw-rows>]
 # the task each row names - a status line's or stale worker's task, an
 # inactive outcome's child, a merge's, an open decision's, a usage limit's,
 # a relayed supervision outcome's - or the origin an inbox note recorded (the
-# phone for a voice journal's note, request_id=voice-journal-*), or
-# the origin a fired condition->action follow-up was armed under,
-# then the tasks BRANCH OUTCOMES presented. A note or follow-up recorded
-# before origin references existed passes its cause on instead. A row naming
-# none of these is upkeep. Only main in a T3 turn claims; the call is bounded
-# and its outcome never changes the drain's.
+# phone for a voice journal's note, request_id=voice-journal-*, and incident
+# work for a production alert's note from the incident intake,
+# request_id=incident-*), or the origin a fired condition->action follow-up
+# was armed under, then the tasks BRANCH OUTCOMES presented. The first
+# candidate T3 binds wins, so a drain presenting an alert's note beside
+# other wakes counts as whichever of them was presented first. A note or
+# follow-up recorded before origin references existed passes its cause on
+# instead. A row naming none of these is upkeep. Only main in a T3 turn
+# claims; the call is bounded and its outcome never changes the drain's.
 claim_wake_usage() {
-  local rows=${1:-} kind key payload task origin cause device note
+  local rows=${1:-} kind key payload task origin cause device process note request
   local -a args=()
   [ "$ACTOR" = main ] && [ -n "${T3CODE_THREAD_ID:-}" ] || return 0
   while IFS=$'\t' read -r _ _ kind key payload; do
@@ -894,6 +897,7 @@ claim_wake_usage() {
     origin=
     cause=
     device=
+    process=
     case "$kind" in
       signal) task=${key%.status}; task=${task%.turn-ended} ;;
       stale) task=$(window_to_task "$key" "$STATE" 2>/dev/null) || task= ;;
@@ -916,13 +920,18 @@ claim_wake_usage() {
             fi
             ;;
           inbox:*)
-            # A voice journal's note is phone work, whatever origin it carries.
+            # A voice journal's note is phone work, and a production alert's
+            # note incident work, whatever origin either carries.
             note="$STATE/inbox/${key#inbox:}.note"
             [ -f "$note" ] || note="$STATE/inbox/handled/${key#inbox:}.note"
+            request=
+            [ ! -f "$note" ] || request=$(sed -n '/^--$/q;s/^request_id=//p' "$note" 2>/dev/null | head -n 1)
             if [ ! -f "$note" ]; then
               :
-            elif sed -n '/^--$/q;p' "$note" 2>/dev/null | grep -q '^request_id=voice-journal-'; then
+            elif [ "${request#voice-journal-}" != "$request" ]; then
               device=phone
+            elif [ "${request#incident-}" != "$request" ]; then
+              process=incident
             else
               origin=$(sed -n '/^--$/q;s/^from-thread=//p' "$note" 2>/dev/null | head -n 1)
               [ -n "$origin" ] || cause=$(sed -n '/^--$/q;s/^caused-by=//p' "$note" 2>/dev/null | head -n 1)
@@ -935,6 +944,7 @@ claim_wake_usage() {
     [ -z "$origin" ] || args+=(--from-thread "$origin")
     [ -z "$cause" ] || args+=(--caused-by "$cause")
     [ -z "$device" ] || args+=(--device "$device")
+    [ -z "$process" ] || args+=(--process "$process")
   done <<ROWS
 $rows
 ROWS

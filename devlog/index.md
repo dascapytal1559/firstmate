@@ -2063,3 +2063,33 @@ Both share the one held wake, which also carries the retries.
 The evidence is four new cases against the fake T3 server, which now runs each turn as a T3 run that stays active while its Stop hook runs: a wake pending at turn end, a wake closing as the turn ends, T3 down for a few tries and then back, and T3 refusing every try.
 Each failed on the old code at its own gap and passes now, beside the six earlier cases.
 The fake server cannot show Antigravity's own prompt, so two things stay unproven until a live session: that T3 reads the thread as running for as long as the Stop hook is open, and that a ring sent once the thread is idle starts a turn Antigravity runs.
+
+## 75. Incident response gets its own band on the Usage page (22 November 2026)
+
+T3 Code's Usage page splits usage by process into Journal, Routines and Direct.
+The ask:
+
+> In T3's usage tab, can we also add instance response as a category here?
+
+"Instance response" meant incident response: FirstMate's handling of a production alert from the incident intake, acknowledging it, checking which feeds are down, reading logs, and closing it as noise or escalating it.
+On which fixes count, his rule:
+
+> Yeah, if it's work that was automatically patched, it's instant response. If it's work that was proposed to me, then I alert then I approve it or I action it myself, then it's direct.
+
+T3 now has a fourth band, Incidents, which FirstMate marks with a usage claim or a launch label; work an incident turn starts inherits it.
+What was built, on FirstMate's side:
+
+- **An alert's turn counts as incident work.** The intake saves each alert, its resolve, and its "cannot reach production" notice as an inbox note whose request id starts `incident-`; the wake drain now claims that turn as incident response, whatever origin the note carries.
+  A turn that handles an alert no drain in it presented claims itself with `fm-t3-usage-claim.sh turn --process incident`.
+- **A fix FirstMate starts on its own counts too.** `fm-spawn.sh --incident` launches the worker's T3 thread as incident work, whichever turn starts it, mirroring `--upkeep` and `--journal`, including a start held back for capacity.
+  A fix proposed to him that he approves or does himself launches without it, so it stays Direct.
+- **One label at a time.** Any two of `--upkeep`, `--journal` and `--incident` are refused before anything launches.
+- **The nightly label check knows the new reason**, so incident work is never reported as unlabelled usage.
+
+The choices made:
+
+- When one drain presents an alert beside other wakes, the existing rule decides: the first wake T3 can bind names the turn, so an alert after a worker's status counts with that worker.
+- A prompt he types in an incident turn stays his own Direct work, which is how T3 counts it; past usage is not relabelled.
+- The spawn's two on-off label switches became one label, so a third label did not mean a third copy of the same checks.
+
+The evidence is the touched suites, run against the fake T3 server, which now models the incident claim and launch; no live T3 was called.

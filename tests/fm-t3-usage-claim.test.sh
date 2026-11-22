@@ -117,17 +117,25 @@ test_origin_records() {
   out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-9; fm_t3_origin_landed "$state"')
   assert_equals "" "$out" "a later landing with no thread leaves none, never an older task's"
   printf '%s\n' "$REF_T" > "$state/item-u.queued-origin"
-  out=$(lib "$state" 'fm_t3_origin_queue_upkeep "$state" item-u; fm_t3_origin_queued "$state" item-u; printf " "; fm_t3_origin_of_task "$state" item-u')
+  out=$(lib "$state" 'fm_t3_origin_queue_label "$state" item-u upkeep; fm_t3_origin_queued "$state" item-u; printf " "; fm_t3_origin_of_task "$state" item-u')
   assert_equals "upkeep upkeep" "$out" "an item queued as upkeep replaces its reference, and a task with no thread yet reads upkeep"
   out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-u; fm_t3_origin_landed "$state"')
   assert_equals "" "$out" "upkeep is never a landed reference"
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-u'
   printf '%s\n' "$REF_T" > "$state/item-j.queued-origin"
-  out=$(lib "$state" 'fm_t3_origin_queue_journal "$state" item-j; fm_t3_origin_queued "$state" item-j; printf " "; fm_t3_origin_of_task "$state" item-j')
+  out=$(lib "$state" 'fm_t3_origin_queue_label "$state" item-j journal; fm_t3_origin_queued "$state" item-j; printf " "; fm_t3_origin_of_task "$state" item-j')
   assert_equals "journal journal" "$out" "an item queued as journal replaces its reference, and a task with no thread yet reads journal"
   out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-j; fm_t3_origin_landed "$state"')
   assert_equals "" "$out" "journal is never a landed reference"
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-j'
+  printf '%s\n' "$REF_T" > "$state/item-i.queued-origin"
+  out=$(lib "$state" 'fm_t3_origin_queue_label "$state" item-i incident; fm_t3_origin_queued "$state" item-i; printf " "; fm_t3_origin_of_task "$state" item-i')
+  assert_equals "incident incident" "$out" "an item queued as incident replaces its reference, and a task with no thread yet reads incident"
+  out=$(lib "$state" 'fm_t3_origin_landed_record "$state" item-i; fm_t3_origin_landed "$state"')
+  assert_equals "" "$out" "incident is never a landed reference"
+  out=$(lib "$state" 'fm_t3_origin_queue_label "$state" item-i bogus; fm_t3_origin_queued "$state" item-i')
+  assert_equals "incident" "$out" "a word that is no label records nothing"
+  lib "$state" 'fm_t3_origin_queue_forget "$state" item-i'
   lib "$state" 'fm_t3_origin_queue_forget "$state" item-1; fm_t3_origin_queue_forget "$state" item-3'
   [ ! -e "$state/item-1.queued-origin" ] && [ ! -e "$state/item-3.queued-cause" ] || fail "forget drops the queued records of both kinds"
   out=$(lib "$state" 'fm_t3_origin_of_task "$state" ../item-1')
@@ -198,6 +206,37 @@ test_wake_about_a_journal_item_claims_the_phone() {
   assert_equals '{"device":"phone"}' "$(claims run:coord:run-c)" "the turn counts to the phone: $(claims run:coord:run-c)"
   [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "the claim logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
   pass "fm-t3-usage-claim wake: an item queued as journal counts its wake to the phone"
+}
+
+# Incident response: a wake or turn claimed as the incident process counts to
+# the computer as incident work, as does a wake about an item queued as
+# incident; a T3 that cannot take a process gives the next candidate its turn.
+test_incident_claims() {
+  fresh_case wake-incident '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  meta_with_thread tk t-tk
+  as_agent "$CLAIM" wake --process incident --task tk
+  expect_code 0 "$RC" "an incident wake claim exits 0: $ERR"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "the turn counts as incident work: $(claims run:coord:run-c)"
+  assert_equals incident "$(t3_fake_calls t3_usage_claim | tail -n 1 | node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(0, "utf8")).process))')" "sent as T3's process"
+  [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "the claim logs nothing: $(cat "$STATE_DIR/t3-usage-claims.log")"
+  fresh_case wake-incident-item '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  printf 'incident\n' > "$STATE_DIR/fix.queued-origin"
+  as_agent "$CLAIM" wake --task fix
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "an item queued as incident counts its wake as incident work"
+  fresh_case turn-incident '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  as_agent "$CLAIM" turn --device phone
+  as_agent "$CLAIM" turn --process incident
+  expect_code 0 "$RC" "an incident turn claim exits 0: $ERR"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "an explicit incident claim replaces the turn's earlier claim"
+  fresh_case wake-incident-old-t3
+  meta_with_thread tk t-tk
+  as_agent "$CLAIM" wake --process incident --task tk
+  expect_code 0 "$RC" "a T3 without process claims is not a failure"
+  assert_equals '{"threadId":"t-tk"}' "$(claim_of run:coord:run-c fromThread)" "and the next candidate names the turn"
+  [ ! -s "$STATE_DIR/t3-usage-claims.log" ] || fail "an absent feature is not logged: $(cat "$STATE_DIR/t3-usage-claims.log")"
+  as_agent "$CLAIM" turn --process upkeep
+  expect_code 2 "$RC" "an unknown process is invalid use"
+  pass "fm-t3-usage-claim: an incident claim counts its turn as incident work, a queued incident item's wake too, and an older T3 moves on"
 }
 
 test_wake_about_nothing_claims_nothing() {
@@ -347,7 +386,37 @@ test_drain_claims_inbox_notes() {
   append_wake "$STATE_DIR" check "inbox:1-old" "check: captain inbox note 1-old - note"
   as_agent "$DRAIN"
   assert_equals "{\"causedBy\":$CAUSE_T}" "$(claims run:coord:run-c)" "a note written before references existed passes its cause on"
-  pass "fm-wake-drain: an inbox note's wake counts with the turn that wrote it, a voice journal's to the phone"
+  fresh_case drain-incident '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  inbox_note 1-incident request_id=incident-abc123 "from-thread=$REF_T"
+  append_wake "$STATE_DIR" check "inbox:1-incident" "check: captain inbox note 1-incident - alert"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "a production alert's note counts as incident work, whatever origin it carries"
+  fresh_case drain-incident-resolved '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  inbox_note 1-resolved request_id=incident-abc123-resolved
+  append_wake "$STATE_DIR" check "inbox:1-resolved" "check: captain inbox note 1-resolved - resolved"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "an alert's resolve counts as incident work too"
+  pass "fm-wake-drain: an inbox note's wake counts with the turn that wrote it, a voice journal's to the phone, a production alert's as incident work"
+}
+
+# One drain presenting an alert's note beside other wakes counts as the first
+# wake T3 binds, in presentation order, as every wake turn does.
+test_drain_incident_precedence() {
+  fresh_case drain-incident-first '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  meta_with_thread tk t-tk
+  inbox_note 1-incident request_id=incident-abc123
+  append_wake "$STATE_DIR" check "inbox:1-incident" "check: captain inbox note 1-incident - alert"
+  append_wake "$STATE_DIR" signal tk.status "signal: tk.status"
+  as_agent "$DRAIN"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(claims run:coord:run-c)" "an alert presented first names the turn"
+  fresh_case drain-incident-second '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  meta_with_thread tk t-tk
+  inbox_note 1-incident request_id=incident-abc123
+  append_wake "$STATE_DIR" signal tk.status "signal: tk.status"
+  append_wake "$STATE_DIR" check "inbox:1-incident" "check: captain inbox note 1-incident - alert"
+  as_agent "$DRAIN"
+  assert_equals '{"threadId":"t-tk"}' "$(claim_of run:coord:run-c fromThread)" "a worker's status presented first names the turn"
+  pass "fm-wake-drain: an alert's note beside other wakes counts in presentation order"
 }
 
 t3_fake_start "$TMP_ROOT/server"
@@ -356,8 +425,10 @@ fm_test_run \
   test_wake_tries_candidates_until_one_binds \
   test_wake_about_an_upkeep_item_claims_the_computer \
   test_wake_about_a_journal_item_claims_the_phone \
+  test_incident_claims \
   test_wake_about_nothing_claims_nothing \
   test_drain_claims_inbox_notes \
+  test_drain_incident_precedence \
   test_claims_are_best_effort_and_logged_once \
   test_drain_claims_the_wake_turn \
   test_drain_claims_a_followups_arming_origin

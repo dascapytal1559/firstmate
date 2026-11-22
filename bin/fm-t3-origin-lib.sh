@@ -11,8 +11,8 @@
 # no T3 call: the thread is $T3CODE_THREAD_ID and the time is now. This
 # library is the one owner of those references:
 #   - bin/fm-spawn.sh sends "this thread, now" on the worker's launch and
-#     records nothing, since the thread carries its birth; with --upkeep or
-#     --journal it sends that word instead (below);
+#     records nothing, since the thread carries its birth; with --upkeep,
+#     --journal or --incident it sends that word instead (below);
 #   - bin/fm-send.sh records it in the steer's inbox record (from-thread=), and
 #     every doorbell for that record sends it (bin/fm-task-inbox-lib.sh);
 #   - bin/fm-inbox.sh note records the writer's own thread and time
@@ -30,19 +30,22 @@
 # and never resolves one itself, so a re-ring or any other send outside these
 # boundaries carries one only when its caller hands one in.
 #
-# Two origins are words, not references (docs/t3code-backend.md "Where work
-# comes from"):
-#   upkeep   work Firstmate runs because of a process set up on the
-#            computer, such as the bedtime routine, which counts to the
-#            computer as upkeep whichever turn starts it;
-#   journal  work from a voice journal's items started outside the journal's
-#            own filing turn, which counts to the phone as journal work
-#            whichever turn starts it.
-# Only bin/fm-spawn.sh --upkeep or --journal writes one, as a deferred item's
-# queued origin (fm_t3_origin_queue_upkeep, fm_t3_origin_queue_journal), so
-# the item's later launch is that too; a launch sends it as T3's upkeep or
-# journal, and a wake about the item, before it has a thread, claims the
-# computer or the phone (bin/fm-t3-usage-claim.sh).
+# Three origins are words, labels rather than references
+# (docs/t3code-backend.md "Where work comes from"):
+#   upkeep    work Firstmate runs because of a process set up on the
+#             computer, such as the bedtime routine, which counts to the
+#             computer as upkeep whichever turn starts it;
+#   journal   work from a voice journal's items started outside the
+#             journal's own filing turn, which counts to the phone as
+#             journal work whichever turn starts it;
+#   incident  a fix Firstmate starts on its own from a production alert,
+#             which counts to the computer as incident work whichever turn
+#             starts it.
+# Only bin/fm-spawn.sh --upkeep, --journal or --incident writes one, as a
+# deferred item's queued origin (fm_t3_origin_queue_label), so the item's
+# later launch is that too; a launch sends it as T3's label of that name,
+# and a wake about the item, before it has a thread, claims the computer,
+# the phone, or incident work (bin/fm-t3-usage-claim.sh).
 #
 # Things written before this library existed still carry a cause, the JSON
 # {"threadId","runId"?,"messageId"} T3's causedBy takes: a queued item's
@@ -130,26 +133,19 @@ fm_t3_origin_queue_record() {
   return 0
 }
 
-# fm_t3_origin_queue_upkeep <state-dir> <task-id>: record upkeep as backlog
-# item <task-id>'s queued origin (the header's upkeep rule), replacing any
-# reference. Best effort, like fm_t3_origin_queue_record.
-fm_t3_origin_queue_upkeep() {
+# fm_t3_origin_queue_label <state-dir> <task-id> <upkeep|journal|incident>:
+# record that label as backlog item <task-id>'s queued origin (the header's
+# label rule), replacing any reference. Any other word records nothing. Best
+# effort, like fm_t3_origin_queue_record.
+fm_t3_origin_queue_label() {
   _fm_t3_origin_task_id_ok "$2" && [ -d "$1" ] || return 0
-  _fm_t3_origin_write "$1/$2.queued-origin" upkeep
-  return 0
-}
-
-# fm_t3_origin_queue_journal <state-dir> <task-id>: record journal as backlog
-# item <task-id>'s queued origin (the header's journal rule), replacing any
-# reference. Best effort, like fm_t3_origin_queue_record.
-fm_t3_origin_queue_journal() {
-  _fm_t3_origin_task_id_ok "$2" && [ -d "$1" ] || return 0
-  _fm_t3_origin_write "$1/$2.queued-origin" journal
+  case "${3:-}" in upkeep|journal|incident) ;; *) return 0 ;; esac
+  _fm_t3_origin_write "$1/$2.queued-origin" "$3"
   return 0
 }
 
 # fm_t3_origin_queued <state-dir> <task-id>: what backlog item <task-id> was
-# queued with: its reference, upkeep, or journal, else a cause recorded before
+# queued with: its reference or label, else a cause recorded before
 # references existed, else nothing.
 fm_t3_origin_queued() {
   local value
@@ -167,8 +163,7 @@ fm_t3_origin_queue_forget() {
 
 # fm_t3_origin_of_task <state-dir> <task-id>: where task <task-id>'s work
 # counts now: {"threadId":<its t3_thread_id>}, with no time; for a backlog
-# item with no thread yet, what it was queued with (possibly upkeep or
-# journal); else
+# item with no thread yet, what it was queued with (possibly a label); else
 # nothing.
 fm_t3_origin_of_task() {
   local state=$1 id=$2 line thread=''
@@ -194,7 +189,7 @@ fm_t3_origin_landed_record() {
   _fm_t3_origin_task_id_ok "$id" && [ -d "$state" ] || return 0
   ref=$(fm_t3_origin_of_task "$state" "$id")
   # Only a reference names where a restart's work counts.
-  case "$ref" in *'"messageId"'*|upkeep|journal) ref= ;; esac
+  case "$ref" in *'"messageId"'*|upkeep|journal|incident) ref= ;; esac
   _fm_t3_origin_write "$state/t3-landed-origin" "$(printf '%s\t%s\t%s' "$(date +%s)" "$id" "$ref")"
   # The cause file a landing kept before references existed.
   rm -f "$state/t3-landed-cause" 2>/dev/null || true

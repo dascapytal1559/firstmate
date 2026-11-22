@@ -10,7 +10,7 @@
 # local time, in T3's own time zone. A token is unlabelled when its row is
 # byDefault (no device evidence, so it counts to the computer only by default)
 # or its reason is not one of the evidence reasons (typed, inherited, journal,
-# upkeep, terminal).
+# upkeep, incident, terminal).
 #
 #   - Everything labelled and no failed claim: nothing is written, one
 #     summary line on stdout.
@@ -91,7 +91,7 @@ else
 fi
 
 # shellcheck disable=SC2016  # $ev and $r are jq variables.
-GAPS='["typed","inherited","journal","upkeep","terminal"] as $ev
+GAPS='["typed","inherited","journal","upkeep","incident","terminal"] as $ev
   | [.rows[] | select(.tokens > 0 and (.byDefault or (.reason as $r | $ev | index($r) | not)))]
   | group_by([.reason, .provider])
   | map({reason: .[0].reason, provider: .[0].provider, tokens: (map(.tokens) | add)})

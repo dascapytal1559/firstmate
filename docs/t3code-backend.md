@@ -116,7 +116,7 @@ A T3 without crew lineage, a firstmate not running in T3, or a home with no pinn
 ### Where work comes from
 
 T3 Code's Usage page counts each piece of work to the device of the latest typed message on it, until the next typed message; clicks and automatic notifications move nothing.
-Firstmate does not decide where work counts, except to say which work is its own upkeep.
+Firstmate does not decide where work counts, except to say which work is its own upkeep, journal work, or incident response.
 At each durable boundary it records an origin reference, the T3 thread the work comes from and when, `{"threadId", "at"?}`, which is exactly what T3's `fromThread` takes, and passes it through untouched; T3 turns it into a label when the work launches or the claim is made (the fork's `fork/README.md` "Phone vs computer split" owns the rule).
 Writing a reference needs no T3 call: the thread is the one T3 names in each agent's environment as `T3CODE_THREAD_ID`, and the time is now.
 [`bin/fm-t3-origin-lib.sh`](../bin/fm-t3-origin-lib.sh) is the one owner of the references:
@@ -128,6 +128,9 @@ Writing a reference needs no T3 call: the thread is the one T3 names in each age
   A T3 without `upkeep` is sent the reference as before, with a note, and a start deferred for capacity or sizing keeps `upkeep` as its item's queued origin, so the item's later start is upkeep too and a wake about it before then counts to the computer.
 - A spawn with `--journal` sends T3's `journal` in place of that reference, so the thread is born counting to the phone as journal work whichever turn launches it; it mirrors `--upkeep` in every other way, including the note on a T3 without it and the queued origin of a deferred start, whose wake counts to the phone, and the two are never sent together.
   It is for a voice journal's items launched outside the journal's own filing turn, such as an item the captain approves later or a recovery start; an item launched in the filing turn needs neither, since that turn is already journal work and its reference keeps the device the journal came from.
+- A spawn with `--incident` sends T3's `incident` in place of that reference, so the thread is born counting to the computer as incident work, the Usage page's Incidents band, whichever turn launches it; it mirrors `--upkeep` in every other way, and only one of the three labels is ever sent.
+  It is for a fix Firstmate starts on its own from a production alert, with no captain approval, such as a fix dispatched after triage in a later turn.
+  A fix proposed to the captain that he approves or does himself is direct work and launches without it.
 - A backlog item added with `fm-tasks-axi.sh add` keeps the reference of the turn that queued it, and its first launch sends that one, whatever turn launches it, such as a recovery wake after a restart.
 - A steer through `fm-send.sh` keeps the reference in the steer's inbox record, and every doorbell for that record sends it, so a re-ring binds to the turn that wrote the steer; T3 moves the worker only when that turn was typed.
 - A note written with `fm-inbox.sh note` keeps the writer's own thread and time, and the wake about the note claims it.
@@ -151,10 +154,15 @@ Firstmate tells T3 where they come from with the fork's `t3_usage_claim` (the fo
   T3 refuses a thread whose work counts to no device, and the next wake gets its turn.
 - **Turns that file a voice journal.** The drain claims the wake turn of a voice journal's inbox note for the phone, and an agent filing a journal in any other turn runs `bin/fm-t3-usage-claim.sh turn --device phone`, so the journal and every worker launched from that turn count as journal work.
   T3 counts the claimed turn as journal work even when the captain typed it, keeping the device it was typed on.
+- **Turns that handle a production alert.** The drain claims the wake turn of an inbox note from the incident intake (`request_id=incident-*`: an alert, its resolve, or the production host unreachable) as incident work, sending T3's `process: "incident"`, so acknowledging, triage, closing or escalating, and every worker launched from that turn count as incident work.
+  A turn that handles an alert no drain in it presented, such as the one the intake's interrupt starts after an earlier turn drained the note, runs `bin/fm-t3-usage-claim.sh turn --process incident`.
+  A drain that also presents other wakes counts, like every wake turn, as the first one T3 binds in presentation order, so the alert's note names the turn only when no earlier wake does.
+  Unlike a phone claim, an incident claim leaves a typed prompt typed, so work the captain asks for in that turn stays direct.
 
 Upkeep needs no claim: T3 files a FirstMate coordinator turn that no claim names and no person typed as computer upkeep by itself, so a wake about no task (watcher recovery, scheduled checks, a follow-up armed outside T3) and a turn no drain describes (such as one a background command's notification started) count to the computer with nothing sent.
 The drain's claim passes `bin/fm-t3-mcp.mjs usage-claim --if-unclaimed`, which sends T3's `ifUnclaimed`, so a turn that already has a claim keeps it against later drains, while an explicit `turn` claim replaces it.
 A typed prompt still beats a claim, so claiming a typed turn changes nothing, except that a phone claim still labels a typed turn as journal work.
+A T3 whose claim takes no `process` skips the incident claim, and the drain tries its next wake.
 Every claim is best effort: a claim that cannot be made is skipped, a failed call is logged once to `state/t3-usage-claims.log`, and none ever holds up a wake, launch, or restart.
 
 Agent sessions T3 does not run are not claimed: each registers itself when it starts, through the T3 fork's session-register hook, installed in each tool's settings (the fork's `docs/user/usage.md` "Count agent sessions T3 does not run" owns the hook, the register, and how Usage counts a registration).
