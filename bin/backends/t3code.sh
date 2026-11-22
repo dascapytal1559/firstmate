@@ -169,11 +169,11 @@ process.stdout.write([JSON.stringify(d.selection), word(d.threadEnvironment), wo
 # The optional origin (bin/fm-t3-origin-lib.sh: a reference, or a cause
 # recorded before references existed) is sent only where T3 declares it, and
 # one T3 refuses fails the launch (exit 3) with nothing launched. The
-# optional word upkeep launches the thread as Firstmate's upkeep, and the
-# word journal as a voice journal's work, where T3 offers that label, in
-# place of the origin, which is then only what a T3 without it is sent; a
-# note on stderr says when that happened.
-fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] [parent-thread-id] [origin-json] [upkeep|journal] -> thread id
+# optional word upkeep launches the thread as Firstmate's upkeep, the word
+# journal as a voice journal's work, and the word incident as incident
+# response, where T3 offers that label, in place of the origin, which is then
+# only what a T3 without it is sent; a note on stderr says when that happened.
+fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> <model-selection-json> [environment-file] [instructions-file] [parent-thread-id] [origin-json] [upkeep|journal|incident] -> thread id
   local project_id=$1 title=$2 branch=$3 worktree=$4 selection=$5 env_file=${6:-} instructions_file=${7:-} parent=${8:-} origin=${9:-} label=${10:-} out rc
   local -a args=(launch --project "$project_id" --title "$title" --model-selection "$selection")
   [ -z "$branch" ] || args+=(--branch "$branch")
@@ -184,8 +184,8 @@ fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> 
   [ -z "$origin" ] || args+=("$(fm_t3_origin_flag "$origin")" "$origin")
   case "$label" in
     '') ;;
-    upkeep|journal) args+=("--$label") ;;
-    *) echo "error: fm_backend_t3code_thread_create: the tenth argument is the word upkeep, journal, or empty, not '$label'" >&2; return 2 ;;
+    upkeep|journal|incident) args+=("--$label") ;;
+    *) echo "error: fm_backend_t3code_thread_create: the tenth argument is the word upkeep, journal, incident, or empty, not '$label'" >&2; return 2 ;;
   esac
   out=$(fm_backend_t3code_mcp "${args[@]}") && rc=0 || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
@@ -193,6 +193,7 @@ fm_backend_t3code_thread_create() {  # <project-id> <title> <branch> <worktree> 
     case "$label" in
       upkeep) echo "note: this T3 cannot launch a thread as upkeep, so '$title' counts where the launching turn's work counts" >&2 ;;
       journal) echo "note: this T3 cannot launch a thread as journal work, so '$title' counts where the launching turn's work counts" >&2 ;;
+      incident) echo "note: this T3 cannot launch a thread as incident work, so '$title' counts where the launching turn's work counts" >&2 ;;
     esac
   fi
   printf '%s' "$out" | fm_backend_t3code_json_get threadId || return 1

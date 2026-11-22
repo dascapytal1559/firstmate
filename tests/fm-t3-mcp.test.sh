@@ -1865,12 +1865,86 @@ test_launch_says_journal_where_declared() {
   pass "fm-t3-mcp launch --journal: journal replaces the origin where T3 declares it, a T3 without it gets the origin, and it never rides beside upkeep"
 }
 
+# --incident rides like --upkeep: in place of the reference where the launch
+# declares incident, the reference elsewhere, and never beside another label.
+test_launch_says_incident_where_declared() {
+  local project ref thread before
+  ref='{"threadId":"coord","at":"2026-11-22T09:00:00.000Z"}'
+  fresh_case incident-launch '{"causedBy":true,"fromThread":true,"upkeep":true,"journal":true,"incident":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title fix --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --incident
+  expect_code 0 "$RC" "an incident launch succeeds: $ERR"
+  thread=$(field "$OUT" threadId)
+  assert_equals true "$(field "$OUT" incident)" "the result says the launch was incident work"
+  assert_equals falsefalse "$(field "$OUT" upkeep)$(field "$OUT" journal)" "and carried no other label"
+  assert_equals "" "$(field "$OUT" fromThread)" "and that no reference was sent"
+  assert_equals true "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" incident)" "the launch says incident"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" fromThread)" "in place of the reference"
+  assert_equals true "$(t3_fake_field "threads.$thread.incident")" "T3 binds the thread's birth as incident work"
+  mcp launch --project "$project" --title crew --model-selection "$SEL" --worktree "$WT" --from-thread "$ref"
+  assert_equals false "$(field "$OUT" incident)" "a launch without --incident is not incident work"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" incident)" "and says nothing of it"
+  before=$(t3_fake_calls t3_thread_launch | wc -l)
+  mcp launch --project "$project" --title both --model-selection "$SEL" --worktree "$WT" --incident --upkeep
+  expect_code 2 "$RC" "--incident beside --upkeep is a usage error"
+  assert_contains "$OUT$ERR" "--upkeep and --incident are exclusive" "the refusal names both labels"
+  mcp launch --project "$project" --title both --model-selection "$SEL" --worktree "$WT" --journal --incident
+  expect_code 2 "$RC" "--incident beside --journal is a usage error"
+  assert_equals "$before" "$(t3_fake_calls t3_thread_launch | wc -l)" "a refused label pair launches nothing"
+  fresh_case incident-undeclared '{"causedBy":true,"fromThread":true,"upkeep":true,"journal":true}'
+  t3_coordinator "$(iso_in -60)"
+  mcp project-ensure --root "$TMP_ROOT/proj"
+  project=$(field "$OUT" projectId)
+  mcp launch --project "$project" --title fix --model-selection "$SEL" --worktree "$WT" --from-thread "$ref" --incident
+  expect_code 0 "$RC" "a T3 without incident still launches: $ERR"
+  assert_equals false "$(field "$OUT" incident)" "the result says the launch was not incident work"
+  assert_equals "$ref" "$(field "$OUT" fromThread)" "and names the reference it sent instead"
+  assert_equals "" "$(field "$(t3_fake_calls t3_thread_launch | tail -1)" incident)" "an undeclared incident is never sent"
+  pass "fm-t3-mcp launch --incident: incident replaces the origin where T3 declares it, a T3 without it gets the origin, and it never rides beside another label"
+}
+
+# --process incident claims a target as Firstmate's incident response: T3
+# answers the computer with incident as the reason, a kept claim stands, and a
+# T3 whose claim takes no process refuses locally.
+test_usage_claim_process_incident() {
+  fresh_case usage-claim-incident '{"causedBy":true,"usageClaims":true,"fromThread":true,"incidentClaims":true}'
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)"
+  mcp usage-claim --turn coord --process incident
+  expect_code 0 "$RC" "an incident claim succeeds: $ERR"
+  assert_equals true "$(field "$OUT" claimed)" "the turn is claimed"
+  assert_equals computer "$(field "$OUT" device)" "counting to the computer"
+  assert_equals incident "$(field "$OUT" reason)" "as incident work"
+  assert_equals incident "$(field "$(t3_fake_calls t3_usage_claim | tail -n 1)" process)" "sent as T3's process"
+  assert_equals '{"device":"computer","bound":{"reason":"incident"}}' "$(t3_fake_field usageClaims.run:coord:run-c)" "and T3 holds it"
+  mcp usage-claim --turn coord --if-unclaimed --device phone
+  assert_equals false "$(field "$OUT" claimed)" "a later drain keeps the incident claim"
+  mcp usage-claim --turn coord --process upkeep
+  expect_code 2 "$RC" "an unknown process is invalid use"
+  mcp usage-claim --turn coord --process incident --device computer
+  expect_code 2 "$RC" "a process beside a device is invalid use"
+  t3_fake_set 'w.usageClaimAnswer = { threadId: "coord", runId: "run-c", causedBy: null, device: "computer" }'
+  mcp usage-claim --turn coord --process incident
+  expect_code 1 "$RC" "an incident claim answered without its reason is unproven"
+  assert_equals usage_claim_unproven "$(field "$OUT" error.code)" "and typed so"
+  fresh_case usage-claim-no-process '{"causedBy":true,"usageClaims":true,"fromThread":true}'
+  FM_WAKE=1 t3_coordinator "$(iso_in -60)"
+  mcp usage-claim --turn coord --process incident
+  expect_code 4 "$RC" "a T3 whose claim takes no process refuses locally"
+  assert_equals usage_claim_unsupported "$(field "$OUT" error.code)" "and typed so"
+  assert_equals "" "$(t3_fake_calls t3_usage_claim)" "with nothing sent"
+  pass "fm-t3-mcp usage-claim --process incident: counts to the computer as incident work, proven by T3's answer, refused locally where T3 lacks it"
+}
+
 t3_fake_start "$TMP_ROOT/server"
 test_usage_claim_targets_values_and_refusals
 test_restart_request_names_its_origin
 test_launch_and_send_carry_the_origin
 test_launch_says_upkeep_where_declared
 test_launch_says_journal_where_declared
+test_launch_says_incident_where_declared
+test_usage_claim_process_incident
 test_login_writes_private_credential_and_never_prints_token
 test_login_origin_defaults
 test_login_refuses_other_ceilings

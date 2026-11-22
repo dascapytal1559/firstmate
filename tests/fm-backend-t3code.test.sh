@@ -1779,6 +1779,60 @@ test_spawn_launches_journal() {
   pass "fm-spawn.sh --backend t3code --journal: the launch says journal where T3 offers it, a queued journal item keeps it, a T3 without it gets this thread, and it never rides beside upkeep"
 }
 
+# An incident start mirrors upkeep: the launch says incident in place of this
+# thread, an item queued as incident starts as incident without the flag, a
+# T3 without incident is sent this thread with a note, and a secondmate start
+# and another label beside it refuse.
+test_spawn_launches_incident() {
+  local id out rc
+  id=$(t3_uid t3incident-spawn)
+  t3_case spawn-incident
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true; w.journal = true; w.incident = true;'
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --incident); rc=$?
+  expect_code 0 "$rc" "an incident spawn inside a T3 turn should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.incident === true && a.upkeep === undefined && a.journal === undefined && a.fromThread === undefined && a.causedBy === undefined)')" = true ] \
+    || fail "the launch says incident in place of this thread, got '$(t3_launch_field 'JSON.stringify({ incident: a.incident, upkeep: a.upkeep, journal: a.journal, fromThread: a.fromThread })')'"
+  assert_not_contains "$out" "cannot launch a thread as incident work" "a T3 with incident needs no note"
+  id=$(t3_uid t3incident-queued)
+  t3_case spawn-incident-queued
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.incident = true;'
+  printf 'incident\n' > "$CASE_DIR/state/$id.queued-origin"
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5); rc=$?
+  expect_code 0 "$rc" "a spawn of an item queued as incident should succeed"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.incident === true && a.fromThread === undefined)')" = true ] \
+    || fail "an item queued as incident starts as incident from any turn"
+  assert_absent "$CASE_DIR/state/$id.queued-origin" "the spawn drops the incident record once the thread carries it"
+  id=$(t3_uid t3incident-upstream)
+  t3_case spawn-incident-upstream
+  t3_worker_setup "$id"
+  t3_origin_world
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --incident); rc=$?
+  expect_code 0 "$rc" "an incident spawn on a T3 without incident should still launch"$'\n'"$out"
+  [ "$(t3_launch_field 'String(a.incident === undefined && a.fromThread.threadId === "coord")')" = true ] \
+    || fail "a T3 without incident is sent this thread, got '$(t3_launch_field 'JSON.stringify({ incident: a.incident, fromThread: a.fromThread })')'"
+  assert_contains "$out" "note: this T3 cannot launch a thread as incident work" "the spawn says the work counts where this turn's does"
+  t3_case spawn-incident-secondmate
+  out=$(FM_HOME="$CASE_DIR/home" FM_STATE_OVERRIDE="$CASE_DIR/state" FM_DATA_OVERRIDE="$CASE_DIR/data" FM_CONFIG_OVERRIDE="$CONFIG" FM_SPAWN_NO_GUARD=1 \
+    "$ROOT/bin/fm-spawn.sh" "$(t3_uid t3incident-mate)" --secondmate --incident 2>&1); rc=$?
+  expect_code 1 "$rc" "a secondmate with --incident must refuse"$'\n'"$out"
+  assert_contains "$out" "--incident applies to a fresh ship or scout start" "the refusal names the flag"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused incident secondmate launches nothing, got '$(t3_dispatch_types)'"
+  id=$(t3_uid t3incident-both)
+  t3_case spawn-incident-both
+  t3_worker_setup "$id"
+  t3_origin_world
+  t3_world_set 'w.upkeep = true; w.journal = true; w.incident = true;'
+  out=$(T3CODE_THREAD_ID=coord t3_worker_spawn "$id" claude --model claude-sonnet-5 --incident --journal); rc=$?
+  expect_code 1 "$rc" "--incident beside --journal must refuse"$'\n'"$out"
+  assert_contains "$out" "--journal and --incident are exclusive" "the refusal names both flags"
+  [ -z "$(t3_dispatch_types)" ] || fail "a refused label pair launches nothing, got '$(t3_dispatch_types)'"
+  pass "fm-spawn.sh --backend t3code --incident: the launch says incident where T3 offers it, a queued incident item keeps it, a T3 without it gets this thread, and it never rides beside another label"
+}
+
 # A steer from inside a T3 turn keeps this thread and the steer's time in its
 # inbox record, and the record's doorbell carries it; one T3 refuses never
 # stops the doorbell.
@@ -3958,6 +4012,7 @@ test_turn_start_carries_its_origin_and_never_drops_the_message
 test_spawn_sends_this_thread_as_its_origin
 test_spawn_launches_upkeep
 test_spawn_launches_journal
+test_spawn_launches_incident
 test_send_records_its_origin_and_rings_with_it
 test_steer_rings_a_failed_thread
 test_steer_refuses_archived_or_missing_thread

@@ -66,7 +66,7 @@
 //       [--worktree <abs-path>] [--branch <name>] [--message-file <file>]
 //       [--environment-file <json-file>] [--instructions-file <file>]
 //       [--parent <thread-id>] [--from-thread <reference> | --caused-by <cause-json>]
-//       [--upkeep | --journal]
+//       [--upkeep | --journal | --incident]
 //     t3_thread_launch at runtimeMode full-access. With --worktree the
 //     workspace strategy is existing_worktree; without it, root (the project's
 //     own checkout). --environment-file (a JSON object of shell-variable names
@@ -90,7 +90,11 @@
 //     result's upkeep says which. --journal launches work from a voice
 //     journal's items the same way, sent as journal:true where the launch
 //     schema declares journal, so T3 counts it to the phone as journal work;
-//     the result's journal says which. Given together they are a usage
+//     the result's journal says which. --incident launches incident
+//     response, a fix Firstmate starts on its own from a production alert,
+//     the same way, sent as incident:true where the launch schema declares
+//     incident, so T3 counts it to the computer as incident work; the
+//     result's incident says which. Any two of these labels are a usage
 //     error, since T3 refuses that launch. Reads the thread and its configuration
 //     back and archives and refuses it unless T3 bound exactly that
 //     workspace, full access (and effectiveRuntimeMode full-access when the
@@ -122,12 +126,13 @@
 //     T3's refusal of the send itself, so a typed failure of the gate's reads
 //     exits 1.
 //   fm-t3-mcp.mjs usage-claim (--turn <thread-id> | --thread <id> --run <run-id> | --session <id> [--from <iso-time>] | --directory <abs-path>)
-//       (--from-thread <reference> | --caused-by <cause-json|null> | --device phone|computer) [--if-unclaimed]
+//       (--from-thread <reference> | --caused-by <cause-json|null> | --device phone|computer | --process incident) [--if-unclaimed]
 //     The T3 Code fork's t3_usage_claim (its fork/README.md "Phone vs
 //     computer split"): count work Usage cannot trace on its own with that
 //     reference's work (bound by value when T3 takes the claim), as that
-//     cause (one recorded before references existed), or straight to that
-//     device. --turn sends the thread alone, and T3 picks its turn running
+//     cause (one recorded before references existed), straight to that
+//     device, or as that process: incident, Firstmate's incident response,
+//     which T3 counts to the computer as incident work. --turn sends the thread alone, and T3 picks its turn running
 //     now (a thread with none is T3's typed refusal); --thread with --run
 //     names a run; a session (native id) or folder covers work run outside
 //     T3, such as a pipeline. A session claim with --from (a zoned ISO time)
@@ -140,13 +145,14 @@
 //     "already claimed", with that earlier claim's causedBy and device;
 //     --caused-by null removes (not with --if-unclaimed). Prints {claimed,
 //     the target, causedBy, device, reason} as T3 answered them: a device
-//     claim must answer that device, a cause that cause, and a reference a
-//     device with T3's reason for it, unless kept, else exit 1
+//     claim must answer that device, a cause that cause, a process the
+//     computer with that process as its reason, and a reference a device
+//     with T3's reason for it, unless kept, else exit 1
 //     (usage_claim_unproven). Exit 3 (origin_refused or cause_refused) for a
 //     reference or cause T3 refuses, such as a thread whose work counts to
 //     no device, with nothing claimed; exit 4 (usage_claim_unsupported)
-//     where T3 has no t3_usage_claim, or none that takes fromThread or
-//     ifUnclaimed when the call needs it.
+//     where T3 has no t3_usage_claim, or none that takes fromThread, process
+//     or ifUnclaimed when the call needs it.
 //   fm-t3-mcp.mjs usage-reasons [--days <n>] [--until-day <YYYY-MM-DD>] [--time-zone <iana>]
 //     The T3 Code fork's read-only t3_usage_reasons, the labels watchdog:
 //     Usage tokens over <n> days (T3's default 7, at most 366) ending
@@ -514,7 +520,9 @@ const EFFORT_OPTION_IDS = ["reasoningEffort", "effort", "thought_level", "thinki
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REPEATABLE = new Set(["option", "thread", "escalated"]);
 // Flags that take no value: flags[key] is true when given.
-const SWITCHES = new Set(["if-unclaimed", "upkeep", "journal"]);
+const SWITCHES = new Set(["if-unclaimed", "upkeep", "journal", "incident"]);
+// The usage labels a launch may carry, at most one each.
+const LAUNCH_LABELS = ["upkeep", "journal", "incident"];
 // Every MCP session this invocation opened, ended when the verb returns.
 const SESSIONS = new Set();
 
@@ -1390,7 +1398,8 @@ async function launch(flags) {
   const instructions = launchInstructions(flags);
   if (flags.parent !== undefined && !flags.parent) usage("--parent needs a thread id");
   const wanted = originFlags(flags);
-  if (flags.upkeep === true && flags.journal === true) usage("--upkeep and --journal are exclusive");
+  const labels = LAUNCH_LABELS.filter((k) => flags[k] === true);
+  if (labels.length > 1) usage(`--${labels.join(" and --")} are exclusive`);
   let session;
   let g;
   try {
@@ -1402,13 +1411,14 @@ async function launch(flags) {
   // A T3 without crew lineage drops an undeclared argument, so the parent
   // rides, and is proven, only where the launch schema declares it.
   const parent = flags.parent !== undefined && toolOffers(session, "t3_thread_launch", "parentThreadId") ? flags.parent : null;
-  // An older T3 refuses an undeclared key, so upkeep or journal, and
-  // otherwise the reference (or a cause recorded before references existed),
-  // rides only where declared; either label names no origin, so it replaces
-  // them.
+  // An older T3 refuses an undeclared key, so upkeep, journal or incident,
+  // and otherwise the reference (or a cause recorded before references
+  // existed), rides only where declared; a label names no origin, so it
+  // replaces them.
   const upkeep = flags.upkeep === true && toolOffers(session, "t3_thread_launch", "upkeep");
   const journal = flags.journal === true && toolOffers(session, "t3_thread_launch", "journal");
-  const { from, cause } = declaredOrigin(session, "t3_thread_launch", upkeep || journal ? NO_ORIGIN : wanted);
+  const incident = flags.incident === true && toolOffers(session, "t3_thread_launch", "incident");
+  const { from, cause } = declaredOrigin(session, "t3_thread_launch", upkeep || journal || incident ? NO_ORIGIN : wanted);
   const workspaceStrategy = worktree
     ? { type: "existing_worktree", worktreePath: worktree, ...(flags.branch ? { branch: flags.branch } : {}) }
     : { type: "root", ...(flags.branch ? { branch: flags.branch } : {}) };
@@ -1427,6 +1437,7 @@ async function launch(flags) {
     ...(cause !== null ? { causedBy: cause } : {}),
     ...(upkeep ? { upkeep: true } : {}),
     ...(journal ? { journal: true } : {}),
+    ...(incident ? { incident: true } : {}),
   };
   let out;
   try {
@@ -1477,6 +1488,7 @@ async function launch(flags) {
     causedBy: cause,
     upkeep,
     journal,
+    incident,
     environmentId: g.environmentId,
     origin: session.origin,
     serverVersion: g.serverVersion,
@@ -1622,6 +1634,8 @@ function originRefusal(err, from, cause, consequence) {
 // count work Usage cannot trace with a thread's work, a cause, or a device.
 const USAGE_CLAIM_TOOL = "t3_usage_claim";
 const USAGE_DEVICES = ["phone", "computer"];
+// The processes a claim may declare, and the device T3 counts each to.
+const USAGE_PROCESSES = { incident: "computer" };
 
 async function usageClaimSession(flags) {
   const { session } = await verifiedSession(flags);
@@ -1642,12 +1656,14 @@ async function usageClaim(flags) {
   const targets = ["turn", "run", "session", "directory"].filter((k) => flags[k] !== undefined);
   if (targets.length !== 1) usage("give exactly one of --turn, --run (with --thread), --session, or --directory");
   if ((flags.run !== undefined) !== (flags.thread !== undefined)) usage("--thread goes with --run, and only with --run");
-  const values = ["from-thread", "caused-by", "device"].filter((k) => flags[k] !== undefined);
-  if (values.length !== 1) usage("give exactly one of --from-thread, --caused-by, or --device");
+  const values = ["from-thread", "caused-by", "device", "process"].filter((k) => flags[k] !== undefined);
+  if (values.length !== 1) usage("give exactly one of --from-thread, --caused-by, --device, or --process");
   const value = flags.device !== undefined ? { device: flags.device }
+    : flags.process !== undefined ? { process: flags.process }
     : flags["from-thread"] !== undefined ? { fromThread: fromThreadFlag(flags) }
     : flags["caused-by"] === "null" ? { causedBy: null } : { causedBy: causeFlag(flags) };
   if (value.device !== undefined && !USAGE_DEVICES.includes(value.device)) usage(`--device must be one of ${USAGE_DEVICES.join(", ")}`);
+  if (value.process !== undefined && !Object.hasOwn(USAGE_PROCESSES, value.process)) usage(`--process must be one of ${Object.keys(USAGE_PROCESSES).join(", ")}`);
   if (flags.directory !== undefined && !path.isAbsolute(flags.directory)) usage("--directory must be an absolute path");
   if (flags.from !== undefined && flags.session === undefined) usage("--from goes only with --session");
   const from = flags.from === undefined ? undefined : isoTime(flags.from);
@@ -1660,6 +1676,9 @@ async function usageClaim(flags) {
   }
   if (value.fromThread !== undefined && !toolOffers(session, USAGE_CLAIM_TOOL, "fromThread")) {
     throw new Refusal("usage_claim_unsupported", `this T3 cannot count a claim with a thread's work (${USAGE_CLAIM_TOOL} takes no fromThread)`, 4);
+  }
+  if (value.process !== undefined && !toolOffers(session, USAGE_CLAIM_TOOL, "process")) {
+    throw new Refusal("usage_claim_unsupported", `this T3 cannot count a claim as a process (${USAGE_CLAIM_TOOL} takes no process)`, 4);
   }
   // A T3 whose claim takes no from (before per-start session claims) gets
   // the whole-session claim, which replaces that session's earlier one.
@@ -1691,8 +1710,9 @@ async function usageClaim(flags) {
     return { ok: true, claimed: false, ...target, causedBy, device, reason: "already claimed" };
   }
   // A reference is bound by value: T3 answers the device that thread's work
-  // counts to, and why.
+  // counts to, and why; a process answers its device with itself as why.
   const proven = value.device !== undefined ? device === value.device
+    : value.process !== undefined ? device === USAGE_PROCESSES[value.process] && reason === value.process && causedBy === null
     : value.fromThread !== undefined ? USAGE_DEVICES.includes(device) && Boolean(reason) && causedBy === null
     : value.causedBy === null ? causedBy === null && device === null : sameCause(value.causedBy, causedBy);
   if (!proven) throw new Refusal("usage_claim_unproven", "T3 accepted the usage claim but answered with another value", 1);

@@ -140,6 +140,14 @@
 //     a "journal: ..." invalid_request before anything is created, and
 //     stores journal:true on the launched thread. Without it the argument is
 //     dropped.
+//   - a T3 with incident launches (world incident, the fork's Incidents
+//     band) declares incident on t3_thread_launch, refuses it beside
+//     fromThread, causedBy or another label with an "incident: ..."
+//     invalid_request before anything is created, and stores incident:true
+//     on the launched thread; world incidentClaims declares t3_usage_claim's
+//     process, and a claim with process "incident" is stored as {device:
+//     "computer", bound: {reason: "incident"}} and answered with that device
+//     and reason. Without them the argument is dropped.
 //
 // Usage: t3-fake-server.mjs --case-file <file> --port-file <file> [--parent-pid <pid>] [--port <n>]
 // --port listens on that port instead of a free one, so a test can restart the
@@ -206,7 +214,7 @@ const TOOL_SCHEMAS = {
     properties: Object.fromEntries(["environmentId", "projectId", "title", "modelSelection", "runtimeMode", "interactionMode", "workspaceStrategy",
       "environment", "instructions", "message", "clientRequestId", ...(w.crewLineage ? ["parentThreadId"] : []),
       ...(w.causedBy ? ["causedBy"] : []), ...(w.fromThread ? ["fromThread"] : []), ...(w.upkeep ? ["upkeep"] : []),
-      ...(w.journal ? ["journal"] : [])].map((k) => [k, {}])),
+      ...(w.journal ? ["journal"] : []), ...(w.incident ? ["incident"] : [])].map((k) => [k, {}])),
   }),
   t3_thread_send: (w) => ({
     type: "object",
@@ -239,7 +247,8 @@ const TOOL_SCHEMAS = {
   t3_usage_claim: (w) => ({
     type: "object",
     properties: Object.fromEntries(["environmentId", "sessionId", ...(w.usageClaimFrom ? ["from"] : []), "directory", "threadId", "runId",
-      "causedBy", ...(w.fromThread ? ["fromThread"] : []), "device", ...(w.noIfUnclaimed ? [] : ["ifUnclaimed"])].map((k) => [k, {}])),
+      "causedBy", ...(w.fromThread ? ["fromThread"] : []), "device", ...(w.incidentClaims ? ["process"] : []),
+      ...(w.noIfUnclaimed ? [] : ["ifUnclaimed"])].map((k) => [k, {}])),
   }),
   t3_thread_list: () => ({
     type: "object",
@@ -508,16 +517,19 @@ async function callTool(w, name, a) {
       if (targets.length !== 1) return [err("invalid_request", "Give exactly one of sessionId, directory or runId."), false];
       if ((runId !== undefined) !== (a.threadId !== undefined)) return [err("invalid_request", "threadId goes with runId, and only with runId."), false];
       if (a.directory !== undefined && !a.directory.startsWith("/")) return [err("invalid_request", "directory must be an absolute path."), false];
-      if ([a.causedBy, fromThread, a.device].filter((v) => v !== undefined).length !== 1 || (a.causedBy === null && a.device)) {
-        return [err("invalid_request", w.fromThread ? "Give exactly one of causedBy, fromThread or device." : "Give exactly one of causedBy or device."), false];
+      // With world incidentClaims, process declares incident response.
+      const declared = w.incidentClaims ? a.process : undefined;
+      if ([a.causedBy, fromThread, a.device, declared].filter((v) => v !== undefined).length !== 1 || (a.causedBy === null && a.device)) {
+        return [err("invalid_request", w.incidentClaims ? "Give exactly one of causedBy, fromThread, device or process." : w.fromThread ? "Give exactly one of causedBy, fromThread or device." : "Give exactly one of causedBy or device."), false];
       }
       if (a.device !== undefined && !["phone", "computer"].includes(a.device)) return [err("invalid_params", "device"), false];
+      if (declared !== undefined && declared !== "incident") return [err("invalid_params", "process"), false];
       if (runId !== undefined && !(t?.runs ?? []).some((r) => r.runId === runId)) return [err("invalid_request", `run ${runId} is not a run of thread ${a.threadId}.`), false];
       if (a.causedBy) {
         const problem = causeProblem(threads, a.causedBy);
         if (problem) return [problem, false];
       }
-      let bound;
+      let bound = declared !== undefined ? { device: "computer", bound: { reason: "incident" } } : undefined;
       if (fromThread !== undefined) {
         const problem = fromThreadProblem(threads, fromThread);
         if (problem) return [problem, false];
@@ -593,6 +605,10 @@ async function callTool(w, name, a) {
       if (journal && (fromThread !== undefined || cause !== undefined || upkeep)) {
         return [err("invalid_request", "journal: a launch counted as journal names no origin and is not upkeep; omit fromThread, causedBy and upkeep."), false];
       }
+      const incident = w.incident ? a.incident === true : false;
+      if (incident && (fromThread !== undefined || cause !== undefined || upkeep || journal)) {
+        return [err("invalid_request", "incident: a launch counted as incident work names no origin and carries no other label; omit fromThread, causedBy, upkeep and journal."), false];
+      }
       const ws = a.workspaceStrategy ?? {};
       const id = `mcp:${randomUUID()}`;
       const sel = a.modelSelection ?? {};
@@ -620,6 +636,7 @@ async function callTool(w, name, a) {
       if (fromThread !== undefined) n.fromThread = fromThread;
       if (upkeep) n.upkeep = true;
       if (journal) n.journal = true;
+      if (incident) n.incident = true;
       threads[id] = n;
       if (a.message) startRun(n, a.message, undefined, cause, fromThread);
       return [ok({ threadId: id, projectId: n.projectId, runId: n.activeRunId, status: n.status }), true];

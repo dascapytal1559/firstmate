@@ -77,14 +77,14 @@ test_helper_reads_the_figure_and_refuses_what_is_not_one() {
 }
 
 test_everything_labelled_stays_silent() {
-  fresh_case labelled "{\"usageReasons\":{\"rows\":[$(row typed claude 900 false),$(row upkeep codex 100 false),$(row noCause claude 0 true)]}}"
+  fresh_case labelled "{\"usageReasons\":{\"rows\":[$(row typed claude 900 false),$(row upkeep codex 100 false),$(row incident claude 50 false),$(row noCause claude 0 true)]}}"
   local before out
   before=$(cat "$BACKLOG")
   out=$("$CHECK" --day "$DAY")
   expect_code 0 "$?" "a labelled day passes"
-  assert_contains "$out" "$DAY (Australia/Melbourne): all 1000 tokens labelled" "the summary names the day"
+  assert_contains "$out" "$DAY (Australia/Melbourne): all 1050 tokens labelled" "the summary names the day, incident work counted as labelled"
   assert_equals "$before" "$(cat "$BACKLOG")" "nothing is raised"
-  pass "fm-usage-labels-check: a fully labelled day raises nothing"
+  pass "fm-usage-labels-check: a fully labelled day, incident work included, raises nothing"
 }
 
 test_unlabelled_tokens_raise_one_item() {

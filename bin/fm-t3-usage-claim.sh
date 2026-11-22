@@ -15,23 +15,28 @@
 # when they start (docs/t3code-backend.md "Usage claims").
 #
 # Usage:
-#   fm-t3-usage-claim.sh turn (--device phone|computer | --task <id> | --from-thread <reference>)
+#   fm-t3-usage-claim.sh turn (--device phone|computer | --process incident | --task <id> | --from-thread <reference>)
 #     Claim the calling agent's T3 turn running now ($T3CODE_THREAD_ID): it
-#     counts to that device, with task <id>'s work, or with that origin
-#     reference's work. For a turn the drain's claim does not describe, such
-#     as the turn that files a voice journal (--device phone). It replaces
-#     any claim on that turn, and a later drain in the same turn leaves it.
-#   fm-t3-usage-claim.sh wake [--task <id> | --from-thread <reference> | --caused-by <cause-json> | --device phone|computer]...
+#     counts to that device, as incident response (to the computer, as
+#     incident work), with task <id>'s work, or with that origin reference's
+#     work. For a turn the drain's claim does not describe, such as the turn
+#     that files a voice journal (--device phone) or one that handles a
+#     production alert no drain in it presented (--process incident). It
+#     replaces any claim on that turn, and a later drain in the same turn
+#     leaves it.
+#   fm-t3-usage-claim.sh wake [--task <id> | --from-thread <reference> | --caused-by <cause-json> | --device phone|computer | --process incident]...
 #     The wake drain's claim on the current turn. It tries the candidates
 #     that name something, in order and each distinct value once, until T3
 #     binds one: a task's own thread
 #     (where that task counts now; for an item queued as upkeep with no
-#     thread yet, the computer, and as journal, the phone), a reference given, a cause given (one a
-#     note or follow-up recorded before references existed, passed on
-#     unchanged), or a device given, such as the phone for a voice journal's
-#     note. T3 refuses a reference or cause it cannot bind, such as a task
+#     thread yet, the computer, as journal, the phone, and as incident,
+#     incident work), a reference given, a cause given (one a note or
+#     follow-up recorded before references existed, passed on unchanged), a
+#     device given, such as the phone for a voice journal's note, or a
+#     process given, incident for a production alert's note. T3 refuses a reference or cause it cannot bind, such as a task
 #     whose work counts to no device, and the next candidate gets its turn;
-#     a wake none of whose candidates binds is logged as failing to name its
+#     a T3 that cannot take a process skips that candidate the same way; a
+#     wake none of whose candidates binds is logged as failing to name its
 #     turn. A turn that already has a claim keeps it (T3's ifUnclaimed).
 #     With no candidate at all, nothing is claimed: T3 files a coordinator
 #     turn that no claim names and no person typed as upkeep by itself, so
@@ -115,23 +120,24 @@ claim() {
 }
 
 # value_args <value>: the usage-claim value flags for a device, upkeep (the
-# computer), journal (the phone, which T3 files as journal), a reference, or
-# a cause.
+# computer), journal (the phone, which T3 files as journal), incident (the
+# process T3 files as incident work), a reference, or a cause.
 value_args() {
   case "$1" in
     phone|computer) printf '%s\n' --device "$1" ;;
     upkeep) printf '%s\n' --device computer ;;
     journal) printf '%s\n' --device phone ;;
+    incident) printf '%s\n' --process incident ;;
     *) printf '%s\n%s\n' "$(fm_t3_origin_flag "$1")" "$1" ;;
   esac
 }
 
 # candidate_value <candidate>: what task:<id>, from:<reference>,
-# cause:<json>, or device:<device> names, or nothing.
+# cause:<json>, device:<device>, or process:<process> names, or nothing.
 candidate_value() {
   case "$1" in
     task:*) fm_t3_origin_of_task "$STATE" "${1#task:}" ;;
-    from:*|cause:*|device:*) printf '%s' "${1#*:}" ;;
+    from:*|cause:*|device:*|process:*) printf '%s' "${1#*:}" ;;
   esac
 }
 
@@ -150,6 +156,7 @@ verb_turn() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; candidate=device:$2; n=$((n + 1)); shift 2 ;;
+      --process) [ "$#" -ge 2 ] || usage; [ "$2" = incident ] || usage; candidate=process:$2; n=$((n + 1)); shift 2 ;;
       --task) [ "$#" -ge 2 ] || usage; candidate=task:$2; n=$((n + 1)); shift 2 ;;
       --from-thread) [ "$#" -ge 2 ] || usage; candidate=from:$2; n=$((n + 1)); shift 2 ;;
       *) usage ;;
@@ -175,6 +182,7 @@ verb_wake() {
       --from-thread) [ "$#" -ge 2 ] || usage; candidates+=("from:$2"); shift 2 ;;
       --caused-by) [ "$#" -ge 2 ] || usage; candidates+=("cause:$2"); shift 2 ;;
       --device) [ "$#" -ge 2 ] || usage; case "$2" in phone|computer) ;; *) usage ;; esac; candidates+=("device:$2"); shift 2 ;;
+      --process) [ "$#" -ge 2 ] || usage; [ "$2" = incident ] || usage; candidates+=("process:$2"); shift 2 ;;
       *) usage ;;
     esac
   done
