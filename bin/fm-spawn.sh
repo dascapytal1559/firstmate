@@ -803,7 +803,7 @@
 #   exactly: on backend t3code the launch says journal in place of the
 #   origin where T3 offers it, a T3 without it is sent that origin with a
 #   note, a deferred start records journal as the item's queued origin, and
-#   it is refused on --secondmate, on a relaunch, and beside --upkeep. A
+#   it is refused on --secondmate, on a relaunch, and beside another label. A
 #   start in the filing turn needs neither: its origin is that turn, which
 #   T3 already counts as journal.
 #   --incident starts a ship or scout as incident response: a fix Firstmate
