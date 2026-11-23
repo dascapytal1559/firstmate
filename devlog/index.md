@@ -2114,3 +2114,23 @@ The choices made:
 - What counts as a sign of harm is unchanged.
 
 The evidence is the clear check's own test suite, which covers the record, the replace-on-rerun, the comparison and the first week.
+
+## 77. A worker card says whose move it is (23 November 2026)
+
+The T3 sidebar's worker cards read "Ready", "Waiting" and "Waiting for captain", and those did not say who had to act: a finished build waiting on FirstMate read "Ready", while two review boards waiting on the captain read plain "Waiting".
+
+> If it's waiting on you, let's just call it Queued. Should be the gray colour. Waiting, which I think it's something we inherited from T3 code. It kind of sometimes means testing, sometimes something else. Yeah, waiting is fine and the gray color. And then if it's waiting for captain, make it an orange color. And yeah, let's go clean up those cards.
+
+What was built:
+
+- **Waiting for captain** now also covers an open review board and a finished build whose landing needs the captain's approval.
+- **Queued** replaces Ready and means FirstMate moves next: finished work, a blocked worker, an open question FirstMate settles, or a worker held for a later go.
+- **Waiting** is what is left: a pause on something external, or a worker the captain snoozed.
+
+The choices made:
+
+- A review board stops counting the moment its decision is resolved, because the card reads the same record of open decisions the rest of FirstMate uses.
+- A status log that cannot be read leaves the card as it is rather than guessing.
+- The orange colour is a separate change in T3 Code, so this one changes words only.
+
+The evidence is the card status test suite, with new cases for each rule, including a resolved and a snoozed review board.

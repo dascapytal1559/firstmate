@@ -262,7 +262,7 @@ test_status_decision_alone_is_no_captain_wait() {
   make_home status-only
   declares 'needs-decision [key=layout] [at=1700000000]: which layout'
   cards sync || fail "sync should pass"
-  assert_equals "Waiting" "$(card_of)" "a worker's own needs-decision line is a wait on firstmate"
+  assert_equals "Queued" "$(card_of)" "a worker's own needs-decision line is firstmate's move"
   captain hold w1 --reason "which layout" >/dev/null || fail "hold should succeed"
   assert_equals "$WAITING" "$(card_of)" "only firstmate holding the question makes it the captain's"
   pass "fm-t3-crew-status: a needs-decision line alone is not a captain wait"
@@ -330,13 +330,13 @@ test_restart_that_loses_labels_is_republished() {
   mkdir -p "$HOME_DIR/data/w2" && printf 'report\n' > "$HOME_DIR/data/w2/report.md"
   cards sync || fail "sync should pass"
   assert_equals "$WAITING" "$(card_of)" "the first worker waits on the captain"
-  assert_equals "Ready" "$(card_of "$other")" "the second worker is ready"
+  assert_equals "Queued" "$(card_of "$other")" "the second worker's finished work is firstmate's move"
   t3_fake_stop
   t3_fake_set 'for (const t of Object.values(w.threads)) { delete t.statusLabel; delete t.statusLabelSince; }'
   t3_fake_restart "$TMP_ROOT/server"
   cards sync || fail "the pass after the restart should succeed"
   assert_equals "$WAITING" "$(card_of)" "a label the restart lost is set again"
-  assert_equals "Ready" "$(card_of "$other")" "on every card, from one pass"
+  assert_equals "Queued" "$(card_of "$other")" "on every card, from one pass"
   pass "fm-t3-crew-status: a T3 restart that loses labels is repaired by the next pass"
 }
 
@@ -556,7 +556,7 @@ test_declared_states_label_between_turns() {
   assert_equals "Waiting" "$(card_of)" "a declared pause reads Waiting"
   declares 'blocked [at=1700000000]: the fixture repository is missing'
   cards sync || fail "the pass should pass"
-  assert_equals "Waiting" "$(card_of)" "a blocker reads Waiting"
+  assert_equals "Queued" "$(card_of)" "a blocker reads Queued"
   turn_is running
   cards sync || fail "the pass should pass"
   assert_equals "" "$(card_of)" "a worker at work shows T3's own Working"
@@ -564,10 +564,10 @@ test_declared_states_label_between_turns() {
   mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
   declares 'done [at=1700000000]: report ready'
   cards sync || fail "the pass should pass"
-  assert_equals "Ready" "$(card_of)" "finished work reads Ready"
+  assert_equals "Queued" "$(card_of)" "finished work reads Queued"
   inbox_message >/dev/null || fail "could not write an inbox message"
   cards sync || fail "the pass should pass"
-  assert_equals "" "$(card_of)" "a pending steer takes Ready off before the turn starts"
+  assert_equals "" "$(card_of)" "a pending steer takes Queued off before the turn starts"
   rm -f "$HOME_DIR/state/w1.inbox/"*.msg
   declares 'failed [at=1700000000]: the reproduction does not hold'
   cards sync || fail "the pass should pass"
@@ -575,7 +575,83 @@ test_declared_states_label_between_turns() {
   declares 'working [at=1700000000]: reading the code'
   cards sync || fail "the pass should pass"
   assert_equals "" "$(card_of)" "a worker between turns with nothing to wait on carries no label"
-  pass "fm-t3-crew-status: Waiting, Ready, and Failed follow the worker's state between turns"
+  pass "fm-t3-crew-status: Waiting, Queued, and Failed follow the worker's state between turns"
+}
+
+# hold_kind <id> <parked|future> -> an open hold of that kind on the row.
+hold_kind() {
+  (cd "$HOME_DIR" && tasks-axi hold "$1" --reason "held for the test" --kind "$2") >/dev/null \
+    || fail "could not hold $1 as $2"
+}
+
+test_board_review_is_the_captains_until_resolved_or_snoozed() {
+  make_home board-review
+  worker_meta w1 scout
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick a layout on the board'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an open review board waits on the captain"
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a worker at work on the board shows T3's own Working"
+  turn_is settled
+  printf 'resolved [key=board-review] [at=1700000001]: the captain picked one\n' >> "$HOME_DIR/state/w1.status"
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a resolved review board stops counting"
+  declares 'needs-decision [key=board-review] [at=1700000002]: pick a layout on the board'
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a snoozed review board reads Waiting"
+  pass "fm-t3-crew-status: a review board waits on the captain until it is resolved or snoozed"
+}
+
+test_finished_ship_follows_its_merge_posture() {
+  local head
+  make_home landing
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship with yolo off needs the captain's approval"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=on
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a finished ship with yolo on is firstmate's to land"
+  pass "fm-t3-crew-status: a finished ship reads by who may land it"
+}
+
+test_future_and_parked_holds() {
+  make_home other-holds
+  hold_kind w1 future
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold on the worker's task is firstmate's move"
+  make_home future-origin
+  captain hold w1-later --title "Bedtime" --reason "after bedtime" --origin w1 --repo sample >/dev/null \
+    || fail "an origin hold should succeed"
+  hold_kind w1-later future
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold raised for the worker is firstmate's move"
+  make_home snoozed
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a captain-snoozed worker reads Waiting"
+  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a snoozed worker with another open decision is firstmate's move"
+  pass "fm-t3-crew-status: future holds read Queued and a snoozed worker reads Waiting"
+}
+
+test_unreadable_status_log_leaves_the_card() {
+  make_home unreadable-log
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick one'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "the review board shows first"
+  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
+  chmod 000 "$HOME_DIR/state/w1.status"
+  cards sync
+  chmod 644 "$HOME_DIR/state/w1.status"
+  assert_equals "Unchanged" "$(card_of)" "a status log that cannot be read changes no card"
+  pass "fm-t3-crew-status: a status log that cannot be read leaves the card alone"
 }
 
 # A turn T3 reports in no known way leaves a card whose label depends on the
@@ -700,6 +776,10 @@ test_a_pass_that_finds_another_running_is_owed
 test_waiting_outranks_testing
 test_a_scout_never_shows_testing
 test_declared_states_label_between_turns
+test_board_review_is_the_captains_until_resolved_or_snoozed
+test_finished_ship_follows_its_merge_posture
+test_future_and_parked_holds
+test_unreadable_status_log_leaves_the_card
 test_unreadable_turn_leaves_the_card
 test_older_t3_breaks_nothing
 test_watcher_repairs_within_its_loop

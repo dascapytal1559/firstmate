@@ -267,26 +267,26 @@ The T3 project of a torn-down secondmate home stays in T3 Code pointing at the r
 A live worker's card carries T3's status label where Working, Done, or the age would be, and the thread title stays plain.
 T3 still shows Approval, Input, Request, Limited, Failed, and Woke over it.
 
-The label says what only Firstmate knows about a live T3 ship or scout, first match winning:
+The label says what only Firstmate knows about a live T3 ship or scout, including who moves next between turns, first match winning:
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | A captain hold is open on the worker's own task or was raised for it with `--origin`, and the worker is between turns. |
+| `Waiting for captain` | Between turns, the captain moves next: a captain hold is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no `parked` hold, or a finished ship's landing needs the captain's approval. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
-| `Waiting` | Between turns, the worker waits on something other than the captain: an open decision firstmate settles, a blocker, or a declared pause. |
-| `Ready` | Between turns, the worker's work is done. |
+| `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
+| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold). |
 | `Failed` | Between turns, the worker or its run failed. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.
-A worker's `needs-decision` line alone reads `Waiting`, not `Waiting for captain`, because firstmate settles most of those itself.
+A worker's `needs-decision` line alone reads `Queued`, because firstmate settles most of those itself; the exception is an open `board-review` decision, a review board only the captain can answer, which reads `Waiting for captain` until it is resolved or the captain snoozes it.
 A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
-A run left only watching a PR with green checks reads as done, so the card reads `Ready` then.
+A run left only watching a PR with green checks reads as done, so the card then reads `Queued`, or `Waiting for captain` when landing needs the captain's approval.
 
-The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's captain holds, each worker's current state, its steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
+The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's holds, each worker's current state, open decisions, recorded merge posture, and steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
 It runs after every hold, answer, reconcile close, and PR settlement, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
 The watcher sees a run end from its own wait on T3, at once where that wait holds the watcher's cycle and within one poll interval in a home that also has a Herdr or Rex worker; a no-mistakes run starting or ending is seen by the minute pass.
-A hold, run, or turn that cannot be read leaves the card as it is.
+A hold, run, status log, or turn that cannot be read leaves the card as it is.
 Cleanup clears the label before archiving the thread, even while a hold stays open.
 The label is display only, and T3's `crewOf` stays what makes a thread crew.
 
@@ -295,7 +295,7 @@ A T3 without the status label shows none of these, and holds and cleanup carry o
 What T3 can rely on, for any live ship or scout card in a home with the T3 credential:
 
 - Working is T3's own fact: Firstmate clears its label while the worker works, except `Testing`, which stays.
-- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Waiting for captain`, `Testing`, or `Waiting`, and finished work carries `Ready`.
+- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Waiting for captain`, `Testing`, `Queued`, or `Waiting`, and finished work carries `Queued` or `Waiting for captain`.
 - A label changes only when its meaning does, so T3's `statusLabelSince` is the time that state began; a pass re-sends nothing.
 - A label is current within seconds of a hold, answer, steer, or turn end, and within about a minute of a no-mistakes run starting or ending.
 - A label T3 lost, as a restart could, is set again within about a minute, and cleanup clears the label before the thread is archived.

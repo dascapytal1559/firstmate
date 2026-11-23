@@ -5,28 +5,34 @@
 # The label is a projection and this script keeps no record of its own: every
 # pass computes it afresh for every recorded T3 ship and scout from the
 # authoritative reads, and compares it with the live card. Those reads are the
-# backlog's captain holds, as bin/fm-fleet-snapshot.sh reads them; the worker's
-# current state, as bin/fm-crew-state.sh reads it; its steering inbox; and its
-# thread in T3. A hold counts for a worker while it is open (not Done, hold
-# kind captain) and on the worker's own task or raised for it (its
-# hold_origin); a worker's needs-decision line alone is no captain wait.
+# backlog's holds, as bin/fm-fleet-snapshot.sh reads them; the worker's current
+# state, as bin/fm-crew-state.sh reads it; its open decisions, as
+# bin/fm-classify-lib.sh's status_open_decisions folds them; its recorded yolo;
+# its steering inbox; and its thread in T3. A hold counts for a worker while it
+# is open (not Done) and on the worker's own task or raised for it (its
+# hold_origin).
 #
-# Labels, first match wins:
-#   Waiting for captain  a hold counts for the worker, and it is between turns.
+# A card between turns says who moves next. Labels, first match wins:
+#   Waiting for captain  a hold of kind captain counts for the worker; or an
+#                        open needs-decision with key board-review and no
+#                        parked hold; or a finished ship whose recorded yolo is
+#                        off, since landing needs the captain's approval.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
-#   Waiting              between turns, with an open decision, a blocker, or a
-#                        declared pause: crew-state reads parked, blocked, or
-#                        paused.
-#   Ready                between turns, and crew-state reads the work done.
-#   Failed               between turns, and crew-state reads it failed.
+#   Queued               firstmate moves next: crew-state reads done or blocked,
+#                        or parked with an open decision other than
+#                        board-review, or a hold of kind future counts.
+#   Waiting              any other declared wait: crew-state reads parked or
+#                        paused, or a hold of kind parked (the captain snoozed
+#                        it) counts.
+#   Failed               crew-state reads it failed.
 #   none                 otherwise, and while the worker works, so T3 shows
 #                        its own Working.
 # The worker works while T3 reads its thread busy or while its steering inbox
 # holds an unhandled message, as when the captain's reply has just landed. A
-# run crew-state cannot read, or a turn T3 cannot report where the label
-# depends on it, leaves the card as it is.
+# run crew-state cannot read, a status log that cannot be folded, or a turn T3
+# cannot report where the label depends on it, leaves the card as it is.
 #
 # Usage:
 #   fm-t3-crew-status.sh sync
@@ -79,6 +85,8 @@ command -v jq >/dev/null 2>&1 || { echo "t3-crew-status: jq is required"; exit 1
 
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-crew-status.XXXXXX") || { echo "t3-crew-status: no temporary directory"; exit 1; }
 trap 'rm -rf -- "$WORK"' EXIT
@@ -92,6 +100,51 @@ worker_thread() {  # <task-id>
   kind=$(sed -n 's/^kind=//p' "$meta" | head -n 1)
   case "${kind:-ship}" in ship|scout) ;; *) return 1 ;; esac
   fm_backend_target_of_meta "$meta"
+}
+
+# Whether a hold of <kind> counts for <worker>.
+has_hold() {  # <kind> <worker>
+  grep -Fqx -- "$1"$'\t'"$2" "$WORK/holds"
+}
+
+# The label for <worker> between turns, or - to leave its card. <run> is the
+# run's label: Testing, - when the run cannot be read, or empty.
+between_label() {  # <worker> <state> <run>
+  local worker=$1 state=$2 run=$3 log="$STATE/$1.status" meta="$STATE/$1.meta"
+  local kind open key verb board=0 other=0
+  if has_hold captain "$worker"; then
+    printf 'Waiting for captain'
+    return
+  fi
+  if [ -e "$log" ] || [ -L "$log" ]; then
+    if [ -L "$log" ] || [ ! -f "$log" ] || [ ! -r "$log" ]; then
+      printf -- -
+      return
+    fi
+  fi
+  kind=$(sed -n 's/^kind=//p' "$meta" | head -n 1)
+  kind=${kind:-ship}
+  open=$(status_open_decisions "$log" "$kind")
+  while IFS=$'\t' read -r key verb _; do
+    [ "$verb" = needs-decision ] || continue
+    if [ "$key" = board-review ]; then board=1; else other=1; fi
+  done <<EOF
+$open
+EOF
+  if { [ "$board" = 1 ] && ! has_hold parked "$worker"; } \
+    || { [ "$state" = "done" ] && [ "$kind" = ship ] \
+      && [ "$(sed -n 's/^yolo=//p' "$meta" | head -n 1)" = off ]; }; then
+    printf 'Waiting for captain'
+  elif [ -n "$run" ]; then
+    printf '%s' "$run"
+  elif [ "$state" = "done" ] || [ "$state" = blocked ] \
+    || { [ "$state" = parked ] && [ "$other" = 1 ]; } || has_hold future "$worker"; then
+    printf 'Queued'
+  elif [ "$state" = parked ] || [ "$state" = paused ] || has_hold parked "$worker"; then
+    printf 'Waiting'
+  elif [ "$state" = failed ]; then
+    printf 'Failed'
+  fi
 }
 
 # One JSON label: the text, "" for none, null to leave the card.
@@ -140,8 +193,9 @@ sync_pass() {
     return 0
   fi
   if ! { "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
-    && jq -r '.backlog.records[] | select(.structured and .state != "done" and .hold_kind == "captain")
-      | .id, (.hold_origin // empty)' "$WORK/snapshot.json" > "$WORK/held"; }; then
+    && jq -r '.backlog.records[]
+      | select(.structured and .state != "done" and (.hold_kind == "captain" or .hold_kind == "parked" or .hold_kind == "future"))
+      | .hold_kind as $kind | (.id, (.hold_origin // empty)) | [$kind, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
     # shellcheck disable=SC2086  # one pid per word
     wait $pids
     echo "t3-crew-status: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err" | grep . || echo unreadable); the next pass retries"
@@ -161,18 +215,7 @@ sync_pass() {
       *) run='' ;;
     esac
     working=$run
-    if grep -Fqx -- "$worker" "$WORK/held"; then
-      between='Waiting for captain'
-    elif [ -n "$run" ]; then
-      between=$run
-    else
-      case "$state" in
-        parked|blocked|paused) between=Waiting ;;
-        done) between=Ready ;;
-        failed) between=Failed ;;
-        *) between='' ;;
-      esac
-    fi
+    between=$(between_label "$worker" "$state" "$run")
     ! fm_task_inbox_has_unhandled "$STATE" "$worker" || between=$working
     jq -cn --arg worker "$worker" --arg thread "$thread" \
       --argjson between "$(json_label "$between")" --argjson working "$(json_label "$working")" \
