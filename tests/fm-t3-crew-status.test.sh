@@ -812,6 +812,20 @@ test_merged_direct_pr_no_longer_waits_for_the_captain() {
   pass "fm-t3-crew-status: a direct-PR ship with its own PR recorded merged has had its approval"
 }
 
+# finished_unlanded_ship <home> -> a yolo-off local-only ship reporting a commit
+# that is not on the default branch.
+finished_unlanded_ship() {
+  local head
+  make_home "$1"
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+}
+
 test_future_and_parked_holds() {
   make_home other-holds
   hold_kind w1 future
@@ -833,6 +847,10 @@ test_future_and_parked_holds() {
   declares 'failed [at=1700000000]: the reproduction does not hold'
   cards sync || fail "the pass should pass"
   assert_equals "Failed" "$(card_of)" "a snoozed worker that failed reads Failed"
+  finished_unlanded_ship snoozed-ship
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a finished ship the captain snoozed reads Waiting"
   make_home failed-future
   hold_kind w1 future
   declares 'failed [at=1700000000]: the reproduction does not hold'
@@ -951,6 +969,14 @@ test_captain_hold_dated_ahead_is_snoozed() {
   captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
   cards sync || fail "the pass should pass"
   assert_equals "Waiting" "$(card_of)" "a review board under a snooze date reads Waiting"
+  finished_unlanded_ship dated-ship
+  captain hold w1 --reason "look after the trip" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a finished ship with a hold dated ahead reads Waiting"
+  finished_unlanded_ship dated-today-ship
+  captain hold w1 --reason "look after the trip" --until "$today" >/dev/null || fail "a hold dated today should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship's approval is the captain's again once the date arrives"
   pass "fm-t3-crew-status: a captain hold not yet due reads Waiting and a due or undated one waits on the captain"
 }
 

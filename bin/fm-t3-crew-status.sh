@@ -30,9 +30,10 @@
 #                        board-review and no parked or dated hold; or
 #                        crew-state reads done, parked, or paused and the
 #                        worker holds an open board with no parked, dated, or
-#                        future hold; or a finished ship that has not landed
-#                        and whose recorded yolo is not on, since landing it
-#                        needs the captain's approval.
+#                        future hold; or a finished ship that has not landed,
+#                        whose recorded yolo is not on, and that has no parked
+#                        or dated hold, since landing it needs the captain's
+#                        approval.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
@@ -46,7 +47,7 @@
 #                        T3 draws it in the label's own colour, not an emoji.
 #   Waiting              a snoozed worker (parked or dated hold, no future
 #                        hold) that reads done, parked, or paused holds an
-#                        open board.
+#                        open board, or reads done with no other open decision.
 #   Queued               firstmate moves next: crew-state reads done or blocked,
 #                        or parked with an open decision other than
 #                        board-review, or a hold of kind future counts.
@@ -242,9 +243,9 @@ EOF
       fi
       ;;
   esac
-  if { { [ "$board" = 1 ] || [ "$open_board" = 1 ]; } && ! snoozed "$worker"; } \
+  if ! snoozed "$worker" && { [ "$board" = 1 ] || [ "$open_board" = 1 ] \
     || { [ "$state" = "done" ] && [ "$kind" = ship ] \
-      && [ "$(fm_meta_get "$meta" yolo)" != on ] && ! ship_landed "$worker" "$line"; }; then
+      && [ "$(fm_meta_get "$meta" yolo)" != on ] && ! ship_landed "$worker" "$line"; }; }; then
     printf 'Waiting for captain'
   elif [ -n "$run" ]; then
     printf '%s' "$run"
@@ -253,7 +254,8 @@ EOF
   elif has_hold bedtime "$worker" \
     && { [ "$state" = "done" ] || [ "$state" = parked ] || [ "$state" = paused ]; }; then
     printf '☾︎ Scheduled'
-  elif [ "$open_board" = 1 ]; then
+  elif [ "$open_board" = 1 ] || { [ "$state" = "done" ] && [ "$other" = 0 ] \
+    && snoozed "$worker" && ! has_hold future "$worker"; }; then
     printf 'Waiting'
   elif [ "$state" = "done" ] || [ "$state" = blocked ] \
     || { [ "$state" = parked ] && [ "$other" = 1 ]; } || has_hold future "$worker"; then

@@ -2838,11 +2838,24 @@ EOF
   TASK_LIVE_WORK_TOKEN=${TASK_LIVE_WORK_TOKEN:0:16}
 }
 
-# What the last passing gate confirmed under --stop-leftovers: its roots, and
-# every pid under the copy then. The worker's own processes are in that list, so
-# one that outlives its pane and reads as work afterwards is still covered.
+# What the last scan before the reap saw: the work's roots, every pid under the
+# copy, and those of them that were not work. A worker's own process can outlive
+# its pane and read as work afterwards, so the last list keeps it the worker's.
 TEARDOWN_CONFIRMED_ROOTS=
 TEARDOWN_CONFIRMED_PIDS=
+TEARDOWN_OWN_PIDS=
+
+teardown_scan_live_work() {
+  local -a roots
+  if teardown_owns_worktree; then roots=("$WT" "$TASK_TMP"); else roots=("$TASK_TMP"); fi
+  task_live_work_scan "${roots[@]}" || return 1
+  TEARDOWN_CONFIRMED_ROOTS=$TASK_LIVE_WORK_ROOTS
+  TEARDOWN_CONFIRMED_PIDS=$TASK_PIDS
+  TEARDOWN_OWN_PIDS=$({ printf '%s--\n' "$TASK_LIVE_WORK"; printf '%s\n' "$TASK_PIDS"; } | LC_ALL=C awk -F '\t' '
+    $0 == "--" && !phase { phase = 1; next }
+    !phase { work[$1] = 1; next }
+    $1 != "" && !($1 in work)')
+}
 
 # Of <pids>, print those this cleanup may stop. Under --stop-leftovers, work that
 # was not under the copy at the confirmation and is below no confirmed root is
@@ -2899,6 +2912,10 @@ TEARDOWN_INTERRUPTED=
 teardown_name_stopping() {  # <pids>
   local pids=$1 work pid age command own='' name
   work=$(task_live_work_rows "$pids") || work=
+  work=$({ printf '%s\n--\n' "$TEARDOWN_OWN_PIDS"; printf '%s\n' "$work"; } | LC_ALL=C awk -F '\t' '
+    $0 == "--" && !phase { phase = 1; next }
+    !phase { own[$1] = 1; next }
+    $1 != "" && !($1 in own)')
   while IFS=$'\t' read -r pid age command; do
     [ -n "$pid" ] || continue
     echo "teardown: stopping pid $pid, running $age, which the worker started: $command" >&2
@@ -4166,7 +4183,11 @@ require_owned_task_worktree_slot || exit 1
 # holds a T3 turn state the server could not report, which the message names.
 teardown_refuse_working_worker() {
   local agent harness verdict jobs
-  [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ] || return 0
+  [ "$KIND" != secondmate ] || return 0
+  if [ "$FORCE" = "--force" ]; then
+    ! command -v lsof >/dev/null 2>&1 || teardown_scan_live_work || true
+    return 0
+  fi
   if [ -n "$T" ]; then
     agent=$(fm_backend_agent_state "$BACKEND" "$T")
     [ "$agent" != unverified ] || fm_backend_target_exists "$BACKEND" "$T" || agent=missing
@@ -4201,7 +4222,6 @@ teardown_refuse_working_worker() {
 # unless --stop-leftovers carries the token of exactly those root processes.
 TEARDOWN_LIVE_WORK_UNCHECKED_WARNED=0
 teardown_refuse_live_work() {
-  local -a roots
   local held="$STATE/$ID.cleanup-held" report=first tmp='' pid age command count
   if ! command -v lsof >/dev/null 2>&1; then
     if [ "$TEARDOWN_LIVE_WORK_UNCHECKED_WARNED" = 0 ]; then
@@ -4210,8 +4230,7 @@ teardown_refuse_live_work() {
     fi
     return 0
   fi
-  if teardown_owns_worktree; then roots=("$WT" "$TASK_TMP"); else roots=("$TASK_TMP"); fi
-  if ! task_live_work_scan "${roots[@]}"; then
+  if ! teardown_scan_live_work; then
     if [ -n "${TASK_PIDS_FAILED_DIR:-}" ]; then
       echo "REFUSED: cannot determine leaked processes under $TASK_PIDS_FAILED_DIR for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
     else
@@ -4219,8 +4238,6 @@ teardown_refuse_live_work() {
     fi
     return 1
   fi
-  TEARDOWN_CONFIRMED_ROOTS=$TASK_LIVE_WORK_ROOTS
-  TEARDOWN_CONFIRMED_PIDS=$TASK_PIDS
   [ -n "$TASK_LIVE_WORK" ] || return 0
   [ "$STOP_LEFTOVERS" != "$TASK_LIVE_WORK_TOKEN" ] || return 0
   count=$(printf '%s' "$TASK_LIVE_WORK" | grep -c .)

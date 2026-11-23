@@ -271,12 +271,12 @@ The label says what only Firstmate knows about a live T3 ship or scout, includin
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, a worker that reads done, parked, or paused holds an open Lavish board with no snooze or `future` hold, or a finished ship has not landed and its recorded yolo is not `on`, so landing it needs the captain's approval. |
+| `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, a worker that reads done, parked, or paused holds an open Lavish board with no snooze or `future` hold, or a finished ship with no snooze has not landed and its recorded yolo is not `on`, so landing it needs the captain's approval. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
 | `Failed` | Between turns, the worker or its run failed, whatever `future`, `parked`, or dated hold counts for it, so a broken worker never looks calm. |
 | `☾︎ Scheduled` | Between turns, a `future` hold whose reason starts `At bedtime` counts for a worker that reads done, parked, or paused. A blocked worker keeps its own label. |
 | `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
-| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived), including a finished worker whose open board is snoozed. |
+| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived), including a finished worker the captain snoozed, unless a `future` hold or another open decision makes it firstmate's move. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.

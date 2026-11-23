@@ -5757,6 +5757,57 @@ test_worker_own_processes_do_not_hold_cleanup() {
   pass "the worker's own agent and browser helper end with it and hold nothing"
 }
 
+# The agent's parent dies after the last gate and before the reap's scan, as a
+# closed pane leaves an agent that is still exiting.
+test_agent_outliving_its_pane_is_not_reported_as_interrupted() {
+  local case_dir rc holder agent flag agent_alive
+  for flag in plain --force; do
+    case_dir=$(make_case "live-process-orphaned-agent-$flag")
+    write_meta "$case_dir" no-mistakes ship
+    land_shippable_commit "$case_dir"
+    # shellcheck disable=SC2016 # the inner shell expands its own $1
+    holder=$(start_detached_in "$case_dir" fm-agent-parent bash -c \
+      '(cd "$1" && exec -a claude sleep 305) & wait' _ "$case_dir/wt")
+    sleep 0.3
+    agent=$(pgrep -P "$holder" | head -1)
+    [ -n "$agent" ] || fail "orphaned-agent-$flag: fake agent did not start"
+    cat > "$case_dir/fakebin/lsof" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" -d cwd "*)
+    n=\$(cat "$case_dir/lsof.count" 2>/dev/null || echo 0)
+    n=\$((n + 1))
+    printf '%s\n' "\$n" > "$case_dir/lsof.count"
+    if [ "\$n" = 3 ]; then
+      kill -KILL "$holder" 2>/dev/null
+      sleep 0.2
+    fi
+    ;;
+esac
+exec "$REAL_LSOF_FOR_TEST" "\$@"
+SH
+    chmod +x "$case_dir/fakebin/lsof"
+
+    rc=0
+    if [ "$flag" = plain ]; then
+      run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    else
+      run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+    fi
+    agent_alive=0
+    kill -0 "$agent" 2>/dev/null && agent_alive=1
+    kill -KILL "$agent" "$holder" 2>/dev/null || true
+    expect_code 0 "$rc" "orphaned-agent-$flag: cleanup should finish: $(cat "$case_dir/stderr")"
+    [ "$(cat "$case_dir/lsof.count")" -ge 3 ] || fail "orphaned-agent-$flag: the parent never died mid-cleanup"
+    [ "$agent_alive" = 0 ] || fail "orphaned-agent-$flag: the agent survived cleanup"
+    grep -Eq "stopping the worker's own processes:.* $agent \(" "$case_dir/stderr" \
+      || fail "orphaned-agent-$flag: the agent was not named as the worker's own: $(cat "$case_dir/stderr")"
+    assert_not_contains "$(cat "$case_dir/stdout")" "must not be reported as passed" \
+      "orphaned-agent-$flag: the worker's own agent was reported as interrupted work"
+  done
+  pass "an agent that outlives its pane stays the worker's own and is not reported as interrupted"
+}
+
 test_command_under_the_agent_holds_cleanup() {
   local case_dir rc rc_held holder orphan_agent token
   case_dir=$(make_case live-process-under-agent)
@@ -7170,6 +7221,7 @@ test_root_started_after_the_confirmation_is_left_running
 test_stop_leftovers_keeps_the_landed_work_check
 test_stop_leftovers_is_narrow
 test_worker_own_processes_do_not_hold_cleanup
+test_agent_outliving_its_pane_is_not_reported_as_interrupted
 test_command_under_the_agent_holds_cleanup
 test_detached_job_is_stopped_and_its_records_removed
 test_lsof_absent_reaps_tmux_process_group
