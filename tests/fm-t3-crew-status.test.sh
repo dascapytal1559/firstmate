@@ -641,6 +641,80 @@ test_future_and_parked_holds() {
   pass "fm-t3-crew-status: future holds read Queued and a snoozed worker reads Waiting"
 }
 
+# future_hold <id> <reason> -> an open future hold with that reason on the row.
+future_hold() {
+  (cd "$HOME_DIR" && tasks-axi hold "$1" --reason "$2" --kind future) >/dev/null \
+    || fail "could not hold $1 for later"
+}
+
+test_bedtime_hold_reads_scheduled() {
+  local head bedtime='Scheduled · bedtime'
+  make_home bedtime
+  worker_meta w1 scout
+  future_hold w1 "At bedtime: run the supervised move"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a paused worker held for bedtime reads Scheduled"
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a worker at work shows T3's own Working"
+  turn_is settled
+  mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
+  declares 'done [at=1700000000]: report ready'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a finished worker held for bedtime reads Scheduled"
+  declares 'blocked [at=1700000000]: the fixture repository is missing'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a blocked worker keeps Queued under a bedtime hold"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a failed worker keeps its label under a bedtime hold"
+
+  make_home bedtime-other-reason
+  worker_meta w1 scout
+  future_hold w1 "After the release: run the move"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold with another reason still reads Queued"
+
+  make_home bedtime-origin
+  worker_meta w1 scout
+  captain hold w1-later --title "Later" --reason "At bedtime: start the tests" --origin w1 --repo sample >/dev/null \
+    || fail "an origin hold should succeed"
+  (cd "$HOME_DIR" && tasks-axi hold w1-later --reason "At bedtime: start the tests" --kind future) >/dev/null \
+    || fail "could not make the origin hold future"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a bedtime hold raised for the worker counts through its origin"
+
+  make_home bedtime-captain
+  worker_meta w1 scout
+  future_hold w1 "At bedtime: run the move"
+  captain hold w1-call --title "Call" --reason "pick the layout" --origin w1 --repo sample >/dev/null \
+    || fail "a captain hold should succeed"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a live captain hold outranks bedtime"
+
+  make_home bedtime-testing
+  in_a_run
+  future_hold w1 "At bedtime: run the move"
+  run_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "$TESTING" "$(card_of)" "an active run outranks bedtime"
+
+  make_home bedtime-landing
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  future_hold w1 "At bedtime: run the move"
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a landing that needs the captain outranks bedtime"
+  pass "fm-t3-crew-status: a bedtime hold reads Scheduled for a settled worker and never hides a broken one"
+}
+
 # A captain hold dated after today is a snooze, like a parked hold; the same
 # hold dated today or earlier, or never dated, is a live captain call again.
 test_captain_hold_dated_ahead_is_snoozed() {
@@ -811,6 +885,7 @@ test_declared_states_label_between_turns
 test_board_review_is_the_captains_until_resolved_or_snoozed
 test_finished_ship_follows_its_merge_posture
 test_future_and_parked_holds
+test_bedtime_hold_reads_scheduled
 test_captain_hold_dated_ahead_is_snoozed
 test_unreadable_status_log_leaves_the_card
 test_unreadable_turn_leaves_the_card

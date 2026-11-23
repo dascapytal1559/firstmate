@@ -24,6 +24,9 @@
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
+#   Scheduled · bedtime  a hold of kind future whose reason starts "At bedtime"
+#                        counts, and crew-state reads done, parked, or paused.
+#                        A blocked or failed worker never reads this.
 #   Queued               firstmate moves next: crew-state reads done or blocked,
 #                        or parked with an open decision other than
 #                        board-review, or a hold of kind future counts.
@@ -107,7 +110,8 @@ worker_thread() {  # <task-id>
 }
 
 # Whether a hold of <kind> counts for <worker>. Kinds are captain (live),
-# dated (a captain hold not yet due), parked, and future.
+# dated (a captain hold not yet due), parked, future, and bedtime (a future
+# hold whose reason starts "At bedtime", which also counts as future).
 has_hold() {  # <kind> <worker>
   grep -Fqx -- "$1"$'\t'"$2" "$WORK/holds"
 }
@@ -147,6 +151,9 @@ EOF
     printf 'Waiting for captain'
   elif [ -n "$run" ]; then
     printf '%s' "$run"
+  elif has_hold bedtime "$worker" \
+    && { [ "$state" = "done" ] || [ "$state" = parked ] || [ "$state" = paused ]; }; then
+    printf 'Scheduled · bedtime'
   elif [ "$state" = "done" ] || [ "$state" = blocked ] \
     || { [ "$state" = parked ] && [ "$other" = 1 ]; } || has_hold future "$worker"; then
     printf 'Queued'
@@ -206,7 +213,8 @@ sync_pass() {
     && jq -r '.backlog.records[]
       | select(.structured and .state != "done" and (.hold_kind == "captain" or .hold_kind == "parked" or .hold_kind == "future"))
       | (if .hold_bucket == "dated" then "dated" else .hold_kind end) as $kind
-      | (.id, (.hold_origin // empty)) | [$kind, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
+      | ($kind, (if $kind == "future" and ((.hold_reason // "") | startswith("At bedtime")) then "bedtime" else empty end)) as $counted
+      | (.id, (.hold_origin // empty)) | [$counted, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
     # shellcheck disable=SC2086  # one pid per word
     wait $pids
     echo "t3-crew-status: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err" | grep . || echo unreadable); the next pass retries"

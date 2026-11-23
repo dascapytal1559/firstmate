@@ -2134,3 +2134,23 @@ The choices made:
 - The orange colour is a separate change in T3 Code, so this one changes words only.
 
 The evidence is the card status test suite, with new cases for each rule, including a resolved and a snoozed review board.
+
+## 78. Work held for bedtime says so (23 November 2026)
+
+Two worker cards read Queued while they were really waiting for the captain to say he was going to bed: the chat media warehouse move and the Inkling 2 Mini tests.
+
+> Maybe I like Scheduled.
+
+> I guess both of these could be scheduled bedtime.
+
+What was built:
+
+- **Scheduled · bedtime** now shows on a worker that is finished, parked or paused and has a later-start hold whose reason begins "At bedtime".
+
+The choices made:
+
+- Waiting for captain and Testing still win, because they say something more urgent.
+- A blocked or failed worker keeps its current label, so a broken worker never looks calmly scheduled.
+- The label comes from the hold's existing reason, so no clock time or new field is stored.
+
+The evidence is the card status test suite, with new cases for each rule, including a later-start hold with another reason and a blocked worker held for bedtime.

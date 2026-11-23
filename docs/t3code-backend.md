@@ -273,6 +273,7 @@ The label says what only Firstmate knows about a live T3 ship or scout, includin
 | --- | --- |
 | `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, or a finished ship's landing needs the captain's approval. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
+| `Scheduled · bedtime` | Between turns, a `future` hold whose reason starts `At bedtime` counts for a worker that reads done, parked, or paused. A blocked or failed worker keeps its own label. |
 | `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
 | `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived). |
 | `Failed` | Between turns, the worker or its run failed. |
@@ -296,7 +297,7 @@ A T3 without the status label shows none of these, and holds and cleanup carry o
 What T3 can rely on, for any live ship or scout card in a home with the T3 credential:
 
 - Working is T3's own fact: Firstmate clears its label while the worker works, except `Testing`, which stays.
-- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Waiting for captain`, `Testing`, `Queued`, or `Waiting`, and finished work carries `Queued` or `Waiting for captain`.
+- A card between turns with no Firstmate label has nothing Firstmate knows it waits on, so an unlabelled finished turn may read as finished; every wait Firstmate knows of carries `Waiting for captain`, `Testing`, `Scheduled · bedtime`, `Queued`, or `Waiting`, and finished work carries `Scheduled · bedtime`, `Queued`, or `Waiting for captain`.
 - A label changes only when its meaning does, so T3's `statusLabelSince` is the time that state began; a pass re-sends nothing.
 - A label is current within seconds of a hold, answer, steer, or turn end, and within about a minute of a no-mistakes run starting or ending.
 - A label T3 lost, as a restart could, is set again within about a minute, and cleanup clears the label before the thread is archived.
