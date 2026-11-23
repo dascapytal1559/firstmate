@@ -648,7 +648,7 @@ future_hold() {
 }
 
 test_bedtime_hold_reads_scheduled() {
-  local head bedtime='Scheduled · bedtime'
+  local head bedtime='☾︎ Scheduled'
   make_home bedtime
   worker_meta w1 scout
   future_hold w1 "At bedtime: run the supervised move"

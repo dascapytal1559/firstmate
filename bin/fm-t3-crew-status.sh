@@ -24,9 +24,11 @@
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
-#   Scheduled · bedtime  a hold of kind future whose reason starts "At bedtime"
+#   ☾︎ Scheduled          a hold of kind future whose reason starts "At bedtime"
 #                        counts, and crew-state reads done, parked, or paused.
-#                        A blocked or failed worker never reads this.
+#                        A blocked or failed worker never reads this. The
+#                        glyph is U+263E plus U+FE0E (text presentation), so
+#                        T3 draws it in the label's own colour, not an emoji.
 #   Queued               firstmate moves next: crew-state reads done or blocked,
 #                        or parked with an open decision other than
 #                        board-review, or a hold of kind future counts.
@@ -153,7 +155,7 @@ EOF
     printf '%s' "$run"
   elif has_hold bedtime "$worker" \
     && { [ "$state" = "done" ] || [ "$state" = parked ] || [ "$state" = paused ]; }; then
-    printf 'Scheduled · bedtime'
+    printf '☾︎ Scheduled'
   elif [ "$state" = "done" ] || [ "$state" = blocked ] \
     || { [ "$state" = parked ] && [ "$other" = 1 ]; } || has_hold future "$worker"; then
     printf 'Queued'

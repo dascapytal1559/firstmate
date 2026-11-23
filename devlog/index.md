@@ -2154,3 +2154,16 @@ The choices made:
 - The label comes from the hold's existing reason, so no clock time or new field is stored.
 
 The evidence is the card status test suite, with new cases for each rule, including a later-start hold with another reason and a blocked worker held for bedtime.
+
+## 79. The bedtime label becomes a moon (23 November 2026)
+
+> Okay instead of scheduled bedtime, let's do scheduled with a moon icon
+
+What changed:
+
+- **☾︎ Scheduled** replaces "Scheduled · bedtime" on a worker held for the captain's goodnight. Which workers get it, and where it ranks against the other labels, are unchanged.
+
+The choices made:
+
+- The moon is the text form of the symbol (U+263E followed by U+FE0E), so T3 Code draws it in the same gray as the rest of the label rather than as a coloured emoji.
+- The label is plain text of a few characters, well inside T3's 32-character limit, so nothing changes in T3 Code.
