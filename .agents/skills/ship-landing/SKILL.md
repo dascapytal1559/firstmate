@@ -31,6 +31,7 @@ A lane parked on review (`bin/fm-park.sh`) has no agent and relaunches itself on
 Tear down any other ship task only after landing is confirmed.
 A teardown refusal for uncommitted or unlanded work is a stop-and-investigate result, never an obstacle to bypass.
 A teardown that defers because the worker is still working (exit 5) is a wait instead: the worker is finishing a step, so retry at the next wake for that task ([`bin/fm-teardown.sh`](../../../bin/fm-teardown.sh) owns the rule).
+A teardown held by processes the worker left running (exit 7) stopped nothing and names each one: wait while any is still doing work, and only once they are established as leftovers run the `--stop-leftovers <token>` command the refusal printed.
 Never force teardown without explicit discard authority.
 After successful teardown, record completion, retain only the configured recent Done history, and re-evaluate queued work whose blockers and time gates have cleared.
 

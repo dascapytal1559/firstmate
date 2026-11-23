@@ -77,11 +77,12 @@ T3 Code fork half: [Crew in the sidebar](https://github.com/dascapytal1559/t3cod
 
 ### Full access and a clean stop
 
-Workers always run at full access, so none stalls silently on an approval, and cleaning up a worker stops everything it started.
+Workers always run at full access, so none stalls silently on an approval, and cleaning up a worker stops what it started, except a command still running, which cleanup names and holds.
 A T3 Code worker is refused unless it runs with full access, because a worker stuck waiting on an approval FirstMate cannot give would stall silently.
 A setting T3 Code cannot honour, such as a narrower permission mode or a tool exclusion list, is refused the same way, before anything starts.
 Cleanup uses T3 Code's own Stop, which also stops any tasks the worker started itself, instead of leaving them running after the worker is gone.
 Full access and refusing settings T3 Code cannot honour are upstream's; the clean stop is this fork's, since upstream refuses to stop a T3 Code worker.
+Upstream stops any process left in a worker's copy as leaked, and [#7606](https://github.com/kunchenguid/firstmate/issues/7606) reports that killing a running end-to-end test and calling the run passed; this fork refuses instead, naming each process, because landed code proves the merge and not that the worker's last command finished, and the main session can confirm those processes and what they started as leftovers so stray ones still get stopped.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 Upstream: partly ([#7518](https://github.com/kunchenguid/firstmate/pull/7518) for full access, [#8223](https://github.com/kunchenguid/firstmate/pull/8223) for the tool exclusion refusal).
@@ -118,12 +119,12 @@ T3 Code fork half: [Bridge](https://github.com/dascapytal1559/t3code/blob/main/f
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-Each worker's card in T3 Code's sidebar says what the worker is waiting on: Waiting for captain, Testing, Waiting, Ready, or Failed.
+Each worker's card in T3 Code's sidebar says who moves next: Waiting for captain, Testing, ☾︎ Scheduled, Queued, Waiting, or Failed.
 T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
-When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
+When the next move on a live worker is the captain's, because of a captain hold, an open review board, or a finished build whose landing needs approval, the card reads Waiting for captain.
 While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
-Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
+Between turns, work held for the captain's bedtime reads ☾︎ Scheduled; finished work, a blocker, or an open question FirstMate settles reads Queued; a pause on something external or a worker the captain snoozed reads Waiting; and a failure reads Failed.
 While the worker works, the card shows T3 Code's own Working, except that Testing stays.
 The words change when the worker's state does and go when the worker is cleaned up.
 FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.
@@ -250,7 +251,7 @@ Each night a check lists every clear of FirstMate's session and puts a line in t
 Clearing FirstMate's main session saves most of what its long context costs, but a fresh session can lose the thread of a conversation.
 So a nightly script reads FirstMate's own session transcripts, with no model call, and lists every clear of the day: its cause (the captain's `/clear`, a cold start from a message, a cold start from a notification, or a T3 restart), the context it dropped, and any sign of harm in the new session's first hour.
 The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
-It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
+It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays that says how many clears were concrete (an answered decision asked again) and how the share with a sign compares with the previous recorded week; each week is kept as one row in the private `data/clear-watch/weekly.tsv`.
 It reads Claude transcripts only, and runs once a night as a step of [`fm-nightly-checks.sh`](bin/fm-nightly-checks.sh) from the host's scheduler.
 Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
 

@@ -93,7 +93,11 @@
 # mid-teardown is retried; a request whose task record is gone is dropped by
 # the tick. A teardown that defers because the lane's worker is still working
 # (its exit 5) publishes no outcome and keeps the request, so the tick retries
-# it until the worker stops; land itself then exits 5. bin/fm-watch.sh runs
+# it until the worker stops; land itself then exits 5. A teardown held by named
+# running processes (its exit 7) keeps the request the same way, so the cleanup
+# finishes once they end, and publishes one `cleanup-held` outcome per unchanged
+# set of root processes. A cleaned-up outcome names any work teardown interrupted.
+# bin/fm-watch.sh runs
 # land --if-eligible --detach for every merged lane from its merged-poll path
 # after the merge outcome is recorded, also when bin/fm-pr-merge.sh recorded it
 # first, which makes the watcher the one owner of a merged lane's teardown.
@@ -737,7 +741,7 @@ land_eligible() {  # <id>
 }
 
 cmd_land() {
-  local id=${1-} eligible=0 detach=0 queue=0 pr out rc=0 why tmp
+  local id=${1-} eligible=0 detach=0 queue=0 pr out rc=0 why tmp interrupted rest
   task_id_ok "$id" || die "usage: fm-park.sh land <task-id> [--if-eligible] [--detach] [--queue]" 2
   shift
   while [ "$#" -gt 0 ]; do
@@ -779,20 +783,35 @@ cmd_land() {
     return 0
   fi
   out=$(FM_HOME=$FM_HOME fm_run_timed "$ACTION_SECS" "$TEARDOWN_BIN" "$id" 2>&1) || rc=$?
+  interrupted=$(printf '%s\n' "$out" | sed -n 's/^  \(pid [0-9]*, had run .*\)$/\1/p' | awk 'NR > 1 { printf "; " } { printf "%s", $0 }')
+  [ -z "$interrupted" ] || interrupted="; cleanup interrupted work that did not finish and must not be reported as passed: $interrupted"
   case "$rc" in
-    0) printf 'cleaned up %s: PR %s merged; lane torn down and its working copy returned\n' "$id" "$pr" ;;
+    0) printf 'cleaned up %s: PR %s merged; lane torn down and its working copy returned%s\n' "$id" "$pr" "$interrupted" ;;
     4)
-      printf 'cleaned up %s: PR %s merged; lane torn down, but its returned pool slot was lost\n' "$id" "$pr"
-      printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  )' || true
+      printf 'cleaned up %s: PR %s merged; lane torn down, but its returned pool slot was lost%s\n' "$id" "$pr" "$interrupted"
+      printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  )' | grep -Ev '^  pid [0-9]+, had run ' || true
       ;;
     5)
       # The worker is still working: no outcome line, so the request stays.
       printf 'cleanup deferred %s: PR %s merged; its worker is still working\n' "$id" "$pr" >&2
       return 5
       ;;
+    7)
+      # Named running processes hold the cleanup. Hand them over once per
+      # unchanged set of roots; the kept request retries in case they end by themselves.
+      case "$out" in
+        *'cleanup-held report=first '*)
+          why=$(printf '%s\n' "$out" | sed -n 's/^  pid \(.*\)$/pid \1/p' | awk 'NR > 1 { printf "; " } { printf "%s", $0 }')
+          tmp=$(printf '%s\n' "$out" | sed -n 's/^cleanup-held report=first token=//p' | head -1)
+          printf 'cleanup-held %s: PR %s merged; cleanup stopped nothing because the worker left these running: %s. Retrying until they end; if they are leftovers, main confirms with bin/fm-teardown.sh %s --stop-leftovers %s\n' "$id" "$pr" "$why" "$id" "$tmp"
+          ;;
+      esac
+      return 7
+      ;;
     *)
-      why=$(printf '%s\n' "$out" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$out" | tail -1)
-      printf 'cleanup-refused %s: PR %s merged; automatic cleanup refused: %s\n' "$id" "$pr" "$why"
+      rest=$(printf '%s\n' "$out" | grep -Ev '^(  pid [0-9]+, had run |teardown .* must not be reported as passed:$)' || true)
+      why=$(printf '%s\n' "$rest" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$rest" | tail -1)
+      printf 'cleanup-refused %s: PR %s merged; automatic cleanup refused: %s%s\n' "$id" "$pr" "$why" "$interrupted"
       return 1
       ;;
   esac
@@ -809,6 +828,8 @@ cmd_run() {
   if [ -n "$out" ]; then
     case "$out" in *"another lifecycle action is already running"*|*"another park action still holds"*) return 0 ;; esac
     report_write "$id" "$out" || return 1
+    # A held cleanup keeps its request, so it finishes once the processes end.
+    case "$out" in "cleanup-held "*) return 0 ;; esac
     [ "$verb" != land ] || rm -f -- "$STATE/$id.review-park-land"
   elif [ "$verb" = land ] && [ ! -e "$STATE/$id.meta" ]; then
     rm -f -- "$STATE/$id.review-park-land"

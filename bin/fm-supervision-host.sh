@@ -1250,6 +1250,8 @@ turn_captain_seqs() {  # <turn>
 # Why an attended close stays with main exactly as the plain arm delivers it,
 # or nothing when the supervision session may take it. Sets ATTENDED_WHY, and
 # ATTENDED_OFFER to the offer's verdict and the scope it judged.
+# ATTENDED_WHY alone drives what happens next; the offer's reason code is read
+# only by log_attended_pass_through.
 attended_acceptor() {  # <first-reason-line>
   local offer=
   ATTENDED_WHY=
@@ -1267,6 +1269,24 @@ attended_acceptor() {  # <first-reason-line>
   fi
   ATTENDED_OFFER=$offer
   [ -z "$ATTENDED_WHY" ]
+}
+
+# Record one attended pass-through. A main-only close gains a last column,
+# reason=<code>, so every earlier column keeps its position. The offer owns the
+# codes (MainOnlyReason in .pi/extensions/lib/fm-branch-dispatch.ts); anything
+# it did not state as a known code is recorded as unknown.
+log_attended_pass_through() {  # <first-reason-line>
+  local code
+  if [ "$ATTENDED_WHY" != main-only ]; then
+    log_line "pass-through	attended	$ATTENDED_WHY	$1"
+    return 0
+  fi
+  code=$(printf '%s\n' "$ATTENDED_OFFER" | sed -n 's/^main_only_reason=//p')
+  case "$code" in
+    check-trigger|open-decision|captain-held|decision-resolved|finished-status|unsafe-queue|empty-queue|nothing-claimable) ;;
+    *) code=unknown ;;
+  esac
+  log_line "pass-through	attended	main-only	$1	reason=$code"
 }
 
 # Ownership first: a host that does not own supervision leaves the owner's
@@ -1316,7 +1336,7 @@ while :; do
   # unless the supervision session may take it (attended_acceptor).
   if ! fm_afk_contract_away_present "$STATE"; then
     if ! attended_acceptor "$(printf '%s\n' "$REASON" | head -n 1)"; then
-      log_line "pass-through	attended	$ATTENDED_WHY	$(printf '%s\n' "$REASON" | head -n 1)"
+      log_attended_pass_through "$(printf '%s\n' "$REASON" | head -n 1)"
       acknowledged_handback
       if [ "$ATTENDED_WHY" = main-only ]; then
         leave_successor_for_main
@@ -1365,7 +1385,7 @@ while :; do
   handle_wake "$REASON"
   HANDLE_RC=$?
   if [ "$HANDLE_RC" -eq 2 ]; then
-    log_line "pass-through	attended	$ATTENDED_WHY	$(printf '%s\n' "$REASON" | head -n 1)"
+    log_attended_pass_through "$(printf '%s\n' "$REASON" | head -n 1)"
     acknowledged_handback
     # The successor this turn already started and confirmed stays up. Retiring
     # it is what left no watcher after a close that became main-only.

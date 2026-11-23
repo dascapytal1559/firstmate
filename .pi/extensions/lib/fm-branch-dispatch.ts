@@ -86,6 +86,38 @@ export function branchWakePrompt(message: string, reportSurface: string, posture
 
 export type UnreadWakeScopeStatus = "safe" | "empty" | "unsafe";
 
+// Why a task's row or close is decision-owned, strongest first when one task
+// carries several: a decision still open, a current captain hold, or a span
+// whose only decision event is a resolution.
+const DECISION_REASONS = ["open-decision", "captain-held", "decision-resolved"] as const;
+export type DecisionReason = (typeof DECISION_REASONS)[number];
+
+function strongerDecisionReason(current: DecisionReason | undefined, next: DecisionReason | undefined): DecisionReason | undefined {
+  if (!current || !next) return current ?? next;
+  return DECISION_REASONS.indexOf(next) < DECISION_REASONS.indexOf(current) ? next : current;
+}
+
+// The single owner of the reason codes the supervision host's ledger records
+// for a main-only close (docs/supervision-host.md "Attended"). A code reports
+// the condition branchOfferForWake already decided on and never influences it:
+//   check-trigger      the close is a check-kind wake
+//   open-decision      its task has an open decision or blocker
+//   captain-held       its task is held for the captain
+//   decision-resolved  its second mate's new status span resolved a decision
+//   finished-status    its task has an unread done or failed status
+//   unsafe-queue       the queue or a task record could not be trusted
+//   empty-queue        the queue held no rows
+//   nothing-claimable  the queue held only rows the branch may not claim
+//   unknown            none of the above could be established
+export type MainOnlyReason =
+  | "check-trigger"
+  | DecisionReason
+  | "finished-status"
+  | "unsafe-queue"
+  | "empty-queue"
+  | "nothing-claimable"
+  | "unknown";
+
 export interface UnreadWakeScope {
   status: UnreadWakeScopeStatus;
   eligible: boolean;
@@ -130,6 +162,8 @@ export interface UnreadWakeScope {
    * to main.
    */
   needsDecisionKeys: string[];
+  /** Why each key in needsDecisionKeys is decision-owned (reporting only). */
+  decisionReasonByKey: Record<string, DecisionReason>;
   /**
    * The exact "key" field of every terminal signal row this scan excluded: a
    * row bin/fm-watch.sh marked `terminal:` because its surfaced span's first
@@ -161,6 +195,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  decisionReasonByKey: {},
   terminalKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
@@ -174,6 +209,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  decisionReasonByKey: {},
   terminalKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
@@ -194,7 +230,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
 // starves by being left behind.
 //
 // A signal row marked "needs-decision:" by the watcher, a second-mate signal
-// whose presented span owns a decision (spanIsDecisionOwned), or a stale row
+// whose presented span owns a decision (spanDecisionReason), or a stale row
 // for a task with an open needs-decision or a current captain-held declaration
 // gets the identical treatment: excluded from eligibleSeqs, never a scan veto,
 // and forced to main on its own triggering close (fm-primary-pi-watch.ts's
@@ -280,7 +316,7 @@ function statusLineNote(rawLine: string): string {
 interface StaleDecisionCacheEntry {
   version: string;
   config: string;
-  decisionOwned: boolean;
+  decisionReason: DecisionReason | null;
 }
 
 const staleDecisionCache = new Map<string, StaleDecisionCacheEntry>();
@@ -361,26 +397,56 @@ function readPresentationCursor(state: string): Map<string, { ident: string; off
 // Walk the presented span in order: a resolution must close a decision that
 // was open immediately before that line, not one opened later in the span.
 // docs/pi-supervision-branch.md owns the routing contract.
-function spanIsDecisionOwned(
+function spanDecisionReason(
   open: ReadonlyMap<string, string>,
   presented: readonly string[],
   span: readonly string[],
   resolveVerb: string,
   heldVerb: string,
   reservedPrefixes: readonly string[],
-): boolean {
+): DecisionReason | null {
   const before = openDecisions(presented, resolveVerb, heldVerb, reservedPrefixes);
+  let reason: DecisionReason | undefined;
   for (const line of span) {
     const verb = statusLineVerb(line);
-    if (["needs-decision", "blocked", heldVerb].includes(verb)) return true;
+    if (verb === "needs-decision" || verb === "blocked") return "open-decision";
     const resolved = verb === resolveVerb ? decisionKey(line) : null;
     const wasOpen = resolved !== null && before.has(resolved);
     openDecisions([line], resolveVerb, heldVerb, reservedPrefixes, before);
-    if (resolved !== null && wasOpen && !before.has(resolved)) return true;
     const key = declaredDecisionKey(line);
-    if (key !== undefined && open.has(key)) return true;
+    if (key !== undefined && open.has(key)) return "open-decision";
+    if (verb === heldVerb) reason = strongerDecisionReason(reason, "captain-held");
+    else if (resolved !== null && wasOpen && !before.has(resolved)) reason = strongerDecisionReason(reason, "decision-resolved");
   }
-  return false;
+  return reason ?? null;
+}
+
+// Where a task's unpresented span starts: the cursor's offset while it still
+// names this file and fits it, else the whole log.
+function presentedSpanOffset(path: string, size: number, cursor: { ident: string; offset: number } | null | undefined): number {
+  if (!cursor || cursor.offset > size) return 0;
+  try {
+    return cursor.ident === statusFileIdentity(path) ? cursor.offset : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function statusSpanReason(
+  contents: Buffer,
+  spanOffset: number,
+  resolveVerb: string,
+  heldVerb: string,
+  reservedPrefixes: readonly string[],
+): DecisionReason | null {
+  return spanDecisionReason(
+    openDecisions(nonBlankLines(contents.toString("utf8")), resolveVerb, heldVerb, reservedPrefixes),
+    nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
+    nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
+    resolveVerb,
+    heldVerb,
+    reservedPrefixes,
+  );
 }
 
 export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = false, attendedHost = false): UnreadWakeScope {
@@ -432,10 +498,15 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
   const eligibleSeqs: string[] = [];
   const eligibleTasks = new Set<string>();
   const needsDecisionKeys: string[] = [];
+  const decisionReasonByKey: Record<string, DecisionReason> = {};
+  const noteDecisionRow = (key: string, reason: DecisionReason): void => {
+    needsDecisionKeys.push(key);
+    decisionReasonByKey[key] = strongerDecisionReason(decisionReasonByKey[key], reason)!;
+  };
   const terminalKeys: string[] = [];
   const checkSeqs: string[] = [];
   const heartbeatSeqs: string[] = [];
-  const staleDecisionOwnership = new Map<string, boolean>();
+  const staleDecisionOwnership = new Map<string, DecisionReason | null>();
   const resolveVerb = process.env.FM_CLASSIFY_RESOLVE_VERB || "resolved";
   const heldVerb = process.env.FM_CLASSIFY_CAPTAIN_HELD_VERB || "captain-held";
   const reservedPrefixes = (process.env.FM_CLASSIFY_RESERVED_KEY_PREFIXES || "pending-reply-")
@@ -443,6 +514,27 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     .filter(Boolean);
   const decisionConfig = `${resolveVerb}\0${heldVerb}\0${reservedPrefixes.join("\0")}`;
   let presentationCursor: ReturnType<typeof readPresentationCursor> | undefined;
+  const markedSignalReasons = new Map<string, DecisionReason>();
+  // The ledger's reason for a watcher-marked row. It never affects routing, so
+  // an unreadable log only loses the finer reason.
+  const markedSignalReason = (task: string): DecisionReason => {
+    let reason = markedSignalReasons.get(task);
+    if (reason) return reason;
+    try {
+      const statusPath = `${state}/${task}.status`;
+      if (statusFileVersion(statusPath)) {
+        if (presentationCursor === undefined) presentationCursor = readPresentationCursor(state);
+        const contents = readFileSync(statusPath);
+        const spanOffset = presentedSpanOffset(statusPath, contents.length, presentationCursor?.get(task));
+        reason = statusSpanReason(contents, spanOffset, resolveVerb, heldVerb, reservedPrefixes) ?? undefined;
+      }
+    } catch {
+      reason = undefined;
+    }
+    reason ??= "open-decision";
+    markedSignalReasons.set(task, reason);
+    return reason;
+  };
   for (const line of rows) {
     const fields = line.split("\t");
     if (fields.length < 5 || !/^[0-9]+$/.test(fields[1])) return UNSAFE_SCOPE;
@@ -480,7 +572,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         // scan (docs/pi-supervision-branch.md "Autonomy"). Away, the branch
         // takes the decision row like any other task-local row; the guarded
         // scripts decide what it may do about it (bin/fm-lease-lib.sh).
-        needsDecisionKeys.push(key);
+        noteDecisionRow(key, markedSignalReason(key.replace(/\.(?:status|turn-ended)$/, "")));
         if (!afk) continue;
       } else if (/^terminal:/.test(payload)) {
         // Main-owned while attended for the same reason: a worker's done or
@@ -516,7 +608,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } catch {
           return UNSAFE_SCOPE;
         }
-        let decisionOwned = false;
+        let decisionReason: DecisionReason | null = null;
         if (version) {
           let cursor: { ident: string; offset: number } | null | undefined;
           if (spanRule) {
@@ -526,36 +618,29 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
           const config = spanRule ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}` : decisionConfig;
           const cached = staleDecisionCache.get(ownershipKey);
           if (cached?.version === version && cached.config === config) {
-            decisionOwned = cached.decisionOwned;
+            decisionReason = cached.decisionReason;
           } else {
             let contents: Buffer;
             let spanOffset = 0;
             try {
               contents = readFileSync(statusPath);
-              if (cursor && cursor.offset <= contents.length) {
-                try {
-                  if (cursor.ident === statusFileIdentity(statusPath)) spanOffset = cursor.offset;
-                } catch {
-                  // No identity to match: the span is the whole log.
-                }
-              }
+              spanOffset = presentedSpanOffset(statusPath, contents.length, cursor);
               if (statusFileVersion(statusPath) !== version) return UNSAFE_SCOPE;
             } catch {
               return UNSAFE_SCOPE;
             }
-            const statusLines = nonBlankLines(contents.toString("utf8"));
-            const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
-            decisionOwned = spanRule
-              ? spanIsDecisionOwned(
-                open,
-                nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
-                nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
-                resolveVerb,
-                heldVerb,
-                reservedPrefixes,
-              )
-              : [...open.values()].includes("needs-decision") || statusLineVerb(statusLines.at(-1) ?? "") === heldVerb;
-            staleDecisionCache.set(ownershipKey, { version, config, decisionOwned });
+            if (spanRule) {
+              decisionReason = statusSpanReason(contents, spanOffset, resolveVerb, heldVerb, reservedPrefixes);
+            } else {
+              const statusLines = nonBlankLines(contents.toString("utf8"));
+              const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
+              decisionReason = [...open.values()].includes("needs-decision")
+                ? "open-decision"
+                : statusLineVerb(statusLines.at(-1) ?? "") === heldVerb
+                  ? "captain-held"
+                  : null;
+            }
+            staleDecisionCache.set(ownershipKey, { version, config, decisionReason });
             if (staleDecisionCache.size > 512) {
               staleDecisionCache.delete(staleDecisionCache.keys().next().value!);
             }
@@ -563,10 +648,11 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         } else {
           staleDecisionCache.delete(ownershipKey);
         }
-        staleDecisionOwnership.set(ownershipKey, decisionOwned);
+        staleDecisionOwnership.set(ownershipKey, decisionReason);
       }
-      if (staleDecisionOwnership.get(ownershipKey)) {
-        needsDecisionKeys.push(key);
+      const rowDecisionReason = staleDecisionOwnership.get(ownershipKey);
+      if (rowDecisionReason) {
+        noteDecisionRow(key, rowDecisionReason);
         if (!afk) continue;
       }
     }
@@ -590,6 +676,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    decisionReasonByKey,
     terminalKeys,
     checkSeqs,
     heartbeatSeqs,
@@ -606,6 +693,14 @@ export interface BranchOfferVerdict {
   eligible: boolean;
   /** True when the close is eligible only because of the away collapse. */
   awayOnly: boolean;
+  /** Which condition kept this close from the branch; null when eligible. */
+  mainOnlyReason: MainOnlyReason | null;
+}
+
+function scanMainOnlyReason(scope: UnreadWakeScope): MainOnlyReason {
+  if (scope.corrupted) return "unsafe-queue";
+  if (scope.status === "empty") return "empty-queue";
+  return scope.status === "unsafe" ? "nothing-claimable" : "unknown";
 }
 
 // The offer rule for one actionable close: whether a branch may take it, in
@@ -657,7 +752,23 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
     afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible
   );
   const eligible = afk ? scope.eligible : attendedEligible;
-  return { scope, heartbeat, eligible, awayOnly: Boolean(eligible && !attendedEligible) };
+  // Read after the verdict and in the order the verdict tests its conditions.
+  const triggerTasks = new Set(triggerKeys.map(taskIdentity));
+  const triggerDecisionReason = scope.needsDecisionKeys
+    .filter((key) => triggerTasks.has(taskIdentity(key)))
+    .reduce<DecisionReason | undefined>((reason, key) => strongerDecisionReason(reason, scope.decisionReasonByKey[key]), undefined);
+  const mainOnlyReason: MainOnlyReason | null = eligible
+    ? null
+    : afk
+      ? scanMainOnlyReason(scope)
+      : isCheckTrigger
+        ? "check-trigger"
+        : isNeedsDecisionTrigger
+          ? triggerDecisionReason ?? "unknown"
+          : isTerminalTrigger
+            ? "finished-status"
+            : scanMainOnlyReason(scope);
+  return { scope, heartbeat, eligible, awayOnly: Boolean(eligible && !attendedEligible), mainOnlyReason };
 }
 
 // The exact state-relative filename bin/fm-wake-drain.sh reads for a

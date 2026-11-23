@@ -978,6 +978,105 @@ t3_offer() {  # <state> <trigger>
   printf '%s\n' "$2" | FM_STATE_OVERRIDE="$1" node "$ROOT/bin/fm-branch-dispatch.mjs" offer | tr '\n' ' '
 }
 
+# Every main-only reason code, read through the offer the host uses: each case
+# must stay main's, name its condition, and a claimable close must name none.
+offer_reason_is() {  # <state> <trigger> <eligible> <code> <label>
+  local out
+  out=$(printf '%s\n' "$2" | FM_STATE_OVERRIDE="$1" node "$ROOT/bin/fm-branch-dispatch.mjs" offer)
+  assert_contains "$out" "eligible=$3" "$5: routing"
+  [ "$(printf '%s\n' "$out" | sed -n 's/^main_only_reason=//p')" = "$4" ] || fail "$5: expected reason '$4', got: $out"
+}
+
+# The presentation cursor as the watcher writes it, with only the log's first
+# line already presented.
+mate_cursor_after_first_line() {  # <state>
+  printf 'mate\t%s\t%s\t\n' "$(bash -c '. "$1/bin/fm-classify-lib.sh"; _fm_open_decisions_file_ident "$2"' _ "$ROOT" "$1/mate.status")" \
+    "$(head -n 1 "$1/mate.status" | wc -c | tr -d ' ')" > "$1/.status-presentation-cursor"
+}
+
+test_offer_names_each_main_only_reason() {
+  local state sig stale
+  state="$TMP_ROOT/offer-reasons/state"
+  mkdir -p "$state"
+  printf 'project=demo\nwindow=fm-demo\n' > "$state/demo.meta"
+  printf 'working [at=1]: step\n' > "$state/demo.status"
+  sig="signal: $state/demo.status"
+  stale='stale: fm-demo (no progress)'
+
+  printf '1\t1\tsignal\tdemo.status\t%s\n' "$sig" > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 1 '' "a routine signal"
+  offer_reason_is "$state" 'check: merge-poll' 0 check-trigger "a check trigger"
+
+  printf 'needs-decision [at=1]: which?\n' > "$state/demo.status"
+  printf '1\t1\tsignal\tdemo.status\tneeds-decision: %s\n' "$sig" > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 open-decision "a marked decision signal"
+
+  printf '1\t1\tstale\tfm-demo\t%s\n' "$stale" > "$state/.wake-queue"
+  offer_reason_is "$state" "$stale" 0 open-decision "a stale close on an open decision"
+  printf 'captain-held [at=1] [key=route]: waiting\n' > "$state/demo.status"
+  offer_reason_is "$state" "$stale" 0 captain-held "a stale close on a held task"
+  printf '1\t1\tsignal\tdemo.status\tneeds-decision: %s\n' "$sig" > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 captain-held "a marked signal for a captain-held line"
+
+  printf 'done [at=1]: finished\n' > "$state/demo.status"
+  printf '1\t1\tsignal\tdemo.status\tterminal: %s\n' "$sig" > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 finished-status "an unread finished status"
+
+  printf 'kind=secondmate\nproject=demo\nwindow=fm-mate\n' > "$state/mate.meta"
+  printf 'needs-decision [at=1] [key=k]: which?\nresolved [at=2] [key=k]: this\n' > "$state/mate.status"
+  printf '1\t1\tsignal\tmate.status\tsignal: %s/mate.status\n' "$state" > "$state/.wake-queue"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 open-decision "a second mate span opening a decision"
+  # The presentation cursor puts the opening line before the new span, leaving
+  # only its resolution unread.
+  printf 'mate\t%s\t%s\t\n' "$(bash -c '. "$1/bin/fm-classify-lib.sh"; _fm_open_decisions_file_ident "$2"' _ "$ROOT" "$state/mate.status")" \
+    "$(head -n 1 "$state/mate.status" | wc -c | tr -d ' ')" > "$state/.status-presentation-cursor"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 decision-resolved "a second mate span resolving a decision"
+  rm -f "$state/.status-presentation-cursor"
+  printf 'captain-held [at=1] [key=a]: theirs\nneeds-decision [at=2] [key=b]: which?\n' > "$state/mate.status"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 open-decision "a span holding one decision and opening another"
+  printf 'needs-decision [at=1] [key=k]: which?\nresolved [at=2] [key=k]: this\nneeds-decision [at=3] [key=n]: next?\n' > "$state/mate.status"
+  mate_cursor_after_first_line "$state"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 open-decision "a span resolving one decision and opening another"
+  printf 'needs-decision [at=1] [key=k]: which?\nresolved [at=2] [key=k]: this\ncaptain-held [at=3] [key=a]: theirs\n' > "$state/mate.status"
+  mate_cursor_after_first_line "$state"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 captain-held "a span resolving one decision and holding another"
+  rm -f "$state/.status-presentation-cursor"
+  rm -f "$state/mate.meta" "$state/mate.status"
+
+  printf 'not a queue row\n' > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 unsafe-queue "a malformed queue"
+  : > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 empty-queue "an empty queue"
+  printf '1\t1\tcheck\tmerge\tcheck: merge\n' > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 nothing-claimable "a queue of only main-owned rows"
+  pass "offer: each main-only condition is named, and a claimable close names none"
+}
+
+# The ledger records the offer's code; a reason the offer did not state as a
+# known code is recorded as unknown, and the close still reaches main.
+test_ledger_records_main_only_reason_with_unknown_fallback() {
+  local home real
+  home=$(make_home reason-ledger attended)
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "reason-ledger: the host never started a watcher cycle"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until_deadline 60 host_exited "$home" || fail "reason-ledger: the close did not reach main: $(cat "$home/state/.supervision-host.log")"
+  assert_re '	pass-through	attended	main-only	signal:.*	reason=open-decision$' "$home/state/.supervision-host.log" "the ledger must name the decision"
+  stop_home_processes "$home"
+
+  home=$(make_home reason-unknown attended)
+  real=$(command -v node)
+  printf '#!/bin/bash\n"%s" "$@" | sed "s/^main_only_reason=.*/main_only_reason=something-new/"\nexit "${PIPESTATUS[0]}"\n' "$real" > "$home/fakebin/node"
+  chmod +x "$home/fakebin/node"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "reason-unknown: the host never started a watcher cycle"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until_deadline 60 host_exited "$home" || fail "reason-unknown: the close did not reach main: $(cat "$home/state/.supervision-host.log")"
+  assert_re '^signal: .*demo.status' "$home/host.out" "an unrecognized reason must not change where the close goes"
+  assert_re '	pass-through	attended	main-only	signal:.*	reason=unknown$' "$home/state/.supervision-host.log" "an unrecognized reason must be recorded as unknown"
+  pass "host: the ledger names the main-only reason and falls back to unknown"
+}
+
 test_t3_thread_keyed_stale_row_is_offered_by_its_task_state() {
   local state thread stale out
   state="$TMP_ROOT/t3-offer/state"
@@ -1043,4 +1142,6 @@ fm_test_run \
   test_return_during_a_failed_turn_still_hands_its_outcomes_to_main \
   test_incomplete_engine_result_hands_the_wake_to_main \
   test_attended_terminal_close_passes_straight_to_main \
+  test_offer_names_each_main_only_reason \
+  test_ledger_records_main_only_reason_with_unknown_fallback \
   test_t3_thread_keyed_stale_row_is_offered_by_its_task_state

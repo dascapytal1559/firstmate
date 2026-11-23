@@ -2093,3 +2093,121 @@ The choices made:
 - The spawn's two on-off label switches became one label, so a third label did not mean a third copy of the same checks.
 
 The evidence is the touched suites, run against the fake T3 server, which now models the incident claim and launch; no live T3 was called.
+
+
+## 76. The weekly clear check keeps its number (23 November 2026)
+
+The Monday clear check reported 17 of 60 clears with a sign of harm for the week ending 23 November, one of them concrete: a decision already answered was asked again.
+His call on it:
+
+> Okay. Yeah, in that case that's a tolerable amount of harm. But we should keep that recorded number. We should keep observing that number just to see how it changes over time.
+
+What was built:
+
+- **A private record, one row per week.** `data/clear-watch/weekly.tsv` holds the week's end date, its clears, the clears with any sign, and the clears with the concrete sign. Rerunning a week replaces its row, and `--no-write` writes nothing.
+- **A longer Monday line.** It now says how many of the flagged clears were concrete, and how the share with a sign compares with the previous recorded week (up, down or level, beside that week's own counts). With no earlier week it says nothing about change.
+- **Seeded from the existing transcripts.** The week ending 23 November was computed again (60, 17, 1) so next Monday has something to compare with.
+
+The choices made:
+
+- The comparison is on the share of clears, not the raw count, because the number of clears varies from week to week.
+- What counts as a sign of harm is unchanged.
+
+The evidence is the clear check's own test suite, which covers the record, the replace-on-rerun, the comparison and the first week.
+
+## 77. A worker card says whose move it is (23 November 2026)
+
+The T3 sidebar's worker cards read "Ready", "Waiting" and "Waiting for captain", and those did not say who had to act: a finished build waiting on FirstMate read "Ready", while two review boards waiting on the captain read plain "Waiting".
+
+> If it's waiting on you, let's just call it Queued. Should be the gray colour. Waiting, which I think it's something we inherited from T3 code. It kind of sometimes means testing, sometimes something else. Yeah, waiting is fine and the gray color. And then if it's waiting for captain, make it an orange color. And yeah, let's go clean up those cards.
+
+What was built:
+
+- **Waiting for captain** now also covers an open review board and a finished build whose landing needs the captain's approval.
+- **Queued** replaces Ready and means FirstMate moves next: finished work, a blocked worker, an open question FirstMate settles, or a worker held for a later go.
+- **Waiting** is what is left: a pause on something external, or a worker the captain snoozed.
+
+The choices made:
+
+- A review board stops counting the moment its decision is resolved, because the card reads the same record of open decisions the rest of FirstMate uses.
+- A status log that cannot be read leaves the card as it is rather than guessing.
+- The orange colour is a separate change in T3 Code, so this one changes words only.
+
+The evidence is the card status test suite, with new cases for each rule, including a resolved and a snoozed review board.
+
+## 78. Work held for bedtime says so (23 November 2026)
+
+Two worker cards read Queued while they were really waiting for the captain to say he was going to bed: the chat media warehouse move and the Inkling 2 Mini tests.
+
+> Maybe I like Scheduled.
+
+> I guess both of these could be scheduled bedtime.
+
+What was built:
+
+- **Scheduled · bedtime** now shows on a worker that is finished, parked or paused and has a later-start hold whose reason begins "At bedtime".
+
+The choices made:
+
+- Waiting for captain and Testing still win, because they say something more urgent.
+- A blocked or failed worker keeps its current label, so a broken worker never looks calmly scheduled.
+- The label comes from the hold's existing reason, so no clock time or new field is stored.
+
+The evidence is the card status test suite, with new cases for each rule, including a later-start hold with another reason and a blocked worker held for bedtime.
+
+## 79. The bedtime label becomes a moon (23 November 2026)
+
+> Okay instead of scheduled bedtime, let's do scheduled with a moon icon
+
+What changed:
+
+- **☾︎ Scheduled** replaces "Scheduled · bedtime" on a worker held for the captain's goodnight. Which workers get it, and where it ranks against the other labels, are unchanged.
+
+The choices made:
+
+- The moon is the text form of the symbol (U+263E followed by U+FE0E), so T3 Code draws it in the same gray as the rest of the label rather than as a coloured emoji.
+- The label is plain text of a few characters, well inside T3's 32-character limit, so nothing changes in T3 Code.
+
+## 80. An open board always reads as the captain's move (23 November 2026)
+
+> I feel like the garment ticket is not really cute. I mean I can see it on the lavish board. I feel like it's waiting on me. Is there a mistake there?
+
+> Yeah, I mean I raised it up because it's an error. So we should figure out what the error is and how to prevent it from happening any further.
+
+The mistake was that the card trusted each worker's reading of the word "decision".
+A chart scout left a report on a board for the captain, judged that a report was not a decision, and finished without saying the board needed the captain, so its card read Queued while the board sat waiting.
+
+What changed:
+
+- **Waiting for captain** now shows on a worker that is finished, parked or paused and owns a review board that is still listening, whether or not the worker declared it.
+
+The choices made:
+
+- The card reads the board's own registration, so the fact no longer depends on a worker's wording.
+- Once the captain has sent feedback or closed the board, the next move is the worker's, so that board stops counting until the worker has acknowledged the feedback.
+- A snoozed board reads Waiting, bedtime work keeps its moon, and a blocked or failed worker keeps its label.
+- If the registration cannot be read, the card keeps the label the other rules give it.
+
+The evidence is the card status test suite, which now reproduces the finished scout with an open board and covers each of these rules.
+
+## 81. Cleanup stops killing work that is still running (23 November 2026)
+
+Cleanup already waited for a worker's running turn or detached job, but it still killed a plain background command the worker had left running, treating it as a leftover.
+The 23 November routing check found the gap, and [upstream issue 7606](https://github.com/kunchenguid/firstmate/issues/7606) describes the same failure: a post-merge cleanup killed a running end-to-end test and the run was reported as passed.
+
+> I am all good to clear like just straight bugs, but if we're stopping repeats, we do want to understand like if upstream set them up for a reason.
+
+What was built:
+
+- **Cleanup refuses and names.** While a command the worker started is still running, a plain cleanup stops nothing and lists each one with its pid, command and age.
+- **One narrow confirmation.** The main session can confirm that the named top-level processes and what they started are leftovers. If a top-level process changes, the confirmation refuses, and the landed-work checks still run. Short-lived children of a running test suite change nothing, so main hears about it once.
+- **No endless silent retries.** The background session hands the named processes to the main session once per unchanged situation, and an automatic cleanup finishes by itself when they end.
+- **Nothing interrupted reads as passed.** When cleanup does stop a command, its output names it and says the work was interrupted.
+
+The choices made:
+
+- Killing true leftovers stays, after confirmation, because upstream added it when stray test processes pinned the CPU for hours.
+- The worker's own agent, its browser helper and its review-board listener do not hold a cleanup, because closing the worker is meant to end them.
+- Anything cleanup cannot recognise counts as running, so a wrong guess costs one question and never a killed command.
+
+The evidence is the cleanup and park test suites, plus a read-only pass over the live fleet: idle workers counted nothing, while a real dev server and running test jobs were named.

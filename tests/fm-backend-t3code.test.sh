@@ -2720,7 +2720,7 @@ test_scout_teardown_archives_before_slot_return() {
 }
 
 test_secondmate_teardown_archives_thread_before_home_removal_without_project_delete() {
-  local home data state config id out rc thread=mcp:4e0f2a6b-9d3c-4b5e-af4f-0123456789cd archive_line harness=claude nolsof
+  local home data state config id out rc thread=mcp:4e0f2a6b-9d3c-4b5e-af4f-0123456789cd archive_line harness=claude nolsof watcher watcher_alive=0
   command -v lsof >/dev/null 2>&1 || { printf 'note: %s skipped: lsof is required to prove a process left the home\n' "${FUNCNAME[0]}"; return 0; }
   id=$(t3_uid "t3smtdz1-$harness")
   t3_case "teardown-secondmate-$harness" running
@@ -2761,13 +2761,31 @@ test_secondmate_teardown_archives_thread_before_home_removal_without_project_del
   assert_present "$home/AGENTS.md" "an unproven shutdown keeps the secondmate home"
   assert_present "$state/$id.meta" "an unproven shutdown keeps the endpoint record"
   kill -0 "$PROVIDER_PID" 2>/dev/null || fail "the refused teardown must not have touched the provider"
+  # The home's watcher survives its harness in its own session, parented to init.
+  printf 'sleep 300\n' > "$home/bin/fm-watch.sh"
+  perl -e 'use POSIX; my ($dir, $file, $script) = @ARGV; my $pid = fork() // die; exit 0 if $pid; POSIX::setsid(); chdir $dir or die;
+    open STDIN, "<", "/dev/null"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null";
+    open my $fh, ">", "$file.tmp" or die; print {$fh} "$$\n"; close $fh; rename "$file.tmp", $file or die; exec "bash", $script' \
+    "$home" "$CASE_DIR/watcher.pid" "$home/bin/fm-watch.sh"
+  for _ in $(seq 1 100); do [ -s "$CASE_DIR/watcher.pid" ] && break; sleep 0.02; done
+  watcher=$(cat "$CASE_DIR/watcher.pid")
+  sleep 0.2
+  kill -0 "$watcher" 2>/dev/null || fail "fixture: the home's watcher did not start"
   out=$( FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$CASE_DIR/home" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     "$ROOT/bin/fm-teardown.sh" "$id" --force 2>&1 )
   rc=$?
+  kill -0 "$watcher" 2>/dev/null && watcher_alive=1
+  kill -KILL "$watcher" 2>/dev/null || true
   expect_code 0 "$rc" "t3code secondmate teardown should succeed"$'\n'"$out"
   ! kill -0 "$PROVIDER_PID" 2>/dev/null || fail "a provider process rooted in the home must be ended before the home is removed"
   wait "$PROVIDER_PID" 2>/dev/null || true
+  [ "$watcher_alive" = 0 ] || fail "the home's surviving watcher must be ended before the home is removed"
+  assert_not_contains "$out" "must not be reported as passed" "a secondmate's own runtime must not be reported as interrupted work"
+  printf '%s\n' "$out" | grep -Eq "stopping the worker's own processes:.* $watcher \\(" \
+    || fail "the home's watcher must be named as the secondmate's own process"$'\n'"$out"
+  printf '%s\n' "$out" | grep -Eq "stopping the worker's own processes:.* $PROVIDER_PID \\(" \
+    || fail "the home's provider must be named as the secondmate's own process"$'\n'"$out"
   PROVIDER_PID=
   [ "$(t3_dispatch_types)" = "t3_thread_interrupt t3_thread_organize" ] \
     || fail "secondmate teardown must interrupt then archive exactly once and never delete the project, got '$(t3_dispatch_types)'"

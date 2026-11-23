@@ -72,6 +72,12 @@ test_branch_prompt_is_byte_stable_and_above_cache_floor() {
     *"Any cleanup that exits 5 found the worker still working, which is a wait and not a refusal"*"let a later wake retry it"*"\`bin/fm-control.sh <task> interrupt\` first, and never force cleanup."*) ;;
     *) fail "branch prompt lost the still-working cleanup deferral rule" ;;
   esac
+  # A cleanup held by named running processes reaches main once, is never
+  # confirmed by the branch, and never lets interrupted work read as passed.
+  case "$out_a" in
+    *"Any cleanup that exits 7 stopped nothing"*"\`--stop-leftovers\` is MAIN's alone"*"\`cleanup-held report=first\`, report verdict captain"*"\`report=unchanged\`"*"never report its work as passed or finished"*) ;;
+    *) fail "branch prompt lost the running-process cleanup rule" ;;
+  esac
   case "$out_a" in
     *"A second mate's status log is a relay channel for its child work"*"retiring a second mate is MAIN's alone"*"Report a second mate's signal wake from the status lines that wake newly presents"*"A second mate's stale wake is a liveness event: report it even when it presents no new status lines."*) ;;
     *) fail "branch prompt lost the second-mate relay, signal-span, or stale-liveness rule" ;;

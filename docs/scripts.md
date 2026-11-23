@@ -104,7 +104,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer only the T3 workers whose turn T3 shows as cut off |
 | `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
-| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "Waiting", "Ready", "Failed") in line with its current state |
+| `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "☾︎ Scheduled", "Queued", "Waiting", "Failed") in line with who moves next |
 | `fm-t3-bridge.sh`        | Keep T3's Bridge in line with the objectives file and the model routing table |
 | `fm-t3-worker-reply.sh`  | Name the task behind a captain message T3 forwarded from a worker's thread, and the settle, un-settle, snooze, or un-snooze it carries |
 | `fm-t3-main-pretool-check.sh` | PreToolUse credential seatbelt for a T3 home's main |
@@ -185,7 +185,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-merge-authority-lib.sh` | Resolve merge authority at the gate, persist it against the accepted canonical PR, and identity-check its later poll consumption |
 | `fm-parent-channel-lib.sh` | Resolve a secondmate home's parent channel and append a captain-facing outcome line to it at most once |
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task with an explicit delivery mode, write the ship instructions carrying that mode's definition of done, and supersede the task's brief so a later relaunch cannot revive stale scout delivery text |
-| `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
+| `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, hold for named processes still running, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness, resolve crew or secondmate harness, model, and effort, and validate the native-only `ultra` effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |
 | `fm-x-lib.sh`            | Shared Relay config, relay, and reply-threading helpers                              |

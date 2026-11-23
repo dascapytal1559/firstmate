@@ -103,6 +103,7 @@ run_is() {  # <running|parked|unreadable|ended>
 
 home_env() {
   env PATH="$HOME_DIR/fakebin:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    FM_PROCEVENT_CLAIM_ROOT="$HOME_DIR/claims" \
     FM_DATA_OVERRIDE="$HOME_DIR/data" FM_CONFIG_OVERRIDE="$HOME_DIR/config" "$@"
 }
 
@@ -262,7 +263,7 @@ test_status_decision_alone_is_no_captain_wait() {
   make_home status-only
   declares 'needs-decision [key=layout] [at=1700000000]: which layout'
   cards sync || fail "sync should pass"
-  assert_equals "Waiting" "$(card_of)" "a worker's own needs-decision line is a wait on firstmate"
+  assert_equals "Queued" "$(card_of)" "a worker's own needs-decision line is firstmate's move"
   captain hold w1 --reason "which layout" >/dev/null || fail "hold should succeed"
   assert_equals "$WAITING" "$(card_of)" "only firstmate holding the question makes it the captain's"
   pass "fm-t3-crew-status: a needs-decision line alone is not a captain wait"
@@ -330,13 +331,13 @@ test_restart_that_loses_labels_is_republished() {
   mkdir -p "$HOME_DIR/data/w2" && printf 'report\n' > "$HOME_DIR/data/w2/report.md"
   cards sync || fail "sync should pass"
   assert_equals "$WAITING" "$(card_of)" "the first worker waits on the captain"
-  assert_equals "Ready" "$(card_of "$other")" "the second worker is ready"
+  assert_equals "Queued" "$(card_of "$other")" "the second worker's finished work is firstmate's move"
   t3_fake_stop
   t3_fake_set 'for (const t of Object.values(w.threads)) { delete t.statusLabel; delete t.statusLabelSince; }'
   t3_fake_restart "$TMP_ROOT/server"
   cards sync || fail "the pass after the restart should succeed"
   assert_equals "$WAITING" "$(card_of)" "a label the restart lost is set again"
-  assert_equals "Ready" "$(card_of "$other")" "on every card, from one pass"
+  assert_equals "Queued" "$(card_of "$other")" "on every card, from one pass"
   pass "fm-t3-crew-status: a T3 restart that loses labels is repaired by the next pass"
 }
 
@@ -556,7 +557,7 @@ test_declared_states_label_between_turns() {
   assert_equals "Waiting" "$(card_of)" "a declared pause reads Waiting"
   declares 'blocked [at=1700000000]: the fixture repository is missing'
   cards sync || fail "the pass should pass"
-  assert_equals "Waiting" "$(card_of)" "a blocker reads Waiting"
+  assert_equals "Queued" "$(card_of)" "a blocker reads Queued"
   turn_is running
   cards sync || fail "the pass should pass"
   assert_equals "" "$(card_of)" "a worker at work shows T3's own Working"
@@ -564,10 +565,10 @@ test_declared_states_label_between_turns() {
   mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
   declares 'done [at=1700000000]: report ready'
   cards sync || fail "the pass should pass"
-  assert_equals "Ready" "$(card_of)" "finished work reads Ready"
+  assert_equals "Queued" "$(card_of)" "finished work reads Queued"
   inbox_message >/dev/null || fail "could not write an inbox message"
   cards sync || fail "the pass should pass"
-  assert_equals "" "$(card_of)" "a pending steer takes Ready off before the turn starts"
+  assert_equals "" "$(card_of)" "a pending steer takes Queued off before the turn starts"
   rm -f "$HOME_DIR/state/w1.inbox/"*.msg
   declares 'failed [at=1700000000]: the reproduction does not hold'
   cards sync || fail "the pass should pass"
@@ -575,7 +576,421 @@ test_declared_states_label_between_turns() {
   declares 'working [at=1700000000]: reading the code'
   cards sync || fail "the pass should pass"
   assert_equals "" "$(card_of)" "a worker between turns with nothing to wait on carries no label"
-  pass "fm-t3-crew-status: Waiting, Ready, and Failed follow the worker's state between turns"
+  pass "fm-t3-crew-status: Waiting, Queued, and Failed follow the worker's state between turns"
+}
+
+# hold_kind <id> <parked|future> -> an open hold of that kind on the row.
+hold_kind() {
+  (cd "$HOME_DIR" && tasks-axi hold "$1" --reason "held for the test" --kind "$2") >/dev/null \
+    || fail "could not hold $1 as $2"
+}
+
+test_board_review_is_the_captains_until_resolved_or_snoozed() {
+  make_home board-review
+  worker_meta w1 scout
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick a layout on the board'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an open review board waits on the captain"
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a worker at work on the board shows T3's own Working"
+  turn_is settled
+  printf 'resolved [key=board-review] [at=1700000001]: the captain picked one\n' >> "$HOME_DIR/state/w1.status"
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a resolved review board stops counting"
+  declares 'needs-decision [key=board-review] [at=1700000002]: pick a layout on the board'
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a snoozed review board reads Waiting"
+  pass "fm-t3-crew-status: a review board waits on the captain until it is resolved or snoozed"
+}
+
+# arm_board [task] -> a real task-owned Lavish registration, with no listener.
+arm_board() {
+  local id=${1:-w1} meta="$HOME_DIR/state/${1:-w1}.meta"
+  sed "s/^window=.*/window=fm-$id/" "$meta" > "$meta.new" && mv "$meta.new" "$meta"
+  printf 'project=%s\n' "$HOME_DIR/copy" >> "$meta"
+  home_env "$ROOT/bin/fm-procevent.sh" register-task lavish lavish-board "$id" -- /bin/true >/dev/null \
+    || fail "could not register the board"
+}
+
+retire_board() {
+  home_env "$ROOT/bin/fm-procevent.sh" retire lavish-board >/dev/null || fail "could not retire the board"
+}
+
+# board_round <body> -> capture one round for w1's board and print its file.
+board_round() {
+  printf '%s\n' "$1" > "$HOME_DIR/round"
+  # shellcheck disable=SC2016  # expanded by the inner shell
+  home_env bash -c '. "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"
+    fm_procevent_capture "$2" lavish-board lavish "$3" w1' _ "$ROOT" "$HOME_DIR/state" "$HOME_DIR/round" \
+    || fail "could not capture a board round"
+}
+
+finished_scout() {  # <home-name>
+  make_home "$1"
+  worker_meta w1 scout
+  mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
+  declares 'done [at=1700000000]: report ready on the board'
+}
+
+test_open_board_is_the_captains_move() {
+  finished_scout open-board
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a finished scout with no board is firstmate's move"
+  arm_board
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished scout with an armed board and no decision line waits on the captain"
+  retire_board
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a retired board stops counting"
+
+  finished_scout open-board-other-owner
+  second_worker w2 'mcp:other-board-owner' scout
+  arm_board w2
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "another worker's board does not count"
+  assert_equals "" "$(card_of 'mcp:other-board-owner')" "a working board owner keeps its own label"
+
+  finished_scout open-board-rounds
+  arm_board
+  board_round $'session:\n  status: feedback' >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "an unacknowledged captain round is the worker's move"
+  home_env "$ROOT/bin/fm-procevent.sh" handled lavish-board 1 >/dev/null || fail "the owner should acknowledge the round"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an acknowledged round leaves the board waiting on the captain again"
+
+  finished_scout open-board-ended
+  arm_board
+  board_round $'session:\n  status: ended\n  ended_by: user' >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a session the captain ended is the worker's to conclude"
+  home_env "$ROOT/bin/fm-procevent.sh" handled lavish-board 1 >/dev/null || fail "the owner should conclude the board"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a concluded board stops counting"
+
+  finished_scout open-board-unreadable
+  arm_board
+  chmod 000 "$HOME_DIR/state/procevent/lavish-board.source"
+  cards sync || fail "the pass should pass"
+  chmod 600 "$HOME_DIR/state/procevent/lavish-board.source"
+  assert_equals "Queued" "$(card_of)" "an unreadable record leaves the label the other rules give"
+  pass "fm-t3-crew-status: an armed board waits on the captain until it is answered or retired"
+}
+
+test_open_board_precedence() {
+  local bedtime='☾︎ Scheduled'
+  finished_scout board-snoozed
+  arm_board
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a snoozed board reads Waiting"
+
+  finished_scout board-dated
+  arm_board
+  captain hold w1 --reason "look after the trip" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a board with a hold dated ahead reads Waiting"
+
+  finished_scout board-bedtime
+  arm_board
+  future_hold w1 "At bedtime: run the move"
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "bedtime work with a board keeps its moon"
+
+  finished_scout board-future
+  arm_board
+  future_hold w1 "After the release: run the move"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold outranks the board"
+
+  finished_scout board-blocked
+  arm_board
+  declares 'blocked [at=1700000000]: the fixture repository is missing'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a blocked worker keeps its label"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker keeps its label"
+
+  for state in paused parked; do
+    make_home "board-$state"
+    worker_meta w1 scout
+    arm_board
+    if [ "$state" = paused ]; then
+      declares 'paused [at=1700000000]: waiting for the go'
+    else
+      declares 'needs-decision [key=layout] [at=1700000000]: pick one'
+    fi
+    cards sync || fail "the pass should pass"
+    assert_equals "$WAITING" "$(card_of)" "a $state worker with an armed board waits on the captain"
+  done
+
+  finished_scout board-working
+  arm_board
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a working board owner shows T3's own Working"
+  turn_is settled
+  inbox_message >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "an unhandled steering message keeps T3's own Working"
+  pass "fm-t3-crew-status: holds, trouble, and work outrank an open board as they should"
+}
+
+test_finished_ship_follows_its_merge_posture() {
+  local head
+  make_home landing
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship with yolo off needs the captain's approval"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship with no recorded yolo needs the captain's approval"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=on
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a finished ship with yolo on is firstmate's to land"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  git -C "$HOME_DIR/copy" branch -f main "$head"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a landed local-only ship no longer waits for the captain"
+  pass "fm-t3-crew-status: a finished ship reads by who may land it"
+}
+
+test_merged_pr_no_longer_waits_for_the_captain() {
+  local head pr='https://github.com/acme/widgets/pull/7'
+  make_home merged-pr
+  in_a_run
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=no-mistakes yolo=off "pr=$pr"
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  printf 'run:\n  id: "01RUN"\n  branch: fm/w1\n  status: completed\n  outcome: passed\n  head: "%s"\n  pr: "%s"\n  findings: none\n' \
+    "$head" "$pr" > "$HOME_DIR/run"
+  cat > "$HOME_DIR/fakebin/gh" <<SH
+#!/usr/bin/env bash
+cat "$HOME_DIR/pr-state"
+SH
+  chmod +x "$HOME_DIR/fakebin/gh"
+  printf 'state=OPEN\nmerged=false\n' > "$HOME_DIR/pr-state"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an open PR with yolo off waits for the captain"
+  printf 'state=MERGED\nmerged=true\n' > "$HOME_DIR/pr-state"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a merged PR no longer waits for the captain"
+  pass "fm-t3-crew-status: a ship whose PR merged has had its approval"
+}
+
+# Records a PR merged through the merge poll's own marker writer.
+merge_poll_recorded() {  # <pr-url>
+  bash -c '. "$1/bin/fm-pr-lib.sh"; fm_pr_url_parse "$3" && fm_pr_poll_merge_mark_notified "$2" w1 \
+    "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER"' _ "$ROOT" "$HOME_DIR/state" "$1" \
+    || fail "could not record the merge"
+}
+
+test_merged_direct_pr_no_longer_waits_for_the_captain() {
+  local pr='https://github.com/acme/widgets/pull/7'
+  make_home merged-direct-pr
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" update-ref refs/remotes/origin/fm/w1 HEAD
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=direct-PR yolo=off "pr=$pr"
+  declares "done [at=1700000000]: PR $pr"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an unmerged direct PR with yolo off waits for the captain"
+  merge_poll_recorded 'https://github.com/acme/widgets/pull/8'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "another PR's merge does not land this ship"
+  merge_poll_recorded "$pr"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a direct PR the merge poll recorded merged no longer waits"
+  pass "fm-t3-crew-status: a direct-PR ship with its own PR recorded merged has had its approval"
+}
+
+# finished_unlanded_ship <home> -> a yolo-off local-only ship reporting a commit
+# that is not on the default branch.
+finished_unlanded_ship() {
+  local head
+  make_home "$1"
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+}
+
+test_future_and_parked_holds() {
+  make_home other-holds
+  hold_kind w1 future
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold on the worker's task is firstmate's move"
+  make_home future-origin
+  captain hold w1-later --title "Bedtime" --reason "after bedtime" --origin w1 --repo sample >/dev/null \
+    || fail "an origin hold should succeed"
+  hold_kind w1-later future
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold raised for the worker is firstmate's move"
+  make_home snoozed
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a captain-snoozed worker reads Waiting"
+  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a snoozed worker with another open decision is firstmate's move"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a snoozed worker that failed reads Failed"
+  finished_unlanded_ship snoozed-ship
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a finished ship the captain snoozed reads Waiting"
+  make_home failed-future
+  hold_kind w1 future
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker with a future hold reads Failed"
+  make_home failed-dated
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker with a hold dated ahead reads Failed"
+  pass "fm-t3-crew-status: future holds read Queued, a snoozed worker reads Waiting, and failure outranks both"
+}
+
+# future_hold <id> <reason> -> an open future hold with that reason on the row.
+future_hold() {
+  (cd "$HOME_DIR" && tasks-axi hold "$1" --reason "$2" --kind future) >/dev/null \
+    || fail "could not hold $1 for later"
+}
+
+test_bedtime_hold_reads_scheduled() {
+  local head bedtime='☾︎ Scheduled'
+  make_home bedtime
+  worker_meta w1 scout
+  future_hold w1 "At bedtime: run the supervised move"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a paused worker held for bedtime reads Scheduled"
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a worker at work shows T3's own Working"
+  turn_is settled
+  mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
+  declares 'done [at=1700000000]: report ready'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a finished worker held for bedtime reads Scheduled"
+  declares 'blocked [at=1700000000]: the fixture repository is missing'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a blocked worker keeps Queued under a bedtime hold"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker keeps its label under a bedtime hold"
+
+  make_home bedtime-other-reason
+  worker_meta w1 scout
+  future_hold w1 "After the release: run the move"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold with another reason still reads Queued"
+
+  make_home bedtime-origin
+  worker_meta w1 scout
+  captain hold w1-later --title "Later" --reason "At bedtime: start the tests" --origin w1 --repo sample >/dev/null \
+    || fail "an origin hold should succeed"
+  (cd "$HOME_DIR" && tasks-axi hold w1-later --reason "At bedtime: start the tests" --kind future) >/dev/null \
+    || fail "could not make the origin hold future"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "a bedtime hold raised for the worker counts through its origin"
+
+  make_home bedtime-captain
+  worker_meta w1 scout
+  future_hold w1 "At bedtime: run the move"
+  captain hold w1-call --title "Call" --reason "pick the layout" --origin w1 --repo sample >/dev/null \
+    || fail "a captain hold should succeed"
+  declares 'paused [at=1700000000]: waiting for the go'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a live captain hold outranks bedtime"
+
+  make_home bedtime-testing
+  in_a_run
+  future_hold w1 "At bedtime: run the move"
+  run_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "$TESTING" "$(card_of)" "an active run outranks bedtime"
+
+  make_home bedtime-landing
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  future_hold w1 "At bedtime: run the move"
+  declares "done [at=1700000000]: ready in branch fm/w1 at $head"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a landing that needs the captain outranks bedtime"
+  pass "fm-t3-crew-status: a bedtime hold reads Scheduled for a settled worker and never hides a broken one"
+}
+
+# A captain hold dated after today is a snooze, like a parked hold; the same
+# hold dated today or earlier, or never dated, is a live captain call again.
+test_captain_hold_dated_ahead_is_snoozed() {
+  local today
+  today=$(date +%Y-%m-%d)
+  make_home dated-ahead
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a captain hold whose date has not arrived reads Waiting"
+  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a snoozed worker with another open decision is firstmate's move"
+  make_home dated-today
+  captain hold w1 --reason "pick the layout" --until "$today" >/dev/null || fail "a hold dated today should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold dated today is a live call"
+  make_home dated-past
+  captain hold w1 --reason "pick the layout" --until 2000-01-01 >/dev/null || fail "a hold dated in the past should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold whose date has passed is a live call"
+  make_home undated
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "an undated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold with no date is a live call"
+  make_home dated-board
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick a layout on the board'
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a review board under a snooze date reads Waiting"
+  finished_unlanded_ship dated-ship
+  captain hold w1 --reason "look after the trip" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a finished ship with a hold dated ahead reads Waiting"
+  finished_unlanded_ship dated-today-ship
+  captain hold w1 --reason "look after the trip" --until "$today" >/dev/null || fail "a hold dated today should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship's approval is the captain's again once the date arrives"
+  pass "fm-t3-crew-status: a captain hold not yet due reads Waiting and a due or undated one waits on the captain"
+}
+
+test_unreadable_status_log_leaves_the_card() {
+  make_home unreadable-log
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick one'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "the review board shows first"
+  FM_T3_ID=$THREAD t3_fake_set 'w.threads[process.env.FM_T3_ID].statusLabel = "Unchanged"'
+  chmod 000 "$HOME_DIR/state/w1.status"
+  cards sync
+  chmod 644 "$HOME_DIR/state/w1.status"
+  assert_equals "Unchanged" "$(card_of)" "a status log that cannot be read changes no card"
+  pass "fm-t3-crew-status: a status log that cannot be read leaves the card alone"
 }
 
 # A turn T3 reports in no known way leaves a card whose label depends on the
@@ -700,6 +1115,16 @@ test_a_pass_that_finds_another_running_is_owed
 test_waiting_outranks_testing
 test_a_scout_never_shows_testing
 test_declared_states_label_between_turns
+test_board_review_is_the_captains_until_resolved_or_snoozed
+test_finished_ship_follows_its_merge_posture
+test_merged_pr_no_longer_waits_for_the_captain
+test_merged_direct_pr_no_longer_waits_for_the_captain
+test_future_and_parked_holds
+test_bedtime_hold_reads_scheduled
+test_open_board_is_the_captains_move
+test_open_board_precedence
+test_captain_hold_dated_ahead_is_snoozed
+test_unreadable_status_log_leaves_the_card
 test_unreadable_turn_leaves_the_card
 test_older_t3_breaks_nothing
 test_watcher_repairs_within_its_loop
