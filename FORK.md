@@ -250,7 +250,7 @@ Each night a check lists every clear of FirstMate's session and puts a line in t
 Clearing FirstMate's main session saves most of what its long context costs, but a fresh session can lose the thread of a conversation.
 So a nightly script reads FirstMate's own session transcripts, with no model call, and lists every clear of the day: its cause (the captain's `/clear`, a cold start from a message, a cold start from a notification, or a T3 restart), the context it dropped, and any sign of harm in the new session's first hour.
 The signs are a bare short reply, a recall phrase, a quote of the previous session, an answered decision asked again, a task dispatched twice, a notification left unacknowledged across the clear, and FirstMate not back at the helm within minutes of an automatic clear.
-It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays.
+It writes one line into that morning's briefing only when a sign shows, and a weekly total on Mondays that says how many clears were concrete (an answered decision asked again) and how the share with a sign compares with the previous recorded week; each week is kept as one row in the private `data/clear-watch/weekly.tsv`.
 It reads Claude transcripts only, and runs once a night as a step of [`fm-nightly-checks.sh`](bin/fm-nightly-checks.sh) from the host's scheduler.
 Details: [`fm-clear-watch.py`](bin/fm-clear-watch.py).
 

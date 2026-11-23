@@ -2093,3 +2093,24 @@ The choices made:
 - The spawn's two on-off label switches became one label, so a third label did not mean a third copy of the same checks.
 
 The evidence is the touched suites, run against the fake T3 server, which now models the incident claim and launch; no live T3 was called.
+
+
+## 76. The weekly clear check keeps its number (23 November 2026)
+
+The Monday clear check reported 17 of 60 clears with a sign of harm for the week ending 23 November, one of them concrete: a decision already answered was asked again.
+His call on it:
+
+> Okay. Yeah, in that case that's a tolerable amount of harm. But we should keep that recorded number. We should keep observing that number just to see how it changes over time.
+
+What was built:
+
+- **A private record, one row per week.** `data/clear-watch/weekly.tsv` holds the week's end date, its clears, the clears with any sign, and the clears with the concrete sign. Rerunning a week replaces its row, and `--no-write` writes nothing.
+- **A longer Monday line.** It now says how many of the flagged clears were concrete, and how the share with a sign compares with the previous recorded week (up, down or level, beside that week's own counts). With no earlier week it says nothing about change.
+- **Seeded from the existing transcripts.** The week ending 23 November was computed again (60, 17, 1) so next Monday has something to compare with.
+
+The choices made:
+
+- The comparison is on the share of clears, not the raw count, because the number of clears varies from week to week.
+- What counts as a sign of harm is unchanged.
+
+The evidence is the clear check's own test suite, which covers the record, the replace-on-rerun, the comparison and the first week.

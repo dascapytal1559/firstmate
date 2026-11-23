@@ -219,11 +219,68 @@ test_monday_adds_the_weekly_total() {
   h=$(home weekly)
   watch "$h" "$NEXT_MON" >/dev/null || fail "run failed"
   brief="$h/data/morning/2026-11-23.md"
-  grep -qxF -- '- **Clears this week:** 6 (3 by your /clear, 1 cold start from your message, 1 cold start from a notification, 1 fresh start after a T3 restart), dropping about 514k tokens of context; 4 showed a sign of harm.' "$brief" ||
+  grep -qxF -- '- **Clears this week:** 6 (3 by your /clear, 1 cold start from your message, 1 cold start from a notification, 1 fresh start after a T3 restart), dropping about 514k tokens of context; 4 showed a sign of harm, 1 of them concrete (a decision already answered was asked again).' "$brief" ||
     fail "weekly total wrong: $(cat "$brief" 2>/dev/null)"
   ! grep -q 'Clear check:' "$brief" || fail "no daily line when the day had no clear"
   grep -qF 'No clears.' "$h/data/clear-watch/2026-11-23.md" || fail "an empty day must still be listed"
   pass "a Monday adds the weekly total"
+}
+
+WEEKLY_HEADER=$(printf 'week_end\tclears\twith_sign\twith_concrete_sign')
+
+test_first_week_is_recorded_and_says_nothing_about_change() {
+  local h=$TMP_ROOT/weekly brief tsv
+  brief="$h/data/morning/2026-11-23.md"
+  tsv="$h/data/clear-watch/weekly.tsv"
+  [ -f "$tsv" ] || fail "no weekly record written"
+  [ "$(cat "$tsv")" = "$WEEKLY_HEADER
+$(printf '2026-11-23\t6\t4\t1')" ] || fail "weekly record wrong: $(cat "$tsv")"
+  ! grep -q 'had .* clears with a sign' "$brief" || fail "with no previous week the line must say nothing about change: $(cat "$brief")"
+  ! grep -q 'share with a sign' "$brief" || fail "with no previous week the line must say nothing about change"
+  pass "the first week is recorded and the line says nothing about change"
+}
+
+test_rerunning_a_week_replaces_its_row_and_compares_with_the_previous_one() {
+  local h tsv out
+  h=$(home trend)
+  tsv="$h/data/clear-watch/weekly.tsv"
+  mkdir -p "${tsv%/*}"
+  # An earlier week (3 of 10 with a sign, 0 concrete) and a stale row for this very week.
+  printf '%s\n2026-11-09\t10\t3\t0\n2026-11-23\t1\t1\t1\n' "$WEEKLY_HEADER" > "$tsv"
+  out=$(watch "$h" "$NEXT_MON") || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF '4 showed a sign of harm, 1 of them concrete (a decision already answered was asked again); the week ending 2026-11-09 had 3 of 10 clears with a sign, 0 concrete, so the share with a sign is up.' ||
+    fail "comparison missing from the weekly line: $out"
+  [ "$(cat "$tsv")" = "$WEEKLY_HEADER
+$(printf '2026-11-09\t10\t3\t0')
+$(printf '2026-11-23\t6\t4\t1')" ] || fail "the stale row must be replaced, not added to: $(cat "$tsv")"
+  watch "$h" "$NEXT_MON" >/dev/null || fail "rerun failed"
+  [ "$(grep -c '^2026-11-23' "$tsv")" -eq 1 ] || fail "a rerun must keep one row per week: $(cat "$tsv")"
+  [ "$(grep -c 'Clears this week' "$h/data/morning/2026-11-23.md")" -eq 1 ] || fail "the weekly line must still be written once"
+  # A rerun compares with the earlier week, never with its own row.
+  printf '%s\n2026-11-09\t10\t8\t0\n' "$WEEKLY_HEADER" > "$tsv"
+  out=$(watch "$h" "$NEXT_MON" --no-write) || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF 'had 8 of 10 clears with a sign, 0 concrete, so the share with a sign is down.' || fail "a lower share must read as down: $out"
+  pass "rerunning a week replaces its row, and the line compares with the previous week"
+}
+
+test_weekly_no_write_records_nothing_but_still_compares() {
+  local h tsv out before
+  h=$(home weeklynowrite)
+  tsv="$h/data/clear-watch/weekly.tsv"
+  mkdir -p "${tsv%/*}"
+  printf '%s\n2026-11-16\t6\t4\t1\n' "$WEEKLY_HEADER" > "$tsv"
+  before=$(cat "$tsv")
+  out=$(watch "$h" "$NEXT_MON" --no-write) || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF 'the week ending 2026-11-16 had 4 of 6 clears with a sign, 1 concrete, so the share with a sign is level.' || fail "equal shares must read as level: $out"
+  [ "$(cat "$tsv")" = "$before" ] || fail "--no-write changed the weekly record"
+  [ ! -e "$h/data/morning" ] || fail "--no-write wrote a briefing"
+  pass "--no-write leaves the weekly record alone but still compares"
+}
+
+test_a_non_weekly_run_records_nothing() {
+  local h=$TMP_ROOT/day
+  [ ! -e "$h/data/clear-watch/weekly.tsv" ] || fail "a daily run must not record a week"
+  pass "a daily run records no week"
 }
 
 test_no_write_only_prints() {
@@ -311,6 +368,10 @@ fm_test_run \
   test_existing_briefing_is_kept \
   test_quiet_day_writes_no_briefing_line \
   test_monday_adds_the_weekly_total \
+  test_first_week_is_recorded_and_says_nothing_about_change \
+  test_rerunning_a_week_replaces_its_row_and_compares_with_the_previous_one \
+  test_weekly_no_write_records_nothing_but_still_compares \
+  test_a_non_weekly_run_records_nothing \
   test_no_write_only_prints \
   test_every_account_folder_is_read_and_a_copied_session_counts_once \
   test_no_current_main_session_is_reported_not_zero_clears \

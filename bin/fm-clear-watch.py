@@ -64,9 +64,18 @@ What it writes
   - <FM_HOME>/data/morning/<local date>.md, the morning briefing, under a
     "## Clear check" heading: one line only when a clear showed a sign of harm
     or no current main session was found, and on Mondays (or with --weekly) one line totalling the seven days ending
-    at the same point. Each line is written once per date, so a rerun adds
-    nothing.
-  --no-write prints the listing and the briefing lines and writes no file.
+    at the same point, with how many of those clears showed the concrete sign
+    (a decision already answered was asked again) and how the share of clears
+    with any sign compares with the previous recorded week. Each line is
+    written once per date, so a rerun adds nothing;
+  - <FM_HOME>/data/clear-watch/weekly.tsv, on each weekly run: one row per
+    week, tab-separated with a header: the week's end date (the local date of
+    the run), its clears, the clears with any sign, and the clears with the
+    concrete sign. Rerunning the same end date replaces its row. The previous
+    week is the latest row with an earlier end date; with none, the line says
+    nothing about change. The file is private and the record of the trend.
+  --no-write prints the listing and the briefing lines and writes no file; the
+  weekly line still compares with the rows already recorded.
 
 Exit status: 0 on success, 1 when no transcript directory exists, 2 on a usage
 error.
@@ -381,6 +390,7 @@ def judge(old, new):
         "old_ctx": old_ctx,
         "saved": max(0, old_ctx - FRESH_TOKENS),
         "signs": signs,
+        "concrete": bool(reasked),
     }
 
 
@@ -451,17 +461,72 @@ def daily_line(clears, report_rel):
     )
 
 
-def weekly_line(clears):
+WEEKLY_HEADER = ("week_end", "clears", "with_sign", "with_concrete_sign")
+CONCRETE_SIGN = "a decision already answered was asked again"
+
+
+def week_totals(clears):
+    """The three counts kept for a week, in WEEKLY_HEADER order after its end date."""
+    return (len(clears), sum(1 for c in clears if c["signs"]), sum(1 for c in clears if c["concrete"]))
+
+
+def read_weekly(path):
+    """Recorded weeks as {end date: (clears, with sign, with concrete sign)}; malformed rows are skipped."""
+    rows = {}
+    if not os.path.exists(path):
+        return rows
+    with open(path) as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) == 4 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", fields[0]) and all(f.isdigit() for f in fields[1:]):
+                rows[fields[0]] = tuple(int(f) for f in fields[1:])
+    return rows
+
+
+def write_weekly(path, rows):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as handle:
+        handle.write("\t".join(WEEKLY_HEADER) + "\n")
+        for end in sorted(rows):
+            handle.write("\t".join((end,) + tuple(str(n) for n in rows[end])) + "\n")
+    os.replace(tmp, path)
+
+
+def previous_week(rows, end):
+    earlier = [d for d in rows if d < end]
+    return (max(earlier), rows[max(earlier)]) if earlier else None
+
+
+def week_comparison(totals, previous):
+    """How this week's share of clears with a sign compares with the previous recorded week."""
+    if previous is None:
+        return ""
+    end, (p_clears, p_sign, p_concrete) = previous
+    was = f"the week ending {end} had {p_sign} of {p_clears} clears with a sign, {p_concrete} concrete"
+    clears, sign, _ = totals
+    if not p_clears or not clears:
+        return f"; {was}"
+    # Cross-multiplied, so the comparison is exact.
+    left, right = sign * p_clears, p_sign * clears
+    trend = "up" if left > right else "down" if left < right else "level"
+    return f"; {was}, so the share with a sign is {trend}"
+
+
+def weekly_line(clears, previous=None):
     if not clears:
         return "- **Clears this week:** none."
     counts = {}
     for c in clears:
         counts[c["cause"]] = counts.get(c["cause"], 0) + 1
     parts = [f"{counts[k]} {CAUSE_TEXT[k][2][counts[k] != 1]}" for k in CAUSES if k in counts]
-    harmed = sum(1 for c in clears if c["signs"])
+    totals = week_totals(clears)
+    harm = f"{totals[1]} showed a sign of harm"
+    if totals[1]:
+        harm += f", {totals[2]} of them concrete ({CONCRETE_SIGN})"
     return (
         f"- **Clears this week:** {len(clears)} ({', '.join(parts)}), dropping about "
-        f"{tokens(sum(c['saved'] for c in clears))} tokens of context; {harmed} showed a sign of harm."
+        f"{tokens(sum(c['saved'] for c in clears))} tokens of context; {harm}{week_comparison(totals, previous)}."
     )
 
 
@@ -533,7 +598,8 @@ def usage(code):
         "with its cause, saving, and signs of harm from the new session's first hour.\n"
         "Writes data/clear-watch/<date>.md, and one line in the morning briefing\n"
         "(data/morning/<date>.md) only when something shows, plus a weekly total on\n"
-        "Mondays or with --weekly. --no-write only prints. Header: bin/fm-clear-watch.py.\n"
+        "Mondays or with --weekly, which also records the week in data/clear-watch/weekly.tsv.\n"
+        "--no-write only prints. Header: bin/fm-clear-watch.py.\n"
     )
     sys.exit(code)
 
@@ -584,8 +650,12 @@ def main(argv):
     else:
         text = no_main_listing(dirs, day_start, win_end)
         lines = [NO_MAIN_LINE.format(n=len(dirs), report=report_rel)]
+    weekly_path = os.path.join(home, "data", "clear-watch", "weekly.tsv")
+    week = None
     if weekly and has_main:
-        lines.append(weekly_line(clears_between(sessions, win_end - 7 * 86400, win_end)))
+        week = clears_between(sessions, win_end - 7 * 86400, win_end)
+        recorded = read_weekly(weekly_path)
+        lines.append(weekly_line(week, previous_week(recorded, date)))
 
     sys.stdout.write(text)
     if lines:
@@ -595,6 +665,9 @@ def main(argv):
         os.makedirs(os.path.dirname(report), exist_ok=True)
         with open(report, "w") as handle:
             handle.write(text)
+        if week is not None:
+            recorded[date] = week_totals(week)
+            write_weekly(weekly_path, recorded)
         if lines:
             append_briefing(os.path.join(home, "data", "morning", f"{date}.md"), lines)
     return 0
