@@ -275,15 +275,16 @@ The label says what only Firstmate knows about a live T3 ship or scout, includin
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
 | `Failed` | Between turns, the worker or its run failed, whatever `future`, `parked`, or dated hold counts for it, so a broken worker never looks calm. |
 | `☾︎ Scheduled` | Between turns, a `future` hold whose reason starts `At bedtime` counts for a worker that reads done, parked, or paused. A blocked worker keeps its own label. |
-| `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
-| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived), including a finished worker the captain snoozed, unless a `future` hold or another open decision makes it firstmate's move. |
+| `Waiting` | Between turns, the captain snoozed the worker (a `parked` hold, or a captain hold whose `--until` date has not yet arrived), no `future` hold counts for it, and it either reads done, parked, or paused with an open board, or reads done with no other open decision. |
+| `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it is parked on an open decision other than a review board, or a `future` hold counts for it. |
+| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a snoozed worker no row above claimed. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.
 A worker's `needs-decision` line alone reads `Queued`, because firstmate settles most of those itself; the exception is an open `board-review` decision, a review board only the captain can answer, which reads `Waiting for captain` until it is resolved or the captain snoozes it.
 A worker holds an open board while its task-owned registration in [`bin/fm-procevent.sh`](../bin/fm-procevent.sh) exists and no captured round of that board is unacknowledged, so the card needs no `board-review` line.
 A round the captain sent or a session the captain ended is the worker's to handle, a concluded or retired board has no registration, and a registry that cannot be read counts no board.
-A captain hold with an `--until` date still ahead counts as snoozed by the backlog's own date rule, and reads `Waiting`; on the date, the same hold reads `Waiting for captain` again with no other action, within a minute of the date arriving.
+A captain hold with an `--until` date still ahead counts as snoozed by the backlog's own date rule; on the date, the same hold reads `Waiting for captain` again with no other action, within a minute of the date arriving.
 A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
 A run left only watching a PR with green checks reads as done, so the card then reads `Queued`, or `Waiting for captain` when landing needs the captain's approval.
 

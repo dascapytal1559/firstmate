@@ -119,12 +119,12 @@ T3 Code fork half: [Bridge](https://github.com/dascapytal1559/t3code/blob/main/f
 
 ![FirstMate's crew in the T3 Code sidebar: one worker's card reads Waiting for captain, another reads Testing, and a third shows only its age, each with a plain title](docs/media/fork/worker-card-status.png)
 
-Each worker's card in T3 Code's sidebar says what the worker is waiting on: Waiting for captain, Testing, Waiting, Ready, or Failed.
+Each worker's card in T3 Code's sidebar says who moves next: Waiting for captain, Testing, ☾︎ Scheduled, Queued, Waiting, or Failed.
 T3 Code knows when a worker's turn ended, but only FirstMate knows whether the worker now needs the captain, sits in a no-mistakes run, waits on something else, or is finished.
 FirstMate says so in the status spot on the worker's card, and the title stays as it is.
-When FirstMate decides that only the captain can unblock a live worker, the card reads Waiting for captain.
+When the next move on a live worker is the captain's, because of a captain hold, an open review board, or a finished build whose landing needs approval, the card reads Waiting for captain.
 While a worker's no-mistakes run is active, the card reads Testing, and Waiting for captain wins when both apply.
-Between turns, a worker with an open question FirstMate settles, a blocker, or a declared pause reads Waiting, finished work reads Ready, and a failure reads Failed.
+Between turns, work held for the captain's bedtime reads ☾︎ Scheduled; finished work, a blocker, or an open question FirstMate settles reads Queued; a pause on something external or a worker the captain snoozed reads Waiting; and a failure reads Failed.
 While the worker works, the card shows T3 Code's own Working, except that Testing stays.
 The words change when the worker's state does and go when the worker is cleaned up.
 FirstMate keeps no list of its own for this: every update works the label out again from the backlog's holds and each worker's current state, so a failed update, a T3 Code that was down, or a label a restart lost comes right within about a minute.

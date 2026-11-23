@@ -9,10 +9,10 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Any agent as a worker](FORK.md#any-agent-as-a-worker): any T3 Code agent can be a worker, not only Claude and Codex; stock T3 Code is no longer supported.
 - [Workers listed as crew](FORK.md#workers-listed-as-crew): T3 Code lists each worker under the FirstMate that started it.
 - [Readable titles](FORK.md#readable-titles): worker cards name the project and the task, not `fm-` ids.
-- [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access (upstream's), and cleanup stops everything they started.
+- [Full access and a clean stop](FORK.md#full-access-and-a-clean-stop): workers run at full access (upstream's), and cleanup stops what they started, except a command still running, which it names and holds.
 - [Approvals at once](FORK.md#approvals-at-once): a question or approval reaches FirstMate at once, and FirstMate can answer the approval itself.
 - [Routing table on the Bridge](FORK.md#routing-table-on-the-bridge): T3's Bridge tab shows which model FirstMate picks for each kind of task.
-- [Card status](FORK.md#card-status): a worker's card says Waiting for captain, Testing, Waiting, Ready, or Failed.
+- [Card status](FORK.md#card-status): a worker's card says who moves next.
 - [Reply on a worker's thread](FORK.md#reply-on-a-workers-thread): a reply, settle, or snooze on a worker's thread reaches FirstMate as the captain's input on that task.
 - [Restart recovery](FORK.md#restart-recovery): FirstMate's own session runs in T3 Code, and it and its workers recover after a T3 restart.
 - [A usage limit never stops the work](FORK.md#a-usage-limit-never-stops-the-work): a worker stopped by an account's usage limit moves to another account at once, same conversation.
