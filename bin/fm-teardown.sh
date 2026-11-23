@@ -2908,14 +2908,17 @@ EOF
 TEARDOWN_INTERRUPTED=
 
 # Name what is about to be stopped: each process the worker started on its own
-# line, and the worker's own processes together.
+# line, and the worker's own processes together. Everything in a retiring
+# secondmate's home is its own runtime; its child work has its own guards.
 teardown_name_stopping() {  # <pids>
-  local pids=$1 work pid age command own='' name
-  work=$(task_live_work_rows "$pids") || work=
-  work=$({ printf '%s\n--\n' "$TEARDOWN_OWN_PIDS"; printf '%s\n' "$work"; } | LC_ALL=C awk -F '\t' '
-    $0 == "--" && !phase { phase = 1; next }
-    !phase { own[$1] = 1; next }
-    $1 != "" && !($1 in own)')
+  local pids=$1 work='' pid age command own='' name
+  if [ "$KIND" != secondmate ]; then
+    work=$(task_live_work_rows "$pids") || work=
+    work=$({ printf '%s\n--\n' "$TEARDOWN_OWN_PIDS"; printf '%s\n' "$work"; } | LC_ALL=C awk -F '\t' '
+      $0 == "--" && !phase { phase = 1; next }
+      !phase { own[$1] = 1; next }
+      $1 != "" && !($1 in own)')
+  fi
   while IFS=$'\t' read -r pid age command; do
     [ -n "$pid" ] || continue
     echo "teardown: stopping pid $pid, running $age, which the worker started: $command" >&2
