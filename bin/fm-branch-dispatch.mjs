@@ -25,8 +25,10 @@
 //     Read one actionable close's reason line from stdin and print
 //     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
 //     this close at all, trigger class included), then the same five lines
-//     `scope` prints for the scan it judged. --afk judges it under the away
-//     posture.
+//     `scope` prints for the scan it judged, then main_only_reason=<code>, the
+//     condition that kept the close from the branch (empty when eligible;
+//     MainOnlyReason in the module owns the codes). --afk judges it under the
+//     away posture.
 //   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
 //     Read the watcher's wake reason from stdin and print the branch wake
 //     prompt naming <surface> as the report surface. --mirror-file puts the
@@ -99,7 +101,10 @@ if (command === "scope") {
   }
   const message = readFileSync(0, "utf8").split(/\r?\n/)[0] ?? "";
   const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true);
-  process.stdout.write(`eligible=${verdict.eligible ? 1 : 0}\n${scopeLines(verdict.scope, verdict.heartbeat)}`);
+  process.stdout.write(
+    `eligible=${verdict.eligible ? 1 : 0}\n${scopeLines(verdict.scope, verdict.heartbeat)}` +
+      `main_only_reason=${verdict.mainOnlyReason ?? ""}\n`,
+  );
 } else if (command === "wake-prompt") {
   let report = "";
   let away = false;
