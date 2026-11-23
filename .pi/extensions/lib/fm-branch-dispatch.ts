@@ -420,6 +420,34 @@ function spanDecisionReason(
   return null;
 }
 
+// Where a task's unpresented span starts: the cursor's offset while it still
+// names this file and fits it, else the whole log.
+function presentedSpanOffset(path: string, size: number, cursor: { ident: string; offset: number } | null | undefined): number {
+  if (!cursor || cursor.offset > size) return 0;
+  try {
+    return cursor.ident === statusFileIdentity(path) ? cursor.offset : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function statusSpanReason(
+  contents: Buffer,
+  spanOffset: number,
+  resolveVerb: string,
+  heldVerb: string,
+  reservedPrefixes: readonly string[],
+): DecisionReason | null {
+  return spanDecisionReason(
+    openDecisions(nonBlankLines(contents.toString("utf8")), resolveVerb, heldVerb, reservedPrefixes),
+    nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
+    nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
+    resolveVerb,
+    heldVerb,
+    reservedPrefixes,
+  );
+}
+
 export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = false, attendedHost = false): UnreadWakeScope {
   let queue = "";
   try {
@@ -485,6 +513,27 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     .filter(Boolean);
   const decisionConfig = `${resolveVerb}\0${heldVerb}\0${reservedPrefixes.join("\0")}`;
   let presentationCursor: ReturnType<typeof readPresentationCursor> | undefined;
+  const markedSignalReasons = new Map<string, DecisionReason>();
+  // The ledger's reason for a watcher-marked row. It never affects routing, so
+  // an unreadable log only loses the finer reason.
+  const markedSignalReason = (task: string): DecisionReason => {
+    let reason = markedSignalReasons.get(task);
+    if (reason) return reason;
+    try {
+      const statusPath = `${state}/${task}.status`;
+      if (statusFileVersion(statusPath)) {
+        if (presentationCursor === undefined) presentationCursor = readPresentationCursor(state);
+        const contents = readFileSync(statusPath);
+        const spanOffset = presentedSpanOffset(statusPath, contents.length, presentationCursor?.get(task));
+        reason = statusSpanReason(contents, spanOffset, resolveVerb, heldVerb, reservedPrefixes) ?? undefined;
+      }
+    } catch {
+      reason = undefined;
+    }
+    reason ??= "open-decision";
+    markedSignalReasons.set(task, reason);
+    return reason;
+  };
   for (const line of rows) {
     const fields = line.split("\t");
     if (fields.length < 5 || !/^[0-9]+$/.test(fields[1])) return UNSAFE_SCOPE;
@@ -522,7 +571,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
         // scan (docs/pi-supervision-branch.md "Autonomy"). Away, the branch
         // takes the decision row like any other task-local row; the guarded
         // scripts decide what it may do about it (bin/fm-lease-lib.sh).
-        noteDecisionRow(key, "open-decision");
+        noteDecisionRow(key, markedSignalReason(key.replace(/\.(?:status|turn-ended)$/, "")));
         if (!afk) continue;
       } else if (/^terminal:/.test(payload)) {
         // Main-owned while attended for the same reason: a worker's done or
@@ -574,33 +623,22 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
             let spanOffset = 0;
             try {
               contents = readFileSync(statusPath);
-              if (cursor && cursor.offset <= contents.length) {
-                try {
-                  if (cursor.ident === statusFileIdentity(statusPath)) spanOffset = cursor.offset;
-                } catch {
-                  // No identity to match: the span is the whole log.
-                }
-              }
+              spanOffset = presentedSpanOffset(statusPath, contents.length, cursor);
               if (statusFileVersion(statusPath) !== version) return UNSAFE_SCOPE;
             } catch {
               return UNSAFE_SCOPE;
             }
-            const statusLines = nonBlankLines(contents.toString("utf8"));
-            const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
-            decisionReason = spanRule
-              ? spanDecisionReason(
-                open,
-                nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
-                nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
-                resolveVerb,
-                heldVerb,
-                reservedPrefixes,
-              )
-              : [...open.values()].includes("needs-decision")
+            if (spanRule) {
+              decisionReason = statusSpanReason(contents, spanOffset, resolveVerb, heldVerb, reservedPrefixes);
+            } else {
+              const statusLines = nonBlankLines(contents.toString("utf8"));
+              const open = openDecisions(statusLines, resolveVerb, heldVerb, reservedPrefixes);
+              decisionReason = [...open.values()].includes("needs-decision")
                 ? "open-decision"
                 : statusLineVerb(statusLines.at(-1) ?? "") === heldVerb
                   ? "captain-held"
                   : null;
+            }
             staleDecisionCache.set(ownershipKey, { version, config, decisionReason });
             if (staleDecisionCache.size > 512) {
               staleDecisionCache.delete(staleDecisionCache.keys().next().value!);

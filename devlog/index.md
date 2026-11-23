@@ -2200,7 +2200,7 @@ The 23 November routing check found the gap, and [upstream issue 7606](https://g
 What was built:
 
 - **Cleanup refuses and names.** While a command the worker started is still running, a plain cleanup stops nothing and lists each one with its pid, command and age.
-- **One narrow confirmation.** The main session can confirm that exactly the named processes are leftovers. If the set changes, the confirmation refuses, and the landed-work checks still run.
+- **One narrow confirmation.** The main session can confirm that the named top-level processes and what they started are leftovers. If a top-level process changes, the confirmation refuses, and the landed-work checks still run. Short-lived children of a running test suite change nothing, so main hears about it once.
 - **No endless silent retries.** The background session hands the named processes to the main session once per unchanged situation, and an automatic cleanup finishes by itself when they end.
 - **Nothing interrupted reads as passed.** When cleanup does stop a command, its output names it and says the work was interrupted.
 

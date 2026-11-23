@@ -30,14 +30,18 @@
 #                        board-review and no parked or dated hold; or
 #                        crew-state reads done, parked, or paused and the
 #                        worker holds an open board with no parked, dated, or
-#                        future hold; or a finished ship whose recorded yolo is
-#                        off, since landing needs the captain's approval.
+#                        future hold; or a finished ship that has not landed
+#                        and whose recorded yolo is not on, since landing it
+#                        needs the captain's approval.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
 #                        the worker works too.
+#   Failed               crew-state reads it failed, whatever future, parked,
+#                        or dated hold counts, so a broken worker never looks
+#                        calm.
 #   ☾︎ Scheduled          a hold of kind future whose reason starts "At bedtime"
 #                        counts, and crew-state reads done, parked, or paused.
-#                        A blocked or failed worker never reads this. The
+#                        A blocked worker never reads this. The
 #                        glyph is U+263E plus U+FE0E (text presentation), so
 #                        T3 draws it in the label's own colour, not an emoji.
 #   Waiting              a snoozed worker (parked or dated hold, no future
@@ -49,7 +53,6 @@
 #   Waiting              any other declared wait: crew-state reads parked or
 #                        paused, or a hold of kind parked or a dated captain
 #                        hold (the captain snoozed it) counts.
-#   Failed               crew-state reads it failed.
 #   none                 otherwise, and while the worker works, so T3 shows
 #                        its own Working.
 # The worker works while T3 reads its thread busy or while its steering inbox
@@ -114,6 +117,8 @@ command -v jq >/dev/null 2>&1 || { echo "t3-crew-status: jq is required"; exit 1
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-crew-status.XXXXXX") || { echo "t3-crew-status: no temporary directory"; exit 1; }
 trap 'rm -rf -- "$WORK"' EXIT
@@ -179,10 +184,31 @@ read_open_boards() {
   done < "$WORK/board-owners" > "$WORK/boards"
 }
 
+# True when a finished ship's work is already in: crew-state read its PR merged,
+# or the commit its newest ready report names is on a local-only project's
+# default branch. Unreadable evidence is not landed.
+ship_landed() {  # <worker> <crew-state-line>
+  local worker=$1 meta="$STATE/$1.meta" project branch ready head default
+  case "$2" in
+    'state: done · source: run-step · run passed: PR merged'*|'state: done · source: run-step · checks green: PR merged'*)
+      return 0
+      ;;
+  esac
+  [ "$(fm_meta_get "$meta" mode)" = local-only ] || return 1
+  project=$(fm_meta_get "$meta" project)
+  [ -n "$project" ] || return 1
+  branch=$(fm_meta_get "$meta" branch)
+  ready=$(fm_dod_local_newest_ready "$STATE/$worker.status") || return 1
+  head=$(fm_dod_local_ready_head "$project" "$ready" "${branch:-fm/$worker}") || return 1
+  default=$(fm_dod_local_default_branch "$project") || return 1
+  git -C "$project" merge-base --is-ancestor "$head" "refs/heads/$default" 2>/dev/null
+}
+
 # The label for <worker> between turns, or - to leave its card. <run> is the
-# run's label: Testing, - when the run cannot be read, or empty.
-between_label() {  # <worker> <state> <run>
-  local worker=$1 state=$2 run=$3 log="$STATE/$1.status" meta="$STATE/$1.meta"
+# run's label: Testing, - when the run cannot be read, or empty. <line> is
+# crew-state's reading.
+between_label() {  # <worker> <state> <run> <line>
+  local worker=$1 state=$2 run=$3 line=$4 log="$STATE/$1.status" meta="$STATE/$1.meta"
   local kind open key verb board=0 other=0 open_board=0
   if has_hold captain "$worker"; then
     printf 'Waiting for captain'
@@ -212,10 +238,12 @@ EOF
   esac
   if { { [ "$board" = 1 ] || [ "$open_board" = 1 ]; } && ! snoozed "$worker"; } \
     || { [ "$state" = "done" ] && [ "$kind" = ship ] \
-      && [ "$(sed -n 's/^yolo=//p' "$meta" | head -n 1)" = off ]; }; then
+      && [ "$(fm_meta_get "$meta" yolo)" != on ] && ! ship_landed "$worker" "$line"; }; then
     printf 'Waiting for captain'
   elif [ -n "$run" ]; then
     printf '%s' "$run"
+  elif [ "$state" = failed ]; then
+    printf 'Failed'
   elif has_hold bedtime "$worker" \
     && { [ "$state" = "done" ] || [ "$state" = parked ] || [ "$state" = paused ]; }; then
     printf '☾︎ Scheduled'
@@ -226,8 +254,6 @@ EOF
     printf 'Queued'
   elif [ "$state" = parked ] || [ "$state" = paused ] || snoozed "$worker"; then
     printf 'Waiting'
-  elif [ "$state" = failed ]; then
-    printf 'Failed'
   fi
 }
 
@@ -302,7 +328,7 @@ sync_pass() {
       *) run='' ;;
     esac
     working=$run
-    between=$(between_label "$worker" "$state" "$run")
+    between=$(between_label "$worker" "$state" "$run" "$line")
     ! fm_task_inbox_has_unhandled "$STATE" "$worker" || between=$working
     jq -cn --arg worker "$worker" --arg thread "$thread" \
       --argjson between "$(json_label "$between")" --argjson working "$(json_label "$working")" \

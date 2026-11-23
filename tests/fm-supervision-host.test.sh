@@ -1008,6 +1008,8 @@ test_offer_names_each_main_only_reason() {
   offer_reason_is "$state" "$stale" 0 open-decision "a stale close on an open decision"
   printf 'captain-held [at=1] [key=route]: waiting\n' > "$state/demo.status"
   offer_reason_is "$state" "$stale" 0 captain-held "a stale close on a held task"
+  printf '1\t1\tsignal\tdemo.status\tneeds-decision: %s\n' "$sig" > "$state/.wake-queue"
+  offer_reason_is "$state" "$sig" 0 captain-held "a marked signal for a captain-held line"
 
   printf 'done [at=1]: finished\n' > "$state/demo.status"
   printf '1\t1\tsignal\tdemo.status\tterminal: %s\n' "$sig" > "$state/.wake-queue"

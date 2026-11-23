@@ -76,13 +76,19 @@
 # a process may never end, so a caller must not simply keep retrying in silence.
 # The refusal prints `cleanup-held report=first|unchanged token=<token>`, and
 # state/<id>.cleanup-held remembers the token, so a caller tells the main session
-# once per unchanged set of processes. The token fingerprints exactly that set
-# (pids and start times). --stop-leftovers <token> is the main session's one way
-# to confirm that those processes are leftovers: any change to the set refuses
-# again with a new token, every landed-work check still runs, and the supervision
-# branch is refused as it is for --force.
+# once per unchanged set of root processes. A root is a running process with no
+# other running process of this work above it, and the token fingerprints the
+# roots (pids and start times), so a test suite's short-lived children change
+# neither the report nor the token. --stop-leftovers <token> is the main
+# session's one way to confirm that those roots and their descendants are
+# leftovers: a new or replaced root refuses again with a new token, a root that
+# appears after the confirmation is left running and keeps the copy, every
+# landed-work check still runs, and the supervision branch is refused as it is
+# for --force.
 # Whenever cleanup stops a process it names it, and its last output says that
-# work it interrupted did not finish, so it is never read as having passed.
+# work it interrupted did not finish, so it is never read as having passed. That
+# holds on a host without lsof too, where the hold cannot run and the tmux pane's
+# process-group fallback records what it stops.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch other than the local no-mistakes
@@ -2761,31 +2767,118 @@ EOF
     }'
 }
 
+# Prefix each of the work <rows> still in the process table with 1 when it is a
+# root, a process with no other row anywhere above it, else 0. Walking every
+# ancestor keeps a descendant whose direct parent left the copy, or was not yet
+# in the rows, from reading as a new root.
+task_live_work_mark_roots() {  # <rows>
+  local table
+  table=$(task_process_table) || return 1
+  { printf '%s\n--\n' "$1"; printf '%s\n' "$table"; } | LC_ALL=C awk -F '\t' '
+    function is_root(p,    q, hops) {
+      for (q = parent[p]; (q in parent) && q > 1 && hops < 4096; q = parent[q]) {
+        hops++
+        if (q in row) return 0
+      }
+      return 1
+    }
+    $0 == "--" && !phase { phase = 1; next }
+    !phase { if ($1 != "") { row[$1] = $0; order[++n] = $1 } next }
+    { parent[$1] = $2 }
+    END {
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        if (p in parent) printf "%d\t%s\n", is_root(p), row[p]
+      }
+    }'
+}
+
 # The processes under <dir>... that the worker started and that are still
 # running, as task_live_work_rows rows in TASK_LIVE_WORK, with
-# TASK_LIVE_WORK_TOKEN fingerprinting exactly that set by pid and start time.
+# TASK_LIVE_WORK_ROOTS holding each root's "<pid>\t<identity>" and
+# TASK_LIVE_WORK_TOKEN fingerprinting exactly those roots.
 task_live_work_scan() {  # <dir>...
-  local rows pid age command identity fingerprint=''
+  local rows marked root pid age command identity fingerprint=''
   TASK_LIVE_WORK=
+  TASK_LIVE_WORK_ROOTS=
   TASK_LIVE_WORK_TOKEN=
   task_pids_under_roots "$@" || return 1
   rows=$(task_live_work_rows "$TASK_PIDS") || return 1
-  while IFS=$'\t' read -r pid age command; do
+  [ -n "$rows" ] || return 0
+  marked=$(task_live_work_mark_roots "$rows") || return 1
+  while IFS=$'\t' read -r root pid age command; do
     [ -n "$pid" ] || continue
-    if ! identity=$(task_process_identity "$pid"); then
-      kill -0 "$pid" 2>/dev/null && return 1
-      continue
+    if [ "$root" = 1 ]; then
+      if ! identity=$(task_process_identity "$pid"); then
+        kill -0 "$pid" 2>/dev/null && return 1
+        continue
+      fi
+      TASK_LIVE_WORK_ROOTS="$TASK_LIVE_WORK_ROOTS$pid	$identity
+"
+      fingerprint="$fingerprint$pid $identity
+"
     fi
     TASK_LIVE_WORK="$TASK_LIVE_WORK$pid	$age	$command
 "
-    fingerprint="$fingerprint$pid $identity
-"
   done <<EOF
-$rows
+$marked
 EOF
   [ -n "$TASK_LIVE_WORK" ] || return 0
-  TASK_LIVE_WORK_TOKEN=$(printf '%s\n%s' "$ID" "$fingerprint" | git hash-object --stdin) || return 1
+  fingerprint=$(printf '%s' "$fingerprint" | LC_ALL=C sort -n)
+  TASK_LIVE_WORK_TOKEN=$(printf '%s\n%s\n' "$ID" "$fingerprint" | git hash-object --stdin) || return 1
   TASK_LIVE_WORK_TOKEN=${TASK_LIVE_WORK_TOKEN:0:16}
+}
+
+# What the last passing gate confirmed under --stop-leftovers: its roots, and
+# every pid under the copy then. The worker's own processes are in that list, so
+# one that outlives its pane and reads as work afterwards is still covered.
+TEARDOWN_CONFIRMED_ROOTS=
+TEARDOWN_CONFIRMED_PIDS=
+
+# Of <pids>, print those this cleanup may stop. Under --stop-leftovers, work that
+# was not under the copy at the confirmation and is below no confirmed root is
+# left running, so the reap's final check keeps the copy for a fresh report.
+teardown_stoppable_pids() {  # <pids>
+  local pids=$1 rows table live_roots='' pid identity
+  if [ -z "$STOP_LEFTOVERS" ]; then
+    printf '%s\n' "$pids"
+    return 0
+  fi
+  rows=$(task_live_work_rows "$pids") || return 1
+  table=$(task_process_table) || return 1
+  while IFS=$'\t' read -r pid identity; do
+    [ -n "$pid" ] || continue
+    ! task_process_identity_matches "$pid" "$identity" || live_roots="$live_roots$pid
+"
+  done <<EOF
+$TEARDOWN_CONFIRMED_ROOTS
+EOF
+  { printf '%s--\n%s\n--\n%s\n--\n%s\n--\n' "$live_roots" "$TEARDOWN_CONFIRMED_PIDS" "$rows" "$pids"
+    printf '%s\n' "$table"; } | LC_ALL=C awk -F '\t' -v id="$ID" '
+    function covered(p,    q, hops) {
+      if (p in known) return 1
+      for (q = p; (q in parent) && q > 1 && hops < 4096; q = parent[q]) {
+        hops++
+        if (q in root) return 1
+      }
+      return 0
+    }
+    $0 == "--" { phase++; next }
+    phase == 0 { root[$1] = 1; next }
+    phase == 1 { if ($1 != "") known[$1] = 1; next }
+    phase == 2 { if ($1 != "") work[$1] = 1; next }
+    phase == 3 { if ($1 != "") order[++n] = $1; next }
+    { parent[$1] = $2 }
+    END {
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        if ((p in work) && !covered(p)) {
+          printf "teardown: leaving pid %s running for %s: it started after the confirmation\n", p, id > "/dev/stderr"
+          continue
+        }
+        print p
+      }
+    }'
 }
 
 # The processes this cleanup stopped that the worker had started, for the final
@@ -2825,7 +2918,7 @@ EOF
 }
 
 reap_task_backend_process_group() {  # <label>
-  local label=$1 leader leader_start pgid current_pgid own_pgid
+  local label=$1 leader leader_start pgid current_pgid own_pgid members
   if [ "$BACKEND" != tmux ]; then
     echo "warning: lsof is unavailable; cannot resolve a process-group fallback for $BACKEND task $ID" >&2
     return 0
@@ -2857,9 +2950,13 @@ reap_task_backend_process_group() {  # <label>
   current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
   current_pgid=$(printf '%s' "$current_pgid" | tr -d '[:space:]')
   [ "$current_pgid" = "$pgid" ] || return 0
+  members=$(LC_ALL=C ps -axo pgid=,pid= 2>/dev/null | LC_ALL=C awk -v g="$pgid" '$1 == g { print $2 }') || members=""
+  if [ -z "$members" ]; then
+    echo "warning: lsof is unavailable; cannot list the tmux pane process group for $ID, so it was not signalled" >&2
+    return 0
+  fi
   echo "teardown: reaping leaked $label process group for $ID: $pgid" >&2
-  LC_ALL=C ps -axww -o pgid=,pid=,etime=,args= 2>/dev/null \
-    | LC_ALL=C awk -v g="$pgid" '$1 == g { p = $2; a = $3; $1 = $2 = $3 = ""; sub(/^ +/, ""); printf "teardown: stopping pid %s, running %s: %s\n", p, a, substr($0, 1, 120) }' >&2 || true
+  teardown_name_stopping "$members"
   kill -TERM -- "-$pgid" 2>/dev/null || true
   sleep 1
   if task_process_identity_matches "$leader" "$leader_start" \
@@ -2891,6 +2988,10 @@ reap_task_worktree_processes() {  # <label> <dir>...
     fi
     pids=$TASK_PIDS
     [ -n "$pids" ] || return 0
+    if ! pids=$(teardown_stoppable_pids "$pids"); then
+      echo "REFUSED: cannot read the process table to confirm what may be stopped for $ID; preserving the worktree/tasktmp for manual inspection or retry." >&2
+      return 1
+    fi
     tracked_pids=()
     tracked_identities=()
     while IFS= read -r pid; do
@@ -4088,7 +4189,7 @@ teardown_refuse_working_worker() {
 
 # The running-process refusal (contract: script header): returns 7 while a
 # process the worker started still runs under this task's copy or tasktmp,
-# unless --stop-leftovers carries the token of exactly that set of processes.
+# unless --stop-leftovers carries the token of exactly those root processes.
 TEARDOWN_LIVE_WORK_UNCHECKED_WARNED=0
 teardown_refuse_live_work() {
   local -a roots
@@ -4109,6 +4210,8 @@ teardown_refuse_live_work() {
     fi
     return 1
   fi
+  TEARDOWN_CONFIRMED_ROOTS=$TASK_LIVE_WORK_ROOTS
+  TEARDOWN_CONFIRMED_PIDS=$TASK_PIDS
   [ -n "$TASK_LIVE_WORK" ] || return 0
   [ "$STOP_LEFTOVERS" != "$TASK_LIVE_WORK_TOKEN" ] || return 0
   count=$(printf '%s' "$TASK_LIVE_WORK" | grep -c .)
@@ -4119,7 +4222,7 @@ teardown_refuse_live_work() {
   done <<EOF
 $TASK_LIVE_WORK
 EOF
-  [ -z "$STOP_LEFTOVERS" ] || echo "The confirmation did not match: the running processes changed since it was issued." >&2
+  [ -z "$STOP_LEFTOVERS" ] || echo "The confirmation did not match: the root processes changed since it was issued." >&2
   [ "$(fm_meta_get "$held" token 2>/dev/null || true)" != "$TASK_LIVE_WORK_TOKEN" ] || report=unchanged
   if [ "$report" = first ]; then
     if tmp=$(mktemp "$STATE/.cleanup-held.XXXXXX") \
@@ -4131,7 +4234,7 @@ EOF
     fi
   fi
   echo "cleanup-held report=$report token=$TASK_LIVE_WORK_TOKEN" >&2
-  echo "Retry once they end. If they are leftovers, the main session can stop exactly these with: bin/fm-teardown.sh $ID --stop-leftovers $TASK_LIVE_WORK_TOKEN" >&2
+  echo "Retry once they end. If they are leftovers, the main session can stop these and their descendants with: bin/fm-teardown.sh $ID --stop-leftovers $TASK_LIVE_WORK_TOKEN" >&2
   return "$TEARDOWN_LIVE_WORK_EXIT"
 }
 if [ -n "$STOP_LEFTOVERS" ] && [ "$KIND" = secondmate ]; then

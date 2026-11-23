@@ -5572,6 +5572,113 @@ test_stop_leftovers_refuses_a_changed_set() {
   pass "a confirmation for an earlier set of processes stops nothing"
 }
 
+# The pids `teardown` listed as running in <stderr-file>, minus <root>.
+held_children() {  # <stderr-file> <root>
+  sed -n 's/^  pid \([0-9]*\), running .*/\1/p' "$1" | grep -vx "$2" | sort -n | tr '\n' ' '
+}
+
+test_children_churning_under_a_root_keep_one_report_and_token() {
+  local case_dir rc root token first_children last_children late
+  case_dir=$(make_case live-process-churn)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  root=$(start_detached_in "$case_dir/wt" fm-suite bash -c 'while :; do sleep 2 & wait $!; done')
+  sleep 0.2
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 7 "$rc" "live-process-churn: the suite should hold cleanup"
+  assert_grep "cleanup-held report=first token=" "$case_dir/stderr" \
+    "live-process-churn: the first refusal was not marked first"
+  token=$(held_token "$case_dir/stderr")
+  first_children=$(held_children "$case_dir/stderr" "$root")
+  [ -n "$first_children" ] || { kill -KILL "$root" 2>/dev/null; fail "live-process-churn: no child was running"; }
+
+  sleep 2.2
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  last_children=$(held_children "$case_dir/stderr" "$root")
+  if [ "$rc" != 7 ] || [ "$first_children" = "$last_children" ] \
+    || ! grep -q "cleanup-held report=unchanged token=$token" "$case_dir/stderr"; then
+    kill -KILL "$root" 2>/dev/null || true
+    fail "live-process-churn: churning children changed the report or token (rc=$rc, $first_children -> $last_children): $(cat "$case_dir/stderr")"
+  fi
+
+  late=$(start_detached_in "$case_dir/wt" sleep sleep 302)
+  sleep 0.2
+  rc=0
+  run_teardown "$case_dir" --stop-leftovers "$token" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  local root_alive=0 late_alive=0
+  kill -0 "$root" 2>/dev/null && root_alive=1
+  kill -0 "$late" 2>/dev/null && late_alive=1
+  kill -KILL "$late" 2>/dev/null || true
+  if [ "$rc" != 7 ] || [ "$root_alive" != 1 ] || [ "$late_alive" != 1 ]; then
+    kill -KILL "$root" 2>/dev/null || true
+    fail "live-process-churn: a new root did not invalidate the token (rc=$rc root=$root_alive late=$late_alive)"
+  fi
+  sleep 0.2
+
+  rc=0
+  run_teardown "$case_dir" --stop-leftovers "$token" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  root_alive=0
+  kill -0 "$root" 2>/dev/null && root_alive=1
+  kill -KILL "$root" 2>/dev/null || true
+  expect_code 0 "$rc" "live-process-churn: the token should hold again once only its root runs: $(cat "$case_dir/stderr")"
+  [ "$root_alive" = 0 ] || fail "live-process-churn: the confirmed root survived"
+  pass "children churning under one root keep one report and a valid token, and a new root invalidates it"
+}
+
+test_root_started_after_the_confirmation_is_left_running() {
+  local case_dir rc root token late
+  case_dir=$(make_case live-process-late-root)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  root=$(start_detached_in "$case_dir/wt" sleep sleep 300)
+  sleep 0.2
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  expect_code 7 "$rc" "live-process-late-root: first refusal"
+  token=$(held_token "$case_dir/stderr")
+
+  # The two gates each scan the copy once, so the third scan is the reap's: the
+  # new process appears after the last gate passed and before anything is stopped.
+  cat > "$case_dir/fakebin/lsof" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" -d cwd "*)
+    n=\$(cat "$case_dir/lsof.count" 2>/dev/null || echo 0)
+    n=\$((n + 1))
+    printf '%s\n' "\$n" > "$case_dir/lsof.count"
+    if [ "\$n" = 3 ]; then
+      perl -e 'use POSIX; my (\$dir, \$file) = @ARGV; my \$pid = fork() // die; exit 0 if \$pid; POSIX::setsid(); chdir \$dir or die;
+        open STDIN, "<", "/dev/null"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null";
+        open my \$fh, ">", \$file or die; print {\$fh} "\$\$\n"; close \$fh; exec "sleep", "303"' "$case_dir/wt" "$case_dir/late.pid"
+      for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$case_dir/late.pid" ] && break; sleep 0.05; done
+      sleep 0.1
+    fi
+    ;;
+esac
+exec "$REAL_LSOF_FOR_TEST" "\$@"
+SH
+  chmod +x "$case_dir/fakebin/lsof"
+
+  rc=0
+  run_teardown "$case_dir" --stop-leftovers "$token" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  late=$(cat "$case_dir/late.pid" 2>/dev/null || true)
+  local root_alive=0 late_alive=0
+  kill -0 "$root" 2>/dev/null && root_alive=1
+  [ -z "$late" ] || ! kill -0 "$late" 2>/dev/null || late_alive=1
+  kill -KILL "$root" ${late:+"$late"} 2>/dev/null || true
+  [ -n "$late" ] || fail "live-process-late-root: the late process never started: $(cat "$case_dir/stderr")"
+  [ "$rc" != 0 ] || fail "live-process-late-root: cleanup finished with an unconfirmed process running"
+  [ "$root_alive" = 0 ] || fail "live-process-late-root: the confirmed root survived"
+  [ "$late_alive" = 1 ] || fail "live-process-late-root: cleanup stopped a process nobody confirmed"
+  assert_present "$case_dir/wt" "live-process-late-root: cleanup removed the copy under a running process"
+  assert_grep "leaving pid $late running" "$case_dir/stderr" \
+    "live-process-late-root: cleanup did not name the process it left"
+  pass "a root that starts after the confirmation is neither stopped nor cleaned out from under"
+}
+
 test_stop_leftovers_keeps_the_landed_work_check() {
   local case_dir rc pid token
   case_dir=$(make_case live-process-unlanded)
@@ -5749,6 +5856,45 @@ EOF
   assert_grep "reaping leaked worktree process group" "$case_dir/stderr" \
     "lsof-absent-process-group-reap: teardown did not use the process-group fallback"
   pass "missing lsof falls back to reaping the tmux pane process group"
+}
+
+test_lsof_absent_reports_the_group_work_it_interrupts() {
+  local case_dir rc leader child path_without_lsof
+  case_dir=$(make_case lsof-absent-interrupted)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+
+  perl -e 'setpgrp(0, 0); chdir shift or die; exec "bash", "-c", "sleep 304 & wait"' "$case_dir/wt" &
+  leader=$!
+  disown
+  sleep 0.3
+  child=$(pgrep -P "$leader" | head -1)
+  [ -n "$child" ] || { kill -KILL "$leader" 2>/dev/null; fail "lsof-absent-interrupted: the command did not start"; }
+  cat > "$case_dir/fakebin/tmux" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = display-message ] && [ "\${*: -1}" = '#{pane_pid}' ]; then
+  printf '%s\n' '$leader'
+fi
+exit 0
+EOF
+  chmod +x "$case_dir/fakebin/tmux"
+
+  rc=0
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  local child_alive=0
+  kill -0 "$child" 2>/dev/null && child_alive=1
+  kill -KILL "$leader" "$child" 2>/dev/null || true
+  expect_code 0 "$rc" "lsof-absent-interrupted: the fallback keeps cleanup working: $(cat "$case_dir/stderr")"
+  [ "$child_alive" = 0 ] || fail "lsof-absent-interrupted: the group's command survived"
+  assert_grep "must not be reported as passed" "$case_dir/stdout" \
+    "lsof-absent-interrupted: the final output did not mark the work as interrupted"
+  assert_grep "pid $child, had run" "$case_dir/stdout" \
+    "lsof-absent-interrupted: the final output did not name the command"
+  assert_not_contains "$(grep 'had run' "$case_dir/stdout")" "pid $leader," \
+    "lsof-absent-interrupted: the pane's own process was reported as interrupted work"
+  pass "without lsof, the process-group fallback reports the work it interrupts"
 }
 
 test_lsof_error_refuses_before_removal() {
@@ -7015,12 +7161,15 @@ test_own_autonomous_run_is_left_alone
 test_running_process_holds_cleanup_and_is_named
 test_tasktmp_process_holds_cleanup
 test_stop_leftovers_refuses_a_changed_set
+test_children_churning_under_a_root_keep_one_report_and_token
+test_root_started_after_the_confirmation_is_left_running
 test_stop_leftovers_keeps_the_landed_work_check
 test_stop_leftovers_is_narrow
 test_worker_own_processes_do_not_hold_cleanup
 test_command_under_the_agent_holds_cleanup
 test_detached_job_is_stopped_and_its_records_removed
 test_lsof_absent_reaps_tmux_process_group
+test_lsof_absent_reports_the_group_work_it_interrupts
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
 test_exec_changed_process_is_still_reaped

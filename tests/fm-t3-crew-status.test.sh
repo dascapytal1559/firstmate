@@ -742,17 +742,48 @@ test_open_board_precedence() {
 test_finished_ship_follows_its_merge_posture() {
   local head
   make_home landing
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
   git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
   git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
   head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
   worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
   declares "done [at=1700000000]: ready in branch fm/w1 at $head"
   cards sync || fail "the pass should pass"
   assert_equals "$WAITING" "$(card_of)" "a finished ship with yolo off needs the captain's approval"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished ship with no recorded yolo needs the captain's approval"
   worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=on
   cards sync || fail "the pass should pass"
   assert_equals "Queued" "$(card_of)" "a finished ship with yolo on is firstmate's to land"
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
+  git -C "$HOME_DIR/copy" branch -f main "$head"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a landed local-only ship no longer waits for the captain"
   pass "fm-t3-crew-status: a finished ship reads by who may land it"
+}
+
+test_merged_pr_no_longer_waits_for_the_captain() {
+  local head pr='https://github.com/acme/widgets/pull/7'
+  make_home merged-pr
+  in_a_run
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=no-mistakes yolo=off "pr=$pr"
+  head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
+  printf 'run:\n  id: "01RUN"\n  branch: fm/w1\n  status: completed\n  outcome: passed\n  head: "%s"\n  pr: "%s"\n  findings: none\n' \
+    "$head" "$pr" > "$HOME_DIR/run"
+  cat > "$HOME_DIR/fakebin/gh" <<SH
+#!/usr/bin/env bash
+cat "$HOME_DIR/pr-state"
+SH
+  chmod +x "$HOME_DIR/fakebin/gh"
+  printf 'state=OPEN\nmerged=false\n' > "$HOME_DIR/pr-state"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an open PR with yolo off waits for the captain"
+  printf 'state=MERGED\nmerged=true\n' > "$HOME_DIR/pr-state"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a merged PR no longer waits for the captain"
+  pass "fm-t3-crew-status: a ship whose PR merged has had its approval"
 }
 
 test_future_and_parked_holds() {
@@ -773,7 +804,20 @@ test_future_and_parked_holds() {
   declares 'needs-decision [key=layout] [at=1700000000]: which layout'
   cards sync || fail "the pass should pass"
   assert_equals "Queued" "$(card_of)" "a snoozed worker with another open decision is firstmate's move"
-  pass "fm-t3-crew-status: future holds read Queued and a snoozed worker reads Waiting"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a snoozed worker that failed reads Failed"
+  make_home failed-future
+  hold_kind w1 future
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker with a future hold reads Failed"
+  make_home failed-dated
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker with a hold dated ahead reads Failed"
+  pass "fm-t3-crew-status: future holds read Queued, a snoozed worker reads Waiting, and failure outranks both"
 }
 
 # future_hold <id> <reason> -> an open future hold with that reason on the row.
@@ -803,7 +847,7 @@ test_bedtime_hold_reads_scheduled() {
   assert_equals "Queued" "$(card_of)" "a blocked worker keeps Queued under a bedtime hold"
   declares 'failed [at=1700000000]: the reproduction does not hold'
   cards sync || fail "the pass should pass"
-  assert_equals "Queued" "$(card_of)" "a failed worker keeps its label under a bedtime hold"
+  assert_equals "Failed" "$(card_of)" "a failed worker keeps its label under a bedtime hold"
 
   make_home bedtime-other-reason
   worker_meta w1 scout
@@ -839,8 +883,10 @@ test_bedtime_hold_reads_scheduled() {
   assert_equals "$TESTING" "$(card_of)" "an active run outranks bedtime"
 
   make_home bedtime-landing
+  git -C "$HOME_DIR/copy" symbolic-ref HEAD refs/heads/main
   git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
   git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m work
   head=$(git -C "$HOME_DIR/copy" rev-parse HEAD)
   worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=local-only yolo=off
   future_hold w1 "At bedtime: run the move"
@@ -1019,6 +1065,7 @@ test_a_scout_never_shows_testing
 test_declared_states_label_between_turns
 test_board_review_is_the_captains_until_resolved_or_snoozed
 test_finished_ship_follows_its_merge_posture
+test_merged_pr_no_longer_waits_for_the_captain
 test_future_and_parked_holds
 test_bedtime_hold_reads_scheduled
 test_open_board_is_the_captains_move

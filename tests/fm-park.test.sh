@@ -1224,6 +1224,31 @@ SH
   pass "a cleanup held by running processes names them once, keeps its request, and finishes once they end"
 }
 
+# A cleanup that had to stop running work says so in its outcome, so the merged
+# lane's report never reads as a clean finish.
+test_cleanup_outcome_carries_interrupted_work() {
+  local w out rc
+  for rc in 0 4; do
+    w=$(make_world "land-interrupted-$rc" "$GH_URL"); gh_fixture "$w/gh.1.json"
+    : > "$w/config/auto-land"
+    cat > "$w/fakebin/fm-teardown.sh" <<SH
+#!/usr/bin/env bash
+echo "teardown \$1 stopped 1 process(es) the worker started before they finished; their work was interrupted and must not be reported as passed:"
+echo "  pid 4242, had run 01:02:03: npm run e2e"
+exit $rc
+SH
+    chmod +x "$w/fakebin/fm-teardown.sh"
+    out=$(run_park "$w" land lane --if-eligible 2>&1) || fail "land-interrupted-$rc: land failed: $out"
+    case "$(printf '%s\n' "$out" | head -1)" in
+      "cleaned up lane: PR $GH_URL merged; "*"must not be reported as passed: pid 4242, had run 01:02:03: npm run e2e") ;;
+      *) fail "land-interrupted-$rc: the outcome dropped the interrupted work: $out" ;;
+    esac
+    [ "$(printf '%s\n' "$out" | grep -c 'pid 4242')" = 1 ] \
+      || fail "land-interrupted-$rc: the interrupted work was repeated: $out"
+  done
+  pass "a cleaned-up outcome names work the cleanup interrupted"
+}
+
 # A cleanup that teardown defers because the lane's worker is still working
 # (its exit 5) is a wait, not an outcome: nothing is reported, the request
 # stays, and the tick retries it until the worker stops.
@@ -1416,6 +1441,7 @@ fm_test_run \
   test_pending_land_retries_after_control_lock_refusal \
   test_cleanup_deferred_for_a_working_worker_stays_pending_and_silent \
   test_cleanup_held_by_running_processes_reports_once_and_keeps_its_request \
+  test_cleanup_outcome_carries_interrupted_work \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \
