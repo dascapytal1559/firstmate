@@ -62,6 +62,27 @@
 # a wedged worker is stopped first with bin/fm-control.sh <task-id> interrupt
 # (or exit), never forced. A secondmate is exempt: idle is its healthy state
 # and its retirement has its own gates.
+# REFUSES, exiting 7 with nothing stopped or removed, while a process the worker
+# started is still running under the task's copy or tasktmp, and names each one
+# by pid, age, and command. A plain background command ends no turn and is no
+# detached job, so the guard above cannot see it, and stopping it as a leftover
+# reported interrupted work as finished (kunchenguid/firstmate#7606).
+# task_live_work_scan owns what counts. It leaves out what closing the worker is
+# meant to end: the worker's own agent and its launcher, a bare pane shell, the
+# browser tool's bridge and browser, and a task board's listener, which this
+# cleanup retires itself. A helper it cannot recognize counts as running, so a
+# wrong guess costs one question and never a killed command.
+# Exit 7 means "named processes hold this cleanup"; it is not exit 5 because such
+# a process may never end, so a caller must not simply keep retrying in silence.
+# The refusal prints `cleanup-held report=first|unchanged token=<token>`, and
+# state/<id>.cleanup-held remembers the token, so a caller tells the main session
+# once per unchanged set of processes. The token fingerprints exactly that set
+# (pids and start times). --stop-leftovers <token> is the main session's one way
+# to confirm that those processes are leftovers: any change to the set refuses
+# again with a new token, every landed-work check still runs, and the supervision
+# branch is refused as it is for --force.
+# Whenever cleanup stops a process it names it, and its last output says that
+# work it interrupted did not finish, so it is never read as having passed.
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
 # reachable from any remote-tracking branch other than the local no-mistakes
@@ -123,8 +144,8 @@
 # no longer a readable worktree is reported at once with the lost pool slot and
 # what remains. Teardown then finishes every cleanup step, reports the lost slot
 # instead of a clean return, and exits 4. Exit 4 means only "cleaned up, but a
-# returned pool slot was lost" and exit 5 only the still-working refusal above;
-# other refusals and errors exit 1 (a held supervision lease exits as
+# returned pool slot was lost", exit 5 only the still-working refusal above, and
+# exit 7 only the running-process refusal above; other refusals and errors exit 1 (a held supervision lease exits as
 # bin/fm-lease-lib.sh defines), and an invalid request exits 2. A local
 # retirement of a remote secondmate whose remote run
 # exits 4 still completes locally, forwards only the remote lost-slot warning
@@ -232,7 +253,10 @@
 # leased home releases its durable treehouse lease so the pool slot is freed,
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
-# Usage: fm-teardown.sh <task-id> [--force] [--legacy-record]
+# Usage: fm-teardown.sh <task-id> [--force | --stop-leftovers <token>] [--legacy-record]
+#   --stop-leftovers <token> confirms that exactly the processes a running-process
+#   refusal named are leftovers and may be stopped. It lifts only that refusal,
+#   refuses if the set changed, and is refused for the supervision branch.
 #   --force skips the still-working refusal and ordinary-task dirty and
 #   landed-work checks, skips scout report checks and closes the scout as
 #   discarded with no report recorded, and discards secondmate child work for
@@ -577,13 +601,24 @@ if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
 fi
 ID=$1
 TEARDOWN_LOST_SLOT_EXIT=4
+TEARDOWN_LIVE_WORK_EXIT=7
 FORCE=
+STOP_LEFTOVERS=
 LEGACY_RECORD_GIVEN=0
 shift
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=--force ;;
     --legacy-record) LEGACY_RECORD_GIVEN=1 ;;
+    --stop-leftovers)
+      [ "$#" -ge 2 ] || { echo "error: invalid teardown request" >&2; exit 2; }
+      STOP_LEFTOVERS=$2
+      case "$STOP_LEFTOVERS" in
+        ''|*[!0-9a-f]*) echo "error: invalid teardown request" >&2; exit 2 ;;
+      esac
+      [ "${#STOP_LEFTOVERS}" -eq 16 ] || { echo "error: invalid teardown request" >&2; exit 2; }
+      shift
+      ;;
     *)
       echo "error: invalid teardown request" >&2
       exit 2
@@ -591,6 +626,10 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+if [ "$FORCE" = --force ] && [ -n "$STOP_LEFTOVERS" ]; then
+  echo "error: invalid teardown request: --stop-leftovers confirms named leftovers and cannot be combined with --force" >&2
+  exit 2
+fi
 fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: teardown refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
   exit 1
@@ -608,6 +647,10 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 # territory (contract: bin/fm-lease-lib.sh).
 if [ "$FORCE" = --force ] && [ "$(fm_lease_actor)" = branch ]; then
   echo "error: forced teardown refused - the supervision branch cannot discard work" >&2
+  exit "$FM_LEASE_REFUSE_EXIT"
+fi
+if [ -n "$STOP_LEFTOVERS" ] && [ "$(fm_lease_actor)" = branch ]; then
+  echo "error: --stop-leftovers refused - only the main session can confirm that running processes are leftovers" >&2
   exit "$FM_LEASE_REFUSE_EXIT"
 fi
 fm_lease_guard "$ID" "teardown (fm-teardown)"
@@ -1357,6 +1400,14 @@ fi
 # be readable before the first destructive step. --force does not override
 # this. A forced descendant is proved in validate_firstmate_home_children_removal.
 teardown_require_backend_prerequisites "$BACKEND" "$ID" || exit 1
+# The running-process check names what it finds through the shared classifier,
+# which not every backend adapter loads, so it must load before anything stops.
+for _teardown_source in fm-session-lock-lib.sh fm-gemini-lib.sh fm-hermes-process-lib.sh fm-agent-process-lib.sh; do
+  teardown_require_source "$SCRIPT_DIR/$_teardown_source"
+done
+unset _teardown_source
+# shellcheck source=bin/fm-agent-process-lib.sh
+. "$SCRIPT_DIR/fm-agent-process-lib.sh"
 # The T3 capability and identity gate must pass before local teardown mutation,
 # even under --force.
 if [ "$BACKEND" = t3code ]; then
@@ -2541,6 +2592,238 @@ $dir_pids"
   TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
 }
 
+# One row per process: pid, parent, age, kernel name, command line, tab-separated.
+task_process_table() {
+  local stats argv
+  stats=$(LC_ALL=C ps -axo pid=,ppid=,etime=,comm= 2>/dev/null) && [ -n "$stats" ] || return 1
+  argv=$(LC_ALL=C ps -axww -o pid=,args= 2>/dev/null) && [ -n "$argv" ] || return 1
+  { printf '%s\n--\n' "$stats"; printf '%s\n' "$argv"; } | LC_ALL=C awk '
+    $0 == "--" && !phase { phase = 1; next }
+    {
+      line = $0
+      gsub(/\t/, " ", line)
+      if (!phase) {
+        p = $1; order[++n] = p; parent[p] = $2; age[p] = $3
+        sub(/^[ ]*[0-9]+[ ]+[0-9]+[ ]+[^ ]+[ ]+/, "", line)
+        comm[p] = line
+      } else {
+        p = $1
+        sub(/^[ ]*[0-9]+[ ]*/, "", line)
+        args[p] = line
+      }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        printf "%s\t%s\t%s\t%s\t%s\n", p, parent[p], age[p], comm[p], args[p]
+      }
+    }'
+}
+
+# agent|shell|other for one process. A harness installed as a Node script runs
+# as a bare `node`, so an interpreter whose script is exactly a harness name
+# counts too; a script that merely mentions a harness, like run-claude-eval.sh,
+# does not.
+task_process_kind() {  # <pid> <comm> <args>
+  local pid=$1 comm=$2 args=$3 argv0 rest script name
+  argv0=${args%%[[:space:]]*}
+  case "$(fm_agent_process_classify "$comm" "$argv0" "$args" "$pid")" in
+    agent) printf 'agent'; return 0 ;;
+    shell) printf 'shell'; return 0 ;;
+  esac
+  case "${argv0##*/}" in
+    node|bun|deno)
+      rest=${args#"$argv0"}
+      rest=${rest#"${rest%%[![:space:]]*}"}
+      script=${rest%%[[:space:]]*}
+      script=${script##*/}
+      script=${script%.js}
+      script=${script%.mjs}
+      script=${script%.cjs}
+      for name in "${FM_HARNESS_NAMES[@]}"; do
+        [ "$script" != "$name" ] || { printf 'agent'; return 0; }
+      done
+      ;;
+  esac
+  printf 'other'
+}
+
+# Of the task's <pids> (one per line), print "<pid>\t<age>\t<command>" for each
+# one the worker started and that is still running. Everything else is what
+# closing the worker is meant to end:
+#   - this cleanup, its own helpers, and its callers;
+#   - the tmux pane's own root process and any bare interactive shell;
+#   - the worker's agent: a harness process reached from outside the copy (T3
+#     Code, a pane), with no other agent above it across a command. An agent
+#     started by a command (a nested `claude -p` under a test script) or
+#     reparented to init (a nohup'd eval) is the worker's work, not the worker;
+#   - a shell whose direct child is that agent, which launched it;
+#   - the browser tool's bridge, its MCP server, and the browser, which only act
+#     when the agent drives them (anything driving them is a process of its own);
+#   - a task board's process-event listener, which this cleanup retires.
+# Fails when the process table cannot be read.
+task_live_work_rows() {  # <pids>
+  local candidates=$1 table closure kinds pid comm args kind pane_pid=''
+  [ -n "$candidates" ] || return 0
+  table=$(task_process_table) || return 1
+  if [ "$BACKEND" = tmux ] && [ -n "${T:-}" ]; then
+    pane_pid=$(tmux display-message -p -t "$T" '#{pane_pid}' 2>/dev/null) || pane_pid=
+  fi
+  # Only the candidates and their ancestors need the (slower) name classifier.
+  closure=$({ printf '%s\n--\n' "$candidates"; printf '%s\n' "$table"; } | LC_ALL=C awk -F '\t' '
+    $0 == "--" && !phase { phase = 1; next }
+    !phase { want[$1] = 1; next }
+    { parent[$1] = $2; comm[$1] = $4; args[$1] = $5 }
+    END {
+      for (p in want) {
+        q = p
+        while ((q in parent) && !(q in seen) && q > 1) { seen[q] = 1; q = parent[q] }
+      }
+      for (q in seen) {
+        if (index(comm[q], "Google Chrome for Testing")) continue
+        printf "%s\t%s\t%s\n", q, comm[q], args[q]
+      }
+    }')
+  kinds=
+  while IFS=$'\t' read -r pid comm args; do
+    [ -n "$pid" ] || continue
+    kind=$(task_process_kind "$pid" "$comm" "$args")
+    kinds="$kinds$pid	$kind
+"
+  done <<EOF
+$closure
+EOF
+  { printf '%s\n--\n%s--\n' "$candidates" "$kinds"; printf '%s\n' "$table"; } \
+    | LC_ALL=C awk -F '\t' -v self="$$" -v pane="$pane_pid" '
+    function base(s) { sub(/.*\//, "", s); return s }
+    function tool_root(p,    a, n, b1, b2) {
+      if (index(comm[p], "Google Chrome for Testing")) return 1
+      n = split(args[p], a, " ")
+      b1 = base(a[1]); b2 = (n >= 2) ? base(a[2]) : ""
+      if (b1 == "chrome-devtools-mcp" || base(comm[p]) == "chrome-devtools-mcp") return 1
+      if (b2 ~ /^chrome-devtools-axi-bridge/) return 1
+      if (b2 == "fm-procevent.sh" && (a[3] == "_start" || a[3] == "_owner-watchdog")) return 1
+      return 0
+    }
+    function under_self(p,    q) {
+      for (q = p; (q in parent) && q > 1; q = parent[q]) if (q == self) return 1
+      return 0
+    }
+    function tool_rooted(p,    q) {
+      for (q = p; (q in parent) && q > 1; q = parent[q]) if (tool_root(q)) return 1
+      return 0
+    }
+    function bare_shell(p,    a, n, i) {
+      if (kind[p] != "shell") return 0
+      n = split(args[p], a, " ")
+      for (i = 2; i <= n; i++) {
+        if (a[i] !~ /^-/ || a[i] ~ /^-[A-Za-z]*c/) return 0
+      }
+      return 1
+    }
+    # Reached from a real parent outside the copy, rather than orphaned to init.
+    function rooted(p,    q) {
+      q = p
+      while (q in want) q = parent[q]
+      return (q in parent) && q > 1
+    }
+    function top_agent(p,    q, gap) {
+      if (kind[p] != "agent" || !rooted(p)) return 0
+      gap = 0
+      for (q = parent[p]; (q in parent) && q > 1; q = parent[q]) {
+        if (kind[q] == "agent") { if (gap) return 0 }
+        else gap = 1
+      }
+      return 1
+    }
+    $0 == "--" { phase++; next }
+    phase == 0 { want[$1] = 1; next }
+    phase == 1 { kind[$1] = $2; next }
+    { parent[$1] = $2; age[$1] = $3; comm[$1] = $4; args[$1] = $5; order[++n] = $1 }
+    END {
+      for (q = self; (q in parent) && q > 1; q = parent[q]) own[q] = 1
+      if (pane != "") own[pane] = 1
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        if (!(p in want)) continue
+        if (top_agent(p)) { own[p] = 1; if (kind[parent[p]] == "shell") own[parent[p]] = 1 }
+      }
+      for (i = 1; i <= n; i++) {
+        p = order[i]
+        if (!(p in want) || (p in own) || under_self(p) || bare_shell(p) || tool_rooted(p)) continue
+        c = args[p] == "" ? comm[p] : args[p]
+        gsub(/\\[0-7][0-7][0-7]/, " ", c)
+        gsub(/[[:cntrl:]]/, " ", c)
+        gsub(/  +/, " ", c)
+        if (length(c) > 120) c = substr(c, 1, 117) "..."
+        printf "%s\t%s\t%s\n", p, age[p], c
+      }
+    }'
+}
+
+# The processes under <dir>... that the worker started and that are still
+# running, as task_live_work_rows rows in TASK_LIVE_WORK, with
+# TASK_LIVE_WORK_TOKEN fingerprinting exactly that set by pid and start time.
+task_live_work_scan() {  # <dir>...
+  local rows pid age command identity fingerprint=''
+  TASK_LIVE_WORK=
+  TASK_LIVE_WORK_TOKEN=
+  task_pids_under_roots "$@" || return 1
+  rows=$(task_live_work_rows "$TASK_PIDS") || return 1
+  while IFS=$'\t' read -r pid age command; do
+    [ -n "$pid" ] || continue
+    if ! identity=$(task_process_identity "$pid"); then
+      kill -0 "$pid" 2>/dev/null && return 1
+      continue
+    fi
+    TASK_LIVE_WORK="$TASK_LIVE_WORK$pid	$age	$command
+"
+    fingerprint="$fingerprint$pid $identity
+"
+  done <<EOF
+$rows
+EOF
+  [ -n "$TASK_LIVE_WORK" ] || return 0
+  TASK_LIVE_WORK_TOKEN=$(printf '%s\n%s' "$ID" "$fingerprint" | git hash-object --stdin) || return 1
+  TASK_LIVE_WORK_TOKEN=${TASK_LIVE_WORK_TOKEN:0:16}
+}
+
+# The processes this cleanup stopped that the worker had started, for the final
+# output, which must never let interrupted work read as passed.
+TEARDOWN_INTERRUPTED=
+
+# Name what is about to be stopped: each process the worker started on its own
+# line, and the worker's own processes together.
+teardown_name_stopping() {  # <pids>
+  local pids=$1 work pid age command own='' name
+  work=$(task_live_work_rows "$pids") || work=
+  while IFS=$'\t' read -r pid age command; do
+    [ -n "$pid" ] || continue
+    echo "teardown: stopping pid $pid, running $age, which the worker started: $command" >&2
+    case "
+$TEARDOWN_INTERRUPTED" in
+      *"
+$pid	"*) ;;
+      *) TEARDOWN_INTERRUPTED="$TEARDOWN_INTERRUPTED$pid	$age	$command
+" ;;
+    esac
+  done <<EOF
+$work
+EOF
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    case "
+$work" in *"
+$pid	"*) continue ;; esac
+    name=$(LC_ALL=C ps -o comm= -p "$pid" 2>/dev/null) || name=
+    name=${name##*/}
+    own="$own $pid (${name:-exited})"
+  done <<EOF
+$pids
+EOF
+  [ -z "$own" ] || echo "teardown: stopping the worker's own processes:$own" >&2
+}
+
 reap_task_backend_process_group() {  # <label>
   local label=$1 leader leader_start pgid current_pgid own_pgid
   if [ "$BACKEND" != tmux ]; then
@@ -2575,6 +2858,8 @@ reap_task_backend_process_group() {  # <label>
   current_pgid=$(printf '%s' "$current_pgid" | tr -d '[:space:]')
   [ "$current_pgid" = "$pgid" ] || return 0
   echo "teardown: reaping leaked $label process group for $ID: $pgid" >&2
+  LC_ALL=C ps -axww -o pgid=,pid=,etime=,args= 2>/dev/null \
+    | LC_ALL=C awk -v g="$pgid" '$1 == g { p = $2; a = $3; $1 = $2 = $3 = ""; sub(/^ +/, ""); printf "teardown: stopping pid %s, running %s: %s\n", p, a, substr($0, 1, 120) }' >&2 || true
   kill -TERM -- "-$pgid" 2>/dev/null || true
   sleep 1
   if task_process_identity_matches "$leader" "$leader_start" \
@@ -2636,6 +2921,7 @@ EOF
     fi
     current_pids=$TASK_PIDS
     echo "teardown: reaping leaked $label process(es) for $ID: $(printf '%s' "$pids" | tr '\n' ' ')" >&2
+    teardown_name_stopping "$pids"
     for i in "${!tracked_pids[@]}"; do
       pid=${tracked_pids[$i]}
       identity=${tracked_identities[$i]}
@@ -3797,8 +4083,61 @@ teardown_refuse_working_worker() {
     echo "Cleanup would stop it. Retry once it ends (bin/fm-job.sh status $ID), or stop it with bin/fm-job.sh stop $ID <job>." >&2
     return 5
   fi
-  return 0
+  teardown_refuse_live_work
 }
+
+# The running-process refusal (contract: script header): returns 7 while a
+# process the worker started still runs under this task's copy or tasktmp,
+# unless --stop-leftovers carries the token of exactly that set of processes.
+TEARDOWN_LIVE_WORK_UNCHECKED_WARNED=0
+teardown_refuse_live_work() {
+  local -a roots
+  local held="$STATE/$ID.cleanup-held" report=first tmp='' pid age command count
+  if ! command -v lsof >/dev/null 2>&1; then
+    if [ "$TEARDOWN_LIVE_WORK_UNCHECKED_WARNED" = 0 ]; then
+      TEARDOWN_LIVE_WORK_UNCHECKED_WARNED=1
+      echo "warning: lsof is unavailable, so cleanup cannot check $ID for processes still running" >&2
+    fi
+    return 0
+  fi
+  if teardown_owns_worktree; then roots=("$WT" "$TASK_TMP"); else roots=("$TASK_TMP"); fi
+  if ! task_live_work_scan "${roots[@]}"; then
+    if [ -n "${TASK_PIDS_FAILED_DIR:-}" ]; then
+      echo "REFUSED: cannot determine leaked processes under $TASK_PIDS_FAILED_DIR for $ID (lsof failed); preserving the worktree/tasktmp for manual inspection or retry." >&2
+    else
+      echo "REFUSED: cannot read the process table to check $ID for running processes; nothing was stopped or removed." >&2
+    fi
+    return 1
+  fi
+  [ -n "$TASK_LIVE_WORK" ] || return 0
+  [ "$STOP_LEFTOVERS" != "$TASK_LIVE_WORK_TOKEN" ] || return 0
+  count=$(printf '%s' "$TASK_LIVE_WORK" | grep -c .)
+  echo "REFUSED: task $ID still has $count process(es) the worker started running; nothing was stopped or removed" >&2
+  while IFS=$'\t' read -r pid age command; do
+    [ -n "$pid" ] || continue
+    echo "  pid $pid, running $age: $command" >&2
+  done <<EOF
+$TASK_LIVE_WORK
+EOF
+  [ -z "$STOP_LEFTOVERS" ] || echo "The confirmation did not match: the running processes changed since it was issued." >&2
+  [ "$(fm_meta_get "$held" token 2>/dev/null || true)" != "$TASK_LIVE_WORK_TOKEN" ] || report=unchanged
+  if [ "$report" = first ]; then
+    if tmp=$(mktemp "$STATE/.cleanup-held.XXXXXX") \
+      && printf 'token=%s\n' "$TASK_LIVE_WORK_TOKEN" > "$tmp" && mv -f -- "$tmp" "$held"; then
+      :
+    else
+      [ -z "$tmp" ] || rm -f -- "${tmp:?}"
+      echo "warning: could not record that these processes were reported; they may be reported again" >&2
+    fi
+  fi
+  echo "cleanup-held report=$report token=$TASK_LIVE_WORK_TOKEN" >&2
+  echo "Retry once they end. If they are leftovers, the main session can stop exactly these with: bin/fm-teardown.sh $ID --stop-leftovers $TASK_LIVE_WORK_TOKEN" >&2
+  return "$TEARDOWN_LIVE_WORK_EXIT"
+}
+if [ -n "$STOP_LEFTOVERS" ] && [ "$KIND" = secondmate ]; then
+  echo "error: invalid teardown request: --stop-leftovers does not apply to a secondmate" >&2
+  exit 2
+fi
 teardown_refuse_working_worker || exit $?
 
 validate_pr_poll_cleanup "$STATE" "$ID" || exit 1
@@ -4328,7 +4667,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" \
   "$STATE/$ID.claude-settings.json" "$STATE/$ID.devin-config.json" \
   "$STATE/$ID.polytoken-busy.sh" "$STATE/$ID.t3-restart" "$STATE/$ID.usage-limit" \
-  "$STATE/$ID.pr-register-refused" \
+  "$STATE/$ID.pr-register-refused" "$STATE/$ID.cleanup-held" \
   "$STATE/$ID.review-park" "$STATE/.review-park-closed-$ID" \
   "$STATE/.review-park-untrusted-$ID" "$STATE/.review-park-untrusted-$ID.next" \
   "$STATE/$ID.pr-register-timed-out" \
@@ -4420,6 +4759,12 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+fi
+if [ -n "$TEARDOWN_INTERRUPTED" ]; then
+  echo "teardown $ID stopped $(printf '%s' "$TEARDOWN_INTERRUPTED" | grep -c .) process(es) the worker started before they finished; their work was interrupted and must not be reported as passed:"
+  printf '%s' "$TEARDOWN_INTERRUPTED" | while IFS=$'\t' read -r pid age command; do
+    echo "  pid $pid, had run $age: $command"
+  done
 fi
 if [ "$TEARDOWN_POOL_SLOT_LOST" = 1 ]; then
   echo "teardown $ID finished its cleanup and removed its task record, but a returned pool slot did not come back clean (see the warning above); clear those paths so the pool can reuse the slot" >&2

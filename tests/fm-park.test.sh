@@ -1172,6 +1172,58 @@ SH
   pass "a temporary control-lock refusal stays pending and retries to one reported cleanup outcome"
 }
 
+# A cleanup held by named running processes (teardown's exit 7) hands them over
+# once per unchanged set, keeps its request, and finishes once they end.
+test_cleanup_held_by_running_processes_reports_once_and_keeps_its_request() {
+  local w out before
+  w=$(make_world land-held "$GH_URL"); gh_fixture "$w/gh.1.json"
+  : > "$w/config/auto-land"
+  cat > "$w/fakebin/fm-teardown.sh" <<SH
+#!/usr/bin/env bash
+n=\$(cat "$w/teardown.count" 2>/dev/null || echo 0)
+n=\$((n + 1)); printf '%s\\n' "\$n" > "$w/teardown.count"
+if [ -e "$w/process.running" ]; then
+  report=first
+  [ ! -e "$w/process.reported" ] || report=unchanged
+  : > "$w/process.reported"
+  echo "REFUSED: task lane still has 1 process(es) the worker started running; nothing was stopped or removed" >&2
+  echo "  pid 4242, running 01:02:03: npm run e2e" >&2
+  echo "cleanup-held report=\$report token=0123456789abcdef" >&2
+  exit 7
+fi
+echo "Torn down \$1"
+SH
+  chmod +x "$w/fakebin/fm-teardown.sh"
+  : > "$w/process.running"
+
+  printf 'pr=%s\n' "$GH_URL" > "$w/state/lane.review-park-land"
+  out=$(run_park "$w" tick 2>&1)
+  [ -z "$out" ] || fail "land-held: the starting tick printed: $out"
+  for _ in $(seq 1 100); do compgen -G "$w/state/.review-park-report-*" >/dev/null && break; sleep 0.1; done
+  wait_lane_free "$w" land-held
+  [ -e "$w/state/lane.review-park-land" ] || fail "land-held: the first hold dropped the pending request"
+  before=$(cat "$w/teardown.count")
+  out=$(run_park "$w" tick 2>&1)
+  case "$out" in
+    "cleanup-held lane: PR $GH_URL merged; "*"pid 4242, running 01:02:03: npm run e2e"*"--stop-leftovers 0123456789abcdef") ;;
+    *) fail "land-held: the first hold was not handed over by name: $out" ;;
+  esac
+  for _ in $(seq 1 100); do [ "$(cat "$w/teardown.count")" -gt "$before" ] && break; sleep 0.1; done
+  wait_lane_free "$w" land-held
+  out=$(run_park "$w" tick 2>&1)
+  [ -z "$out" ] || fail "land-held: an unchanged hold was reported again: $out"
+  wait_lane_free "$w" land-held
+  [ -e "$w/state/lane.review-park-land" ] || fail "land-held: an unchanged hold dropped the pending request"
+
+  rm -f "$w/process.running"
+  wait_lane_free "$w" land-held
+  out=$(run_park "$w" tick 2>&1)
+  wait_land_settled "$w" land-held
+  out=$(run_park "$w" tick 2>&1)
+  [ "$out" = "cleaned up lane: PR $GH_URL merged; lane torn down and its working copy returned" ] || fail "land-held: outcome: $out"
+  pass "a cleanup held by running processes names them once, keeps its request, and finishes once they end"
+}
+
 # A cleanup that teardown defers because the lane's worker is still working
 # (its exit 5) is a wait, not an outcome: nothing is reported, the request
 # stays, and the tick retries it until the worker stops.
@@ -1363,6 +1415,7 @@ fm_test_run \
   test_pending_land_recovers_after_watcher_restart \
   test_pending_land_retries_after_control_lock_refusal \
   test_cleanup_deferred_for_a_working_worker_stays_pending_and_silent \
+  test_cleanup_held_by_running_processes_reports_once_and_keeps_its_request \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \

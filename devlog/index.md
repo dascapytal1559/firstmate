@@ -2189,3 +2189,25 @@ The choices made:
 - If the registration cannot be read, the card keeps the label the other rules give it.
 
 The evidence is the card status test suite, which now reproduces the finished scout with an open board and covers each of these rules.
+
+## 81. Cleanup stops killing work that is still running (23 November 2026)
+
+Cleanup already waited for a worker's running turn or detached job, but it still killed a plain background command the worker had left running, treating it as a leftover.
+The 23 November routing check found the gap, and [upstream issue 7606](https://github.com/kunchenguid/firstmate/issues/7606) describes the same failure: a post-merge cleanup killed a running end-to-end test and the run was reported as passed.
+
+> I am all good to clear like just straight bugs, but if we're stopping repeats, we do want to understand like if upstream set them up for a reason.
+
+What was built:
+
+- **Cleanup refuses and names.** While a command the worker started is still running, a plain cleanup stops nothing and lists each one with its pid, command and age.
+- **One narrow confirmation.** The main session can confirm that exactly the named processes are leftovers. If the set changes, the confirmation refuses, and the landed-work checks still run.
+- **No endless silent retries.** The background session hands the named processes to the main session once per unchanged situation, and an automatic cleanup finishes by itself when they end.
+- **Nothing interrupted reads as passed.** When cleanup does stop a command, its output names it and says the work was interrupted.
+
+The choices made:
+
+- Killing true leftovers stays, after confirmation, because upstream added it when stray test processes pinned the CPU for hours.
+- The worker's own agent, its browser helper and its review-board listener do not hold a cleanup, because closing the worker is meant to end them.
+- Anything cleanup cannot recognise counts as running, so a wrong guess costs one question and never a killed command.
+
+The evidence is the cleanup and park test suites, plus a read-only pass over the live fleet: idle workers counted nothing, while a real dev server and running test jobs were named.
