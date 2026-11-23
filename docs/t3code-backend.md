@@ -271,21 +271,23 @@ The label says what only Firstmate knows about a live T3 ship or scout, includin
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, or a finished ship's landing needs the captain's approval. |
+| `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, a worker that reads done, parked, or paused holds an open Lavish board with no snooze or `future` hold, or a finished ship's landing needs the captain's approval. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
 | `☾︎ Scheduled` | Between turns, a `future` hold whose reason starts `At bedtime` counts for a worker that reads done, parked, or paused. A blocked or failed worker keeps its own label. |
 | `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
-| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived). |
+| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived), including a finished worker whose open board is snoozed. |
 | `Failed` | Between turns, the worker or its run failed. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.
 A worker's `needs-decision` line alone reads `Queued`, because firstmate settles most of those itself; the exception is an open `board-review` decision, a review board only the captain can answer, which reads `Waiting for captain` until it is resolved or the captain snoozes it.
+A worker holds an open board while its task-owned registration in [`bin/fm-procevent.sh`](../bin/fm-procevent.sh) exists and no captured round of that board is unacknowledged, so the card needs no `board-review` line.
+A round the captain sent or a session the captain ended is the worker's to handle, a concluded or retired board has no registration, and a registry that cannot be read counts no board.
 A captain hold with an `--until` date still ahead counts as snoozed by the backlog's own date rule, and reads `Waiting`; on the date, the same hold reads `Waiting for captain` again with no other action, within a minute of the date arriving.
 A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
 A run left only watching a PR with green checks reads as done, so the card then reads `Queued`, or `Waiting for captain` when landing needs the captain's approval.
 
-The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's holds, each worker's current state, open decisions, recorded merge posture, and steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
+The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's holds, each worker's current state, open decisions, open boards, recorded merge posture, and steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.
 It runs after every hold, answer, reconcile close, and PR settlement, at once when a message is delivered to a T3 worker's steering inbox or a T3 run ends, and from the watcher about once a minute as the backstop, so a label that failed, a T3 that was down, or a label T3 lost is repaired by the next pass.
 The watcher sees a run end from its own wait on T3, at once where that wait holds the watcher's cycle and within one poll interval in a home that also has a Herdr or Rex worker; a no-mistakes run starting or ending is seen by the minute pass.
 A hold, run, status log, or turn that cannot be read leaves the card as it is.

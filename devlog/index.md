@@ -2167,3 +2167,25 @@ The choices made:
 
 - The moon is the text form of the symbol (U+263E followed by U+FE0E), so T3 Code draws it in the same gray as the rest of the label rather than as a coloured emoji.
 - The label is plain text of a few characters, well inside T3's 32-character limit, so nothing changes in T3 Code.
+
+## 80. An open board always reads as the captain's move (23 November 2026)
+
+> I feel like the garment ticket is not really cute. I mean I can see it on the lavish board. I feel like it's waiting on me. Is there a mistake there?
+
+> Yeah, I mean I raised it up because it's an error. So we should figure out what the error is and how to prevent it from happening any further.
+
+The mistake was that the card trusted each worker's reading of the word "decision".
+A chart scout left a report on a board for the captain, judged that a report was not a decision, and finished without saying the board needed the captain, so its card read Queued while the board sat waiting.
+
+What changed:
+
+- **Waiting for captain** now shows on a worker that is finished, parked or paused and owns a review board that is still listening, whether or not the worker declared it.
+
+The choices made:
+
+- The card reads the board's own registration, so the fact no longer depends on a worker's wording.
+- Once the captain has sent feedback or closed the board, the next move is the worker's, so that board stops counting until the worker has acknowledged the feedback.
+- A snoozed board reads Waiting, bedtime work keeps its moon, and a blocked or failed worker keeps its label.
+- If the registration cannot be read, the card keeps the label the other rules give it.
+
+The evidence is the card status test suite, which now reproduces the finished scout with an open board and covers each of these rules.

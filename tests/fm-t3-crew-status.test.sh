@@ -103,6 +103,7 @@ run_is() {  # <running|parked|unreadable|ended>
 
 home_env() {
   env PATH="$HOME_DIR/fakebin:$PATH" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    FM_PROCEVENT_CLAIM_ROOT="$HOME_DIR/claims" \
     FM_DATA_OVERRIDE="$HOME_DIR/data" FM_CONFIG_OVERRIDE="$HOME_DIR/config" "$@"
 }
 
@@ -604,6 +605,140 @@ test_board_review_is_the_captains_until_resolved_or_snoozed() {
   pass "fm-t3-crew-status: a review board waits on the captain until it is resolved or snoozed"
 }
 
+# arm_board [task] -> a real task-owned Lavish registration, with no listener.
+arm_board() {
+  local id=${1:-w1} meta="$HOME_DIR/state/${1:-w1}.meta"
+  sed "s/^window=.*/window=fm-$id/" "$meta" > "$meta.new" && mv "$meta.new" "$meta"
+  printf 'project=%s\n' "$HOME_DIR/copy" >> "$meta"
+  home_env "$ROOT/bin/fm-procevent.sh" register-task lavish lavish-board "$id" -- /bin/true >/dev/null \
+    || fail "could not register the board"
+}
+
+retire_board() {
+  home_env "$ROOT/bin/fm-procevent.sh" retire lavish-board >/dev/null || fail "could not retire the board"
+}
+
+# board_round <body> -> capture one round for w1's board and print its file.
+board_round() {
+  printf '%s\n' "$1" > "$HOME_DIR/round"
+  # shellcheck disable=SC2016  # expanded by the inner shell
+  home_env bash -c '. "$1/bin/fm-pr-lib.sh"; . "$1/bin/fm-wake-lib.sh"; . "$1/bin/fm-procevent-lib.sh"
+    fm_procevent_capture "$2" lavish-board lavish "$3" w1' _ "$ROOT" "$HOME_DIR/state" "$HOME_DIR/round" \
+    || fail "could not capture a board round"
+}
+
+finished_scout() {  # <home-name>
+  make_home "$1"
+  worker_meta w1 scout
+  mkdir -p "$HOME_DIR/data/w1" && printf 'report\n' > "$HOME_DIR/data/w1/report.md"
+  declares 'done [at=1700000000]: report ready on the board'
+}
+
+test_open_board_is_the_captains_move() {
+  finished_scout open-board
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a finished scout with no board is firstmate's move"
+  arm_board
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a finished scout with an armed board and no decision line waits on the captain"
+  retire_board
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a retired board stops counting"
+
+  finished_scout open-board-other-owner
+  second_worker w2 'mcp:other-board-owner' scout
+  arm_board w2
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "another worker's board does not count"
+  assert_equals "" "$(card_of 'mcp:other-board-owner')" "a working board owner keeps its own label"
+
+  finished_scout open-board-rounds
+  arm_board
+  board_round $'session:\n  status: feedback' >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "an unacknowledged captain round is the worker's move"
+  home_env "$ROOT/bin/fm-procevent.sh" handled lavish-board 1 >/dev/null || fail "the owner should acknowledge the round"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an acknowledged round leaves the board waiting on the captain again"
+
+  finished_scout open-board-ended
+  arm_board
+  board_round $'session:\n  status: ended\n  ended_by: user' >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a session the captain ended is the worker's to conclude"
+  home_env "$ROOT/bin/fm-procevent.sh" handled lavish-board 1 >/dev/null || fail "the owner should conclude the board"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a concluded board stops counting"
+
+  finished_scout open-board-unreadable
+  arm_board
+  chmod 000 "$HOME_DIR/state/procevent/lavish-board.source"
+  cards sync || fail "the pass should pass"
+  chmod 600 "$HOME_DIR/state/procevent/lavish-board.source"
+  assert_equals "Queued" "$(card_of)" "an unreadable record leaves the label the other rules give"
+  pass "fm-t3-crew-status: an armed board waits on the captain until it is answered or retired"
+}
+
+test_open_board_precedence() {
+  local bedtime='☾︎ Scheduled'
+  finished_scout board-snoozed
+  arm_board
+  hold_kind w1 parked
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a snoozed board reads Waiting"
+
+  finished_scout board-dated
+  arm_board
+  captain hold w1 --reason "look after the trip" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a board with a hold dated ahead reads Waiting"
+
+  finished_scout board-bedtime
+  arm_board
+  future_hold w1 "At bedtime: run the move"
+  cards sync || fail "the pass should pass"
+  assert_equals "$bedtime" "$(card_of)" "bedtime work with a board keeps its moon"
+
+  finished_scout board-future
+  arm_board
+  future_hold w1 "After the release: run the move"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a future hold outranks the board"
+
+  finished_scout board-blocked
+  arm_board
+  declares 'blocked [at=1700000000]: the fixture repository is missing'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a blocked worker keeps its label"
+  declares 'failed [at=1700000000]: the reproduction does not hold'
+  cards sync || fail "the pass should pass"
+  assert_equals "Failed" "$(card_of)" "a failed worker keeps its label"
+
+  for state in paused parked; do
+    make_home "board-$state"
+    worker_meta w1 scout
+    arm_board
+    if [ "$state" = paused ]; then
+      declares 'paused [at=1700000000]: waiting for the go'
+    else
+      declares 'needs-decision [key=layout] [at=1700000000]: pick one'
+    fi
+    cards sync || fail "the pass should pass"
+    assert_equals "$WAITING" "$(card_of)" "a $state worker with an armed board waits on the captain"
+  done
+
+  finished_scout board-working
+  arm_board
+  turn_is running
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "a working board owner shows T3's own Working"
+  turn_is settled
+  inbox_message >/dev/null
+  cards sync || fail "the pass should pass"
+  assert_equals "" "$(card_of)" "an unhandled steering message keeps T3's own Working"
+  pass "fm-t3-crew-status: holds, trouble, and work outrank an open board as they should"
+}
+
 test_finished_ship_follows_its_merge_posture() {
   local head
   make_home landing
@@ -886,6 +1021,8 @@ test_board_review_is_the_captains_until_resolved_or_snoozed
 test_finished_ship_follows_its_merge_posture
 test_future_and_parked_holds
 test_bedtime_hold_reads_scheduled
+test_open_board_is_the_captains_move
+test_open_board_precedence
 test_captain_hold_dated_ahead_is_snoozed
 test_unreadable_status_log_leaves_the_card
 test_unreadable_turn_leaves_the_card
