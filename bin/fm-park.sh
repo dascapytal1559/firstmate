@@ -741,7 +741,7 @@ land_eligible() {  # <id>
 }
 
 cmd_land() {
-  local id=${1-} eligible=0 detach=0 queue=0 pr out rc=0 why tmp interrupted
+  local id=${1-} eligible=0 detach=0 queue=0 pr out rc=0 why tmp interrupted rest
   task_id_ok "$id" || die "usage: fm-park.sh land <task-id> [--if-eligible] [--detach] [--queue]" 2
   shift
   while [ "$#" -gt 0 ]; do
@@ -809,8 +809,9 @@ cmd_land() {
       return 7
       ;;
     *)
-      why=$(printf '%s\n' "$out" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$out" | tail -1)
-      printf 'cleanup-refused %s: PR %s merged; automatic cleanup refused: %s\n' "$id" "$pr" "$why"
+      rest=$(printf '%s\n' "$out" | grep -Ev '^(  pid [0-9]+, had run |teardown .* must not be reported as passed:$)' || true)
+      why=$(printf '%s\n' "$rest" | grep -m1 -E 'REFUSED|^error|refus' || printf '%s\n' "$rest" | tail -1)
+      printf 'cleanup-refused %s: PR %s merged; automatic cleanup refused: %s%s\n' "$id" "$pr" "$why" "$interrupted"
       return 1
       ;;
   esac

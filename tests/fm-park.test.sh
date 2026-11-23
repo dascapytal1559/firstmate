@@ -1249,6 +1249,31 @@ SH
   pass "a cleaned-up outcome names work the cleanup interrupted"
 }
 
+# A cleanup refused after it already stopped work reports both facts, and the
+# interrupted-work lines are never mistaken for the reason it refused.
+test_refused_cleanup_outcome_carries_interrupted_work() {
+  local w out rc reason label
+  for label in named unnamed; do
+    reason='REFUSED: the stopped copy holds an untracked artifact'
+    [ "$label" = named ] || reason='the copy could not be returned'
+    w=$(make_world "land-refused-interrupted-$label" "$GH_URL"); gh_fixture "$w/gh.1.json"
+    : > "$w/config/auto-land"
+    cat > "$w/fakebin/fm-teardown.sh" <<SH
+#!/usr/bin/env bash
+echo "$reason" >&2
+echo "teardown \$1 stopped 1 process(es) the worker started before they finished; their work was interrupted and must not be reported as passed:"
+echo "  pid 4242, had run 01:02:03: npm run refusal-e2e"
+exit 1
+SH
+    chmod +x "$w/fakebin/fm-teardown.sh"
+    rc=0; out=$(run_park "$w" land lane --if-eligible 2>&1) || rc=$?
+    [ "$rc" = 1 ] || fail "land-refused-interrupted-$label: land exited $rc: $out"
+    [ "$out" = "cleanup-refused lane: PR $GH_URL merged; automatic cleanup refused: $reason; cleanup interrupted work that did not finish and must not be reported as passed: pid 4242, had run 01:02:03: npm run refusal-e2e" ] \
+      || fail "land-refused-interrupted-$label: outcome: $out"
+  done
+  pass "a refused cleanup outcome names both why it refused and the work it interrupted"
+}
+
 # A cleanup that teardown defers because the lane's worker is still working
 # (its exit 5) is a wait, not an outcome: nothing is reported, the request
 # stays, and the tick retries it until the worker stops.
@@ -1442,6 +1467,7 @@ fm_test_run \
   test_cleanup_deferred_for_a_working_worker_stays_pending_and_silent \
   test_cleanup_held_by_running_processes_reports_once_and_keeps_its_request \
   test_cleanup_outcome_carries_interrupted_work \
+  test_refused_cleanup_outcome_carries_interrupted_work \
   test_killed_cleanup_is_retried_and_reported_once \
   test_stale_cleanup_request_for_another_pr_is_dropped \
   test_reports_survive_until_their_wake_is_recorded \

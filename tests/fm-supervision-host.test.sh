@@ -987,6 +987,13 @@ offer_reason_is() {  # <state> <trigger> <eligible> <code> <label>
   [ "$(printf '%s\n' "$out" | sed -n 's/^main_only_reason=//p')" = "$4" ] || fail "$5: expected reason '$4', got: $out"
 }
 
+# The presentation cursor as the watcher writes it, with only the log's first
+# line already presented.
+mate_cursor_after_first_line() {  # <state>
+  printf 'mate\t%s\t%s\t\n' "$(bash -c '. "$1/bin/fm-classify-lib.sh"; _fm_open_decisions_file_ident "$2"' _ "$ROOT" "$1/mate.status")" \
+    "$(head -n 1 "$1/mate.status" | wc -c | tr -d ' ')" > "$1/.status-presentation-cursor"
+}
+
 test_offer_names_each_main_only_reason() {
   local state sig stale
   state="$TMP_ROOT/offer-reasons/state"
@@ -1024,6 +1031,15 @@ test_offer_names_each_main_only_reason() {
   printf 'mate\t%s\t%s\t\n' "$(bash -c '. "$1/bin/fm-classify-lib.sh"; _fm_open_decisions_file_ident "$2"' _ "$ROOT" "$state/mate.status")" \
     "$(head -n 1 "$state/mate.status" | wc -c | tr -d ' ')" > "$state/.status-presentation-cursor"
   offer_reason_is "$state" "signal: $state/mate.status" 0 decision-resolved "a second mate span resolving a decision"
+  rm -f "$state/.status-presentation-cursor"
+  printf 'captain-held [at=1] [key=a]: theirs\nneeds-decision [at=2] [key=b]: which?\n' > "$state/mate.status"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 open-decision "a span holding one decision and opening another"
+  printf 'needs-decision [at=1] [key=k]: which?\nresolved [at=2] [key=k]: this\nneeds-decision [at=3] [key=n]: next?\n' > "$state/mate.status"
+  mate_cursor_after_first_line "$state"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 open-decision "a span resolving one decision and opening another"
+  printf 'needs-decision [at=1] [key=k]: which?\nresolved [at=2] [key=k]: this\ncaptain-held [at=3] [key=a]: theirs\n' > "$state/mate.status"
+  mate_cursor_after_first_line "$state"
+  offer_reason_is "$state" "signal: $state/mate.status" 0 captain-held "a span resolving one decision and holding another"
   rm -f "$state/.status-presentation-cursor"
   rm -f "$state/mate.meta" "$state/mate.status"
 

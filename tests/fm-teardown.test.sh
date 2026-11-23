@@ -5676,6 +5676,10 @@ SH
   assert_present "$case_dir/wt" "live-process-late-root: cleanup removed the copy under a running process"
   assert_grep "leaving pid $late running" "$case_dir/stderr" \
     "live-process-late-root: cleanup did not name the process it left"
+  assert_grep "must not be reported as passed" "$case_dir/stdout" \
+    "live-process-late-root: a refused cleanup lost the interrupted-work notice"
+  assert_grep "pid $root, had run" "$case_dir/stdout" \
+    "live-process-late-root: a refused cleanup did not name the work it interrupted"
   pass "a root that starts after the confirmation is neither stopped nor cleaned out from under"
 }
 

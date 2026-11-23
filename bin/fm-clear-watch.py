@@ -63,19 +63,21 @@ What it writes
     day with its cause, context, saving, and signs;
   - <FM_HOME>/data/morning/<local date>.md, the morning briefing, under a
     "## Clear check" heading: one line only when a clear showed a sign of harm
-    or no current main session was found, and on Mondays (or with --weekly) one line totalling the seven days ending
+    or no current main session was found, and on Mondays one line totalling the seven days ending
     at the same point, with how many of those clears showed the concrete sign
     (a decision already answered was asked again) and how the share of clears
     with any sign compares with the previous recorded week. Each line is
     written once per date, so a rerun adds nothing;
-  - <FM_HOME>/data/clear-watch/weekly.tsv, on each weekly run: one row per
+  - <FM_HOME>/data/clear-watch/weekly.tsv, on each Monday run: one row per
     week, tab-separated with a header: the week's end date (the local date of
     the run), its clears, the clears with any sign, and the clears with the
     concrete sign. Rerunning the same end date replaces its row. The previous
     week is the latest row with an earlier end date; with none, the line says
     nothing about change. The file is private and the record of the trend.
   --no-write prints the listing and the briefing lines and writes no file; the
-  weekly line still compares with the rows already recorded.
+  weekly line still compares with the rows already recorded. --weekly on any
+  day but Monday prints that day's weekly line the same way and writes no file,
+  so an off-cycle window never becomes the previous week.
 
 Exit status: 0 on success, 1 when no transcript directory exists, 2 on a usage
 error.
@@ -598,7 +600,8 @@ def usage(code):
         "with its cause, saving, and signs of harm from the new session's first hour.\n"
         "Writes data/clear-watch/<date>.md, and one line in the morning briefing\n"
         "(data/morning/<date>.md) only when something shows, plus a weekly total on\n"
-        "Mondays or with --weekly, which also records the week in data/clear-watch/weekly.tsv.\n"
+        "Mondays, which also records the week in data/clear-watch/weekly.tsv.\n"
+        "--weekly on another day prints that total and writes nothing.\n"
         "--no-write only prints. Header: bin/fm-clear-watch.py.\n"
     )
     sys.exit(code)
@@ -636,7 +639,9 @@ def main(argv):
 
     win_end = now - FIRST_HOUR
     day_start = win_end - 86400
-    weekly = weekly or datetime.fromtimestamp(now).weekday() == 0
+    monday = datetime.fromtimestamp(now).weekday() == 0
+    write = write and (monday or not weekly)
+    weekly = weekly or monday
     load_from = (win_end - 7 * 86400 if weekly else day_start) - LOAD_MARGIN_SECONDS
     sessions = [load_session(path) for path in recent_transcripts(dirs, load_from)]
 

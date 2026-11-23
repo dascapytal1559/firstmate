@@ -406,18 +406,19 @@ function spanDecisionReason(
   reservedPrefixes: readonly string[],
 ): DecisionReason | null {
   const before = openDecisions(presented, resolveVerb, heldVerb, reservedPrefixes);
+  let reason: DecisionReason | undefined;
   for (const line of span) {
     const verb = statusLineVerb(line);
-    if (verb === heldVerb) return "captain-held";
     if (verb === "needs-decision" || verb === "blocked") return "open-decision";
     const resolved = verb === resolveVerb ? decisionKey(line) : null;
     const wasOpen = resolved !== null && before.has(resolved);
     openDecisions([line], resolveVerb, heldVerb, reservedPrefixes, before);
-    if (resolved !== null && wasOpen && !before.has(resolved)) return "decision-resolved";
     const key = declaredDecisionKey(line);
     if (key !== undefined && open.has(key)) return "open-decision";
+    if (verb === heldVerb) reason = strongerDecisionReason(reason, "captain-held");
+    else if (resolved !== null && wasOpen && !before.has(resolved)) reason = strongerDecisionReason(reason, "decision-resolved");
   }
-  return null;
+  return reason ?? null;
 }
 
 // Where a task's unpresented span starts: the cursor's offset while it still

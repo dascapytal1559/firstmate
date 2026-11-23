@@ -185,8 +185,9 @@ read_open_boards() {
 }
 
 # True when a finished ship's work is already in: crew-state read its PR merged,
-# or the commit its newest ready report names is on a local-only project's
-# default branch. Unreadable evidence is not landed.
+# the merge poll recorded its recorded PR merged, or the commit its newest ready
+# report names is on a local-only project's default branch. Unreadable evidence
+# is not landed.
 ship_landed() {  # <worker> <crew-state-line>
   local worker=$1 meta="$STATE/$1.meta" project branch ready head default
   case "$2" in
@@ -194,6 +195,11 @@ ship_landed() {  # <worker> <crew-state-line>
       return 0
       ;;
   esac
+  if fm_pr_url_parse "$(fm_meta_get "$meta" pr)" \
+    && fm_pr_poll_merge_already_notified "$STATE" "$worker" \
+      "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER"; then
+    return 0
+  fi
   [ "$(fm_meta_get "$meta" mode)" = local-only ] || return 1
   project=$(fm_meta_get "$meta" project)
   [ -n "$project" ] || return 1

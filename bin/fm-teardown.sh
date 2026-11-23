@@ -260,9 +260,10 @@
 # never left leased forever. If the treehouse return fails, teardown leaves the
 # leased home and state in place instead of hiding a still-held lease.
 # Usage: fm-teardown.sh <task-id> [--force | --stop-leftovers <token>] [--legacy-record]
-#   --stop-leftovers <token> confirms that exactly the processes a running-process
-#   refusal named are leftovers and may be stopped. It lifts only that refusal,
-#   refuses if the set changed, and is refused for the supervision branch.
+#   --stop-leftovers <token> confirms that the root processes a running-process
+#   refusal named, and their descendants, are leftovers and may be stopped. It
+#   lifts only that refusal, refuses if a root changed, and is refused for the
+#   supervision branch.
 #   --force skips the still-working refusal and ordinary-task dirty and
 #   landed-work checks, skips scout report checks and closes the scout as
 #   discarded with no report recorded, and discards secondmate child work for
@@ -699,7 +700,7 @@ DESCENDANT_TASK_KINDS=()
 DESCENDANT_TASK_HOMES=()
 DESCENDANT_TREEHOUSE_LOCK_PATHS=()
 teardown_release_locks() {
-  local status=$? i
+  local status=$? i pid age command
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
     teardown_release_herdr_locks || true
   fi
@@ -736,6 +737,14 @@ teardown_release_locks() {
     TREEHOUSE_PROJECT_LOCK_HELD=0
   fi
   fm_lease_guard_release || true
+  if [ -n "${TEARDOWN_INTERRUPTED:-}" ]; then
+    {
+      echo "teardown $ID stopped $(printf '%s' "$TEARDOWN_INTERRUPTED" | grep -c .) process(es) the worker started before they finished; their work was interrupted and must not be reported as passed:"
+      printf '%s' "$TEARDOWN_INTERRUPTED" | while IFS=$'\t' read -r pid age command; do
+        echo "  pid $pid, had run $age: $command"
+      done
+    } || true
+  fi
   return "$status"
 }
 trap teardown_release_locks EXIT
@@ -4862,12 +4871,6 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-fi
-if [ -n "$TEARDOWN_INTERRUPTED" ]; then
-  echo "teardown $ID stopped $(printf '%s' "$TEARDOWN_INTERRUPTED" | grep -c .) process(es) the worker started before they finished; their work was interrupted and must not be reported as passed:"
-  printf '%s' "$TEARDOWN_INTERRUPTED" | while IFS=$'\t' read -r pid age command; do
-    echo "  pid $pid, had run $age: $command"
-  done
 fi
 if [ "$TEARDOWN_POOL_SLOT_LOST" = 1 ]; then
   echo "teardown $ID finished its cleanup and removed its task record, but a returned pool slot did not come back clean (see the warning above); clear those paths so the pool can reuse the slot" >&2

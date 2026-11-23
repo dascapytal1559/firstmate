@@ -82,7 +82,7 @@ A T3 Code worker is refused unless it runs with full access, because a worker st
 A setting T3 Code cannot honour, such as a narrower permission mode or a tool exclusion list, is refused the same way, before anything starts.
 Cleanup uses T3 Code's own Stop, which also stops any tasks the worker started itself, instead of leaving them running after the worker is gone.
 Full access and refusing settings T3 Code cannot honour are upstream's; the clean stop is this fork's, since upstream refuses to stop a T3 Code worker.
-Upstream stops any process left in a worker's copy as leaked, and [#7606](https://github.com/kunchenguid/firstmate/issues/7606) reports that killing a running end-to-end test and calling the run passed; this fork refuses instead, naming each process, because landed code proves the merge and not that the worker's last command finished, and the main session can confirm exactly those processes as leftovers so stray ones still get stopped.
+Upstream stops any process left in a worker's copy as leaked, and [#7606](https://github.com/kunchenguid/firstmate/issues/7606) reports that killing a running end-to-end test and calling the run passed; this fork refuses instead, naming each process, because landed code proves the merge and not that the worker's last command finished, and the main session can confirm those processes and what they started as leftovers so stray ones still get stopped.
 Details: [task lifecycle](docs/t3code-backend.md#current-lifecycle-and-safety).
 
 Upstream: partly ([#7518](https://github.com/kunchenguid/firstmate/pull/7518) for full access, [#8223](https://github.com/kunchenguid/firstmate/pull/8223) for the tool exclusion refusal).

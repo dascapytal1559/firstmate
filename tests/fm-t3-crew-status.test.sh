@@ -786,6 +786,32 @@ SH
   pass "fm-t3-crew-status: a ship whose PR merged has had its approval"
 }
 
+# Records a PR merged through the merge poll's own marker writer.
+merge_poll_recorded() {  # <pr-url>
+  bash -c '. "$1/bin/fm-pr-lib.sh"; fm_pr_url_parse "$3" && fm_pr_poll_merge_mark_notified "$2" w1 \
+    "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER"' _ "$ROOT" "$HOME_DIR/state" "$1" \
+    || fail "could not record the merge"
+}
+
+test_merged_direct_pr_no_longer_waits_for_the_captain() {
+  local pr='https://github.com/acme/widgets/pull/7'
+  make_home merged-direct-pr
+  git -C "$HOME_DIR/copy" commit -q --allow-empty -m init
+  git -C "$HOME_DIR/copy" checkout -q -b fm/w1
+  git -C "$HOME_DIR/copy" update-ref refs/remotes/origin/fm/w1 HEAD
+  worker_meta w1 ship t3code "project=$HOME_DIR/copy" mode=direct-PR yolo=off "pr=$pr"
+  declares "done [at=1700000000]: PR $pr"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "an unmerged direct PR with yolo off waits for the captain"
+  merge_poll_recorded 'https://github.com/acme/widgets/pull/8'
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "another PR's merge does not land this ship"
+  merge_poll_recorded "$pr"
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a direct PR the merge poll recorded merged no longer waits"
+  pass "fm-t3-crew-status: a direct-PR ship with its own PR recorded merged has had its approval"
+}
+
 test_future_and_parked_holds() {
   make_home other-holds
   hold_kind w1 future
@@ -1066,6 +1092,7 @@ test_declared_states_label_between_turns
 test_board_review_is_the_captains_until_resolved_or_snoozed
 test_finished_ship_follows_its_merge_posture
 test_merged_pr_no_longer_waits_for_the_captain
+test_merged_direct_pr_no_longer_waits_for_the_captain
 test_future_and_parked_holds
 test_bedtime_hold_reads_scheduled
 test_open_board_is_the_captains_move

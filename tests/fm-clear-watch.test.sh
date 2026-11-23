@@ -136,7 +136,7 @@ watch() {  # <home> <minute> [args...]
   shift 2
   FM_HOME="$h" "$WATCH" --now "$(at "$minute")" --transcripts "$T" "$@"
 }
-TUE=1800 WED=3240 NEXT_MON=10440
+TUE=1800 WED=3240 THU=4680 NEXT_MON=10440
 
 test_day_lists_every_clear_with_cause_and_saving() {
   local h out
@@ -277,6 +277,24 @@ test_weekly_no_write_records_nothing_but_still_compares() {
   pass "--no-write leaves the weekly record alone but still compares"
 }
 
+test_off_cycle_weekly_run_leaves_the_monday_trend_alone() {
+  local h tsv before out
+  h=$(home weeklythursday)
+  tsv="$h/data/clear-watch/weekly.tsv"
+  mkdir -p "${tsv%/*}"
+  printf '%s\n2026-11-16\t6\t4\t1\n' "$WEEKLY_HEADER" > "$tsv"
+  before=$(cat "$tsv")
+  out=$(watch "$h" "$THU" --weekly) || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF 'Clears this week' || fail "a manual weekly run must print its total: $out"
+  [ "$(cat "$tsv")" = "$before" ] || fail "a Thursday run changed the weekly record: $(cat "$tsv")"
+  [ ! -e "$h/data/clear-watch/2026-11-19.md" ] || fail "a Thursday weekly run wrote a listing"
+  [ ! -e "$h/data/morning" ] || fail "a Thursday weekly run wrote a briefing"
+  out=$(watch "$h" "$NEXT_MON") || fail "run failed: $out"
+  printf '%s' "$out" | grep -qF 'the week ending 2026-11-16 had 4 of 6 clears with a sign' ||
+    fail "Monday must compare with the true previous week: $out"
+  pass "a manual weekly run off Monday prints, writes nothing, and leaves the next comparison on the true week"
+}
+
 test_a_non_weekly_run_records_nothing() {
   local h=$TMP_ROOT/day
   [ ! -e "$h/data/clear-watch/weekly.tsv" ] || fail "a daily run must not record a week"
@@ -371,6 +389,7 @@ fm_test_run \
   test_first_week_is_recorded_and_says_nothing_about_change \
   test_rerunning_a_week_replaces_its_row_and_compares_with_the_previous_one \
   test_weekly_no_write_records_nothing_but_still_compares \
+  test_off_cycle_weekly_run_leaves_the_monday_trend_alone \
   test_a_non_weekly_run_records_nothing \
   test_no_write_only_prints \
   test_every_account_folder_is_read_and_a_copied_session_counts_once \
