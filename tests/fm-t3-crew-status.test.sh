@@ -641,6 +641,38 @@ test_future_and_parked_holds() {
   pass "fm-t3-crew-status: future holds read Queued and a snoozed worker reads Waiting"
 }
 
+# A captain hold dated after today is a snooze, like a parked hold; the same
+# hold dated today or earlier, or never dated, is a live captain call again.
+test_captain_hold_dated_ahead_is_snoozed() {
+  local today
+  today=$(date +%Y-%m-%d)
+  make_home dated-ahead
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a captain hold whose date has not arrived reads Waiting"
+  declares 'needs-decision [key=layout] [at=1700000000]: which layout'
+  cards sync || fail "the pass should pass"
+  assert_equals "Queued" "$(card_of)" "a snoozed worker with another open decision is firstmate's move"
+  make_home dated-today
+  captain hold w1 --reason "pick the layout" --until "$today" >/dev/null || fail "a hold dated today should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold dated today is a live call"
+  make_home dated-past
+  captain hold w1 --reason "pick the layout" --until 2000-01-01 >/dev/null || fail "a hold dated in the past should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold whose date has passed is a live call"
+  make_home undated
+  captain hold w1 --reason "pick the layout" >/dev/null || fail "an undated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "$WAITING" "$(card_of)" "a captain hold with no date is a live call"
+  make_home dated-board
+  declares 'needs-decision [key=board-review] [at=1700000000]: pick a layout on the board'
+  captain hold w1 --reason "pick the layout" --until 2099-01-01 >/dev/null || fail "a dated hold should succeed"
+  cards sync || fail "the pass should pass"
+  assert_equals "Waiting" "$(card_of)" "a review board under a snooze date reads Waiting"
+  pass "fm-t3-crew-status: a captain hold not yet due reads Waiting and a due or undated one waits on the captain"
+}
+
 test_unreadable_status_log_leaves_the_card() {
   make_home unreadable-log
   declares 'needs-decision [key=board-review] [at=1700000000]: pick one'
@@ -779,6 +811,7 @@ test_declared_states_label_between_turns
 test_board_review_is_the_captains_until_resolved_or_snoozed
 test_finished_ship_follows_its_merge_posture
 test_future_and_parked_holds
+test_captain_hold_dated_ahead_is_snoozed
 test_unreadable_status_log_leaves_the_card
 test_unreadable_turn_leaves_the_card
 test_older_t3_breaks_nothing

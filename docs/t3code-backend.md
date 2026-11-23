@@ -271,15 +271,16 @@ The label says what only Firstmate knows about a live T3 ship or scout, includin
 
 | Label | When |
 | --- | --- |
-| `Waiting for captain` | Between turns, the captain moves next: a captain hold is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no `parked` hold, or a finished ship's landing needs the captain's approval. |
+| `Waiting for captain` | Between turns, the captain moves next: a captain hold that is due is open on the worker's own task or was raised for it with `--origin`, an open `board-review` decision has no snooze, or a finished ship's landing needs the captain's approval. |
 | `Testing` | A ship's no-mistakes run is active: [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) reads it working or parked at a gate. It also shows while the worker works. |
 | `Queued` | Between turns, firstmate moves next: the work is finished, the worker is blocked, it has an open decision other than a review board, or a `future` hold counts for it. |
-| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold). |
+| `Waiting` | Between turns, any other declared wait, such as a pause on something external or a worker the captain snoozed (a `parked` hold, or a captain hold whose `--until` date has not yet arrived). |
 | `Failed` | Between turns, the worker or its run failed. |
 | none | Otherwise, and while the worker works, so T3 shows its own Working. |
 
 The worker works while T3 reads its thread busy or while its steering inbox holds an unhandled message, as when the captain's reply has just arrived.
 A worker's `needs-decision` line alone reads `Queued`, because firstmate settles most of those itself; the exception is an open `board-review` decision, a review board only the captain can answer, which reads `Waiting for captain` until it is resolved or the captain snoozes it.
+A captain hold with an `--until` date still ahead counts as snoozed by the backlog's own date rule, and reads `Waiting`; on the date, the same hold reads `Waiting for captain` again with no other action, within a minute of the date arriving.
 A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
 A run left only watching a PR with green checks reads as done, so the card then reads `Queued`, or `Waiting for captain` when landing needs the captain's approval.
 

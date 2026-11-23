@@ -10,12 +10,16 @@
 # bin/fm-classify-lib.sh's status_open_decisions folds them; its recorded yolo;
 # its steering inbox; and its thread in T3. A hold counts for a worker while it
 # is open (not Done) and on the worker's own task or raised for it (its
-# hold_origin).
+# hold_origin). A captain hold whose hold_until date has not yet arrived is
+# the snooze a parked hold is: the snapshot's hold_bucket "dated", the one date
+# rule the backlog uses, counts it as dated here rather than captain, so it
+# reads as a parked hold until the date arrives and as a captain call again
+# after, with no other action.
 #
 # A card between turns says who moves next. Labels, first match wins:
-#   Waiting for captain  a hold of kind captain counts for the worker; or an
-#                        open needs-decision with key board-review and no
-#                        parked hold; or a finished ship whose recorded yolo is
+#   Waiting for captain  a live hold of kind captain (not dated) counts for
+#                        the worker; or an open needs-decision with key
+#                        board-review and no parked or dated hold; or a finished ship whose recorded yolo is
 #                        off, since landing needs the captain's approval.
 #   Testing              a ship's no-mistakes run is active: crew-state reads
 #                        working or parked from the run step. It shows while
@@ -24,8 +28,8 @@
 #                        or parked with an open decision other than
 #                        board-review, or a hold of kind future counts.
 #   Waiting              any other declared wait: crew-state reads parked or
-#                        paused, or a hold of kind parked (the captain snoozed
-#                        it) counts.
+#                        paused, or a hold of kind parked or a dated captain
+#                        hold (the captain snoozed it) counts.
 #   Failed               crew-state reads it failed.
 #   none                 otherwise, and while the worker works, so T3 shows
 #                        its own Working.
@@ -102,9 +106,15 @@ worker_thread() {  # <task-id>
   fm_backend_target_of_meta "$meta"
 }
 
-# Whether a hold of <kind> counts for <worker>.
+# Whether a hold of <kind> counts for <worker>. Kinds are captain (live),
+# dated (a captain hold not yet due), parked, and future.
 has_hold() {  # <kind> <worker>
   grep -Fqx -- "$1"$'\t'"$2" "$WORK/holds"
+}
+
+# Whether the captain snoozed <worker>: a parked hold, or a captain hold not yet due.
+snoozed() {  # <worker>
+  has_hold parked "$1" || has_hold dated "$1"
 }
 
 # The label for <worker> between turns, or - to leave its card. <run> is the
@@ -131,7 +141,7 @@ between_label() {  # <worker> <state> <run>
   done <<EOF
 $open
 EOF
-  if { [ "$board" = 1 ] && ! has_hold parked "$worker"; } \
+  if { [ "$board" = 1 ] && ! snoozed "$worker"; } \
     || { [ "$state" = "done" ] && [ "$kind" = ship ] \
       && [ "$(sed -n 's/^yolo=//p' "$meta" | head -n 1)" = off ]; }; then
     printf 'Waiting for captain'
@@ -140,7 +150,7 @@ EOF
   elif [ "$state" = "done" ] || [ "$state" = blocked ] \
     || { [ "$state" = parked ] && [ "$other" = 1 ]; } || has_hold future "$worker"; then
     printf 'Queued'
-  elif [ "$state" = parked ] || [ "$state" = paused ] || has_hold parked "$worker"; then
+  elif [ "$state" = parked ] || [ "$state" = paused ] || snoozed "$worker"; then
     printf 'Waiting'
   elif [ "$state" = failed ]; then
     printf 'Failed'
@@ -195,7 +205,8 @@ sync_pass() {
   if ! { "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
     && jq -r '.backlog.records[]
       | select(.structured and .state != "done" and (.hold_kind == "captain" or .hold_kind == "parked" or .hold_kind == "future"))
-      | .hold_kind as $kind | (.id, (.hold_origin // empty)) | [$kind, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
+      | (if .hold_bucket == "dated" then "dated" else .hold_kind end) as $kind
+      | (.id, (.hold_origin // empty)) | [$kind, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
     # shellcheck disable=SC2086  # one pid per word
     wait $pids
     echo "t3-crew-status: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err" | grep . || echo unreadable); the next pass retries"
