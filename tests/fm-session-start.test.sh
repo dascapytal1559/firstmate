@@ -3458,6 +3458,37 @@ EOF
   pass "session start previews the wake queue without consuming a show-once item, a row claim, or the recovery episode"
 }
 
+# Regression: an unusable queue row is waiting work, because a drain retires it
+# and that retirement is the row's one report. Settling the start over it would
+# make the acknowledgement retire the row with nobody reading the report.
+test_wake_queue_leaves_an_unusable_row_for_the_drain_to_report() {
+  local rec root home fakebin out verdict drained
+  rec=$(new_world wake-unusable-row)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'a row with no sequence\n' > "$home/state/.wake-queue"
+  make_dead_watcher_lock "$home/state" >/dev/null
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  verdict=$(wake_queue_verdict "$out")
+  assert_contains "$verdict" "1 waiting (1 unusable queue row): run bin/fm-wake-drain.sh now" \
+    "the verdict did not count the unusable queue row as waiting"
+  [ "$(cat "$home/state/.wake-queue")" = 'a row with no sequence' ] \
+    || fail "session start removed the unusable row before any drain reported it: $(cat "$home/state/.wake-queue")"
+  case "$(cat "$home/state/.watcher-down" 2>/dev/null)" in
+    pending:downtime:*) ;;
+    *) fail "session start settled the recovery episode over an unusable row: $(cat "$home/state/.watcher-down" 2>/dev/null)" ;;
+  esac
+
+  drained=$(run_turn_drain "$home" "$root" "$fakebin:$BASE_PATH") || fail "the turn's drain failed"
+  assert_contains "$drained" "retired 1 unusable queue row(s)" \
+    "the turn's drain did not retire and report the unusable row"
+  pass "session start counts an unusable queue row as waiting and leaves its report to the turn's drain"
+}
+
 test_wake_queue_leaves_a_live_watcher_alone() {
   local rec root home fakebin out verdict holder
   rec=$(new_world wake-live-watcher)
@@ -3623,6 +3654,7 @@ test_agents_baseline_requires_sha256_and_successful_completion
 test_reemit_keeps_repair_ownership_with_the_lock_holder
 test_wake_queue_settles_an_empty_start_over_a_dead_watcher
 test_wake_queue_preview_leaves_everything_for_the_drain
+test_wake_queue_leaves_an_unusable_row_for_the_drain_to_report
 test_wake_queue_leaves_a_live_watcher_alone
 test_wake_queue_settles_nothing_it_cannot_prove_empty
 

@@ -34,6 +34,8 @@
 # by the next drain firstmate runs in a turn, which is the read that counts.
 # Main only. It writes SUMMARY_FILE by atomic rename, one `key=value` per line:
 #   rows        queued wake rows main would be presented (after deduplication)
+#   unusable    queued rows too malformed to present, which a drain retires
+#               and reports
 #   unread      UNREAD STATUS lines
 #   backstop    STATUS OUTCOME BACKSTOP lines, omitted ones included
 #   captain     tasks with unprocessed captain outcomes, held-back rows included
@@ -85,6 +87,7 @@ PREVIEW=false
 PREVIEW_SUMMARY=
 PREVIEW_STAGING=
 PREVIEW_ROWS=0
+PREVIEW_UNUSABLE=0
 PREVIEW_CAPTAIN=0
 PREVIEW_ROUTINE=0
 PREVIEW_COMPLETE=1
@@ -254,6 +257,7 @@ write_preview_summary() {
   grep -q '^backstop=' "$PREVIEW_STAGING" || printf 'backstop=0\n' >> "$PREVIEW_STAGING" || return 1
   {
     printf 'rows=%s\n' "$PREVIEW_ROWS"
+    printf 'unusable=%s\n' "$PREVIEW_UNUSABLE"
     printf 'captain=%s\n' "$PREVIEW_CAPTAIN"
     printf 'routine=%s\n' "$PREVIEW_ROUTINE"
     printf 'complete=%s\n' "$PREVIEW_COMPLETE"
@@ -1389,6 +1393,7 @@ if [ "$PREVIEW" = true ]; then
     if [ -e "$ELIGIBLE_ROWS_FILE" ] || [ -L "$ELIGIBLE_ROWS_FILE" ]; then
       require_branch_eligible_rows || exit 1
     fi
+    PREVIEW_UNUSABLE=$(awk -F '\t' '!(NF >= 5 && $2 ~ /^[0-9]+$/) { n++ } END { print n + 0 }' "$FM_WAKE_QUEUE") || exit 1
     DRAIN_TMP=$(mktemp "$STATE/.main-eligible-rows.tmp.XXXXXX") || exit 1
     main_rows_locked > "$DRAIN_TMP" || exit 1
     if [ -s "$DRAIN_TMP" ]; then

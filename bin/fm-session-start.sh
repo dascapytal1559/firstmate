@@ -168,11 +168,13 @@
 #     run the acknowledgement it prints. AGENTS.md section 8 and the T3 Code
 #     fork's session note rely on that line's two meanings.
 #   - acknowledges the open recovery episode itself (--ack-through 0) only when
-#     the preview read every section and found no queued wake, unread status
-#     line, backstop line, or unprocessed captain outcome, and neither an away
-#     record nor the daemon flag exists. That acknowledgement can remove no row
-#     and retires the episode only while the queue is still empty. Every other
-#     case settles nothing, so the first watcher announces as before.
+#     the preview read every section and found no queued wake, unusable queue
+#     row, unread status line, backstop line, or unprocessed captain outcome,
+#     and neither an away record nor the daemon flag exists. With nothing
+#     queued, that acknowledgement can remove no row, and it retires the
+#     episode only while the queue is still empty. An unusable row is left for
+#     the turn's drain, whose retirement of it is the row's one report. Every
+#     other case settles nothing, so the first watcher announces as before.
 # The read-only path runs none of it.
 #
 # BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
@@ -912,6 +914,7 @@ else
     DRAIN_OUT=$("$SCRIPT_DIR/fm-wake-drain.sh" --preview "$WAKE_SUMMARY" 2>&1) || true
   fi
   WAKE_ROWS=$(wake_summary_value "$WAKE_SUMMARY" rows)
+  WAKE_UNUSABLE=$(wake_summary_value "$WAKE_SUMMARY" unusable)
   WAKE_UNREAD=$(wake_summary_value "$WAKE_SUMMARY" unread)
   WAKE_BACKSTOP=$(wake_summary_value "$WAKE_SUMMARY" backstop)
   WAKE_CAPTAIN=$(wake_summary_value "$WAKE_SUMMARY" captain)
@@ -922,9 +925,9 @@ else
   WAKE_DOWNTIME_NOTE=
   [ -z "$WAKE_DEAD_WATCHER" ] \
     || WAKE_DOWNTIME_NOTE=" The previous watcher (pid $WAKE_DEAD_WATCHER) had died without releasing its lock; session start took the lock over."
-  case "$WAKE_ROWS:$WAKE_UNREAD:$WAKE_BACKSTOP:$WAKE_CAPTAIN" in
+  case "$WAKE_ROWS:$WAKE_UNUSABLE:$WAKE_UNREAD:$WAKE_BACKSTOP:$WAKE_CAPTAIN" in
     *[!0-9:]*|:*|*::*|*:) WAKE_WAITING= ;;
-    *) WAKE_WAITING=$((WAKE_ROWS + WAKE_UNREAD + WAKE_BACKSTOP + WAKE_CAPTAIN)) ;;
+    *) WAKE_WAITING=$((WAKE_ROWS + WAKE_UNUSABLE + WAKE_UNREAD + WAKE_BACKSTOP + WAKE_CAPTAIN)) ;;
   esac
   if [ -z "$WAKE_WAITING" ] || [ "$WAKE_COMPLETE" != 1 ]; then
     printf 'The wake queue could not be checked completely: run bin/fm-wake-drain.sh now, handle what it presents, then run the acknowledgement it prints.%s\n' \
@@ -932,6 +935,7 @@ else
   elif [ "$WAKE_WAITING" -gt 0 ]; then
     WAKE_PARTS=
     [ "$WAKE_ROWS" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_ROWS" 'queued wake' 'queued wakes')"
+    [ "$WAKE_UNUSABLE" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_UNUSABLE" 'unusable queue row' 'unusable queue rows')"
     [ "$WAKE_UNREAD" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_UNREAD" 'unread status line' 'unread status lines')"
     [ "$WAKE_BACKSTOP" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_BACKSTOP" 'uncovered task outcome' 'uncovered task outcomes')"
     [ "$WAKE_CAPTAIN" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_CAPTAIN" 'task with captain outcomes' 'tasks with captain outcomes')"

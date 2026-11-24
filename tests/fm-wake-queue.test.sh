@@ -3897,6 +3897,8 @@ test_preview_leaves_unusable_rows_for_the_drain_to_retire() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$dir/summary" > "$dir/preview.out" 2>&1 \
     || fail "the preview failed: $(cat "$dir/preview.out")"
   [ "$(cat "$state/.wake-queue")" = "$before" ] || fail "the preview rewrote the queue"
+  grep -qx 'unusable=1' "$dir/summary" || fail "the preview summary did not count the unusable row: $(cat "$dir/summary")"
+  grep -qx 'rows=1' "$dir/summary" || fail "the preview summary miscounted the usable row: $(cat "$dir/summary")"
   ! grep -F 'retired' "$dir/preview.out" >/dev/null \
     || fail "the preview spent the one report of an unusable row: $(cat "$dir/preview.out")"
 

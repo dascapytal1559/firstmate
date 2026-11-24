@@ -290,10 +290,11 @@ A live holder is never touched.
 The session start then runs the generation-bound acknowledgement itself, with sequence 0, only when all of these hold:
 
 - The preview read every section.
-- It found no queued wake, unread status line, backstop line, or unprocessed captain outcome.
+- It found no queued wake, unusable queue row, unread status line, backstop line, or unprocessed captain outcome.
 - Neither an away record nor the daemon flag exists.
 
-That acknowledgement can consume no row and retires the episode only while the queue is still empty, so a wake appended at any point keeps or opens an episode the next watcher announces.
+With nothing queued, that acknowledgement can consume no row, and it retires the episode only while the queue is still empty, so a wake appended at any point keeps or opens an episode the next watcher announces.
+An unusable queue row counts as waiting because a drain retires it and that retirement is its one report, so the turn's drain must be the one to make it.
 Every other start settles nothing, and the first watcher announces the episode exactly as before.
 `bin/fm-session-start.sh` owns the stage and the verdict line that leads its `WAKE QUEUE` section.
 
