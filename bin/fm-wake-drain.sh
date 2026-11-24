@@ -3,7 +3,8 @@
 # optionally acknowledge handled records,
 # annotate every unread line for validated signal status keys, surface unread
 # informational status lines, latest captain-facing statuses not covered by a
-# newer branch outcome, OPEN DECISIONS, captain-call record divergence, unread
+# newer branch outcome, the captain calls waiting on the captain (WAITING FOR
+# CAPTAIN), OPEN DECISIONS, captain-call record divergence, unread
 # review-board feedback (BOARD FEEDBACK), and on
 # a supervision-host home the supervision session's new and unprocessed
 # outcomes (BRANCH OUTCOMES), then, in a T3 turn, claim that turn's usage for
@@ -35,6 +36,8 @@ SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-hold-count-lib.sh
+. "$SCRIPT_DIR/fm-hold-count-lib.sh"
 
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
@@ -52,6 +55,9 @@ ACK_FINGERPRINTS=
 ACK_NOTICE_FINGERPRINTS=
 PRESENTATION_LOCK_TIMEOUT=${FM_STATUS_PRESENTATION_LOCK_TIMEOUT:-10}
 BRANCH_OUTCOMES_RC=0
+# This presentation's backlog hold counts (load_hold_counts).
+HOLD_COUNTS=
+HOLD_COUNTS_STATE=skipped
 # The tasks BRANCH OUTCOMES presented, oldest first, for claim_wake_usage.
 BRANCH_OUTCOME_TASKS=
 case "$PRESENTATION_LOCK_TIMEOUT" in ''|*[!0-9]*|0) PRESENTATION_LOCK_TIMEOUT=10 ;; esac
@@ -462,6 +468,97 @@ EOF
   [ "$shown" -gt 0 ] || return 0
 }
 
+# Read this home's backlog holds once per presentation, by the one rule
+# bin/fm-hold-count-lib.sh owns, for WAITING FOR CAPTAIN and the snooze marks on
+# OPEN DECISIONS. Sets HOLD_COUNTS to its lines and HOLD_COUNTS_STATE to ok, to
+# unreadable when the backlog could not be read in time (FM_HOLD_COUNT_TIMEOUT
+# seconds, default 20), or to skipped when the status logs are not this home's
+# own (state is not $FM_HOME/state), since another home's backlog says nothing
+# about them. Never fails the drain.
+load_hold_counts() {
+  local bound snapshot
+  HOLD_COUNTS=
+  HOLD_COUNTS_STATE=skipped
+  [ "$STATE" = "$FM_HOME/state" ] || return 0
+  bound=${FM_HOLD_COUNT_TIMEOUT:-20}
+  case "$bound" in ''|*[!0-9]*|0) bound=20 ;; esac
+  HOLD_COUNTS_STATE=unreadable
+  snapshot=$(fm_run_timed "$bound" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input 2>/dev/null) || return 0
+  HOLD_COUNTS=$(printf '%s\n' "$snapshot" | fm_hold_counts) || { HOLD_COUNTS=; return 0; }
+  HOLD_COUNTS_STATE=ok
+}
+
+# The words for a snooze running to <until>: its date, no date, or a date that
+# has passed (a parked hold stays a snooze after its date until it is lifted).
+snooze_mark() {  # <until-or-empty>
+  if [ -z "$1" ]; then
+    printf 'snoozed, no date'
+  elif [[ "$1" > "$(date +%Y-%m-%d)" ]]; then
+    printf 'snoozed until %s' "$1"
+  else
+    printf 'snoozed, its date %s has passed' "$1"
+  fi
+}
+
+# Print the WAITING FOR CAPTAIN section: every captain call held in this home's
+# backlog that is due, by bin/fm-hold-count-lib.sh's rule - the same rule that
+# labels a live T3 worker's card "Waiting for captain" - with the task it was
+# raised for and any blocker it still waits behind. A call the captain put off
+# to a later date is not listed as waiting; one closing line names those with
+# their dates, so they stay in sight. Bounded and silent: nothing prints when no
+# captain call is held. A backlog that could not be read is said so, since the
+# snooze marks on OPEN DECISIONS are then missing too.
+print_waiting_for_captain_section() {
+  local kind task row origin until blockers title line output='' used=0 shown=0 omitted=0 bytes
+  local later='' item_bytes=220 global_bytes=3000 tab
+  if [ "$HOLD_COUNTS_STATE" = unreadable ]; then
+    printf 'WAITING FOR CAPTAIN: the backlog could not be read, so the captain calls are not listed here and OPEN DECISIONS carries no snooze marks; read them with bin/fm-tasks-axi.sh list.\n'
+    return
+  fi
+  [ "$HOLD_COUNTS_STATE" = ok ] && [ -n "$HOLD_COUNTS" ] || return 0
+  tab=$(printf '\t')
+  while IFS=$tab read -r kind task row origin until blockers title; do
+    [ "$task" = "$row" ] || continue
+    case "$kind" in
+      dated)
+        later="$later${later:+, }$row until $until"
+        continue
+        ;;
+      captain) ;;
+      *) continue ;;
+    esac
+    line=$row
+    [ "$origin" = - ] || line="$line (for $origin)"
+    [ "$blockers" = - ] || line="$line (blocked by $blockers)"
+    line="$line: $title"
+    fm_cap_line_var "$line" $((item_bytes - 1))
+    line=$FM_LINE_CAP_LINE
+    bytes=$(( ${#line} + 1 ))
+    if [ $((used + bytes)) -gt "$global_bytes" ]; then
+      omitted=$((omitted + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + bytes))
+    shown=$((shown + 1))
+  done <<EOF
+$HOLD_COUNTS
+EOF
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || [ -n "$later" ] || return 0
+  printf 'WAITING FOR CAPTAIN (captain calls held in the backlog and due, by the rule T3 labels Waiting for captain; a standing list, not new events, and a snoozed OPEN DECISIONS entry is never one of them):\n' || return 1
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || printf '(none due)\n' || return 1
+  printf '%s' "$output" || return 1
+  if [ "$omitted" -gt 0 ]; then
+    printf 'WAITING FOR CAPTAIN: %d more omitted (byte cap)\n' "$omitted" || return 1
+  fi
+  if [ -n "$later" ]; then
+    fm_cap_line_var "WAITING FOR CAPTAIN: put off by the captain, not waiting: $later" $((item_bytes * 3 - 1))
+    printf '%s\n' "$FM_LINE_CAP_LINE" || return 1
+  fi
+}
+
 # Print the consolidated OPEN DECISIONS section: every still-open
 # needs-decision/blocked, fleet-wide, folded from the durable status logs by
 # fm-classify-lib.sh's status_open_decisions fold (via its cursor-backed
@@ -477,9 +574,15 @@ EOF
 # fm-classify-lib.sh's "incremental (cursor-backed) open-decisions fold").
 # Bounded and silent: prints nothing when no decision is open, which is the
 # common case.
+#
+# An entry whose task the captain snoozed (load_hold_counts below) is marked
+# with the date the snooze runs to, or as snoozed with no date, and listed after
+# every unmarked entry, so firstmate still sees it as context but never reads it
+# as a call waiting on the captain and the byte cap drops it first. The
+# captain's waiting calls are WAITING FOR CAPTAIN's.
 print_open_decisions_section() {
   local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
-  local output='' used=0 shown=0 omitted=0 bytes
+  local output='' used=0 shown=0 omitted=0 bytes until waiting='' snoozed='' tab
 
   if [ -n "$snapshot" ]; then
     open=$(scan_open_decisions_snapshot "$STATE" "$snapshot") || return 1
@@ -488,7 +591,24 @@ print_open_decisions_section() {
   fi
   [ -n "$open" ] || return 0
 
-  while IFS=$(printf '\t') read -r task key verb note; do
+  # Order the entries: every unmarked one first, then the snoozed ones with
+  # their mark on the verb.
+  tab=$(printf '\t')
+  while IFS=$tab read -r task key verb note; do
+    [ -n "$task" ] || continue
+    if [ "$HOLD_COUNTS_STATE" = ok ] \
+      && until=$(printf '%s\n' "$HOLD_COUNTS" | fm_hold_snoozed "$task"); then
+      snoozed="$snoozed$task$tab$key$tab$verb ($(snooze_mark "$until"), not waiting on the captain)$tab$note
+"
+    else
+      waiting="$waiting$task$tab$key$tab$verb$tab$note
+"
+    fi
+  done <<EOF
+$open
+EOF
+
+  while IFS=$tab read -r task key verb note; do
     [ -n "$task" ] || continue
     # State the folded key on EVERY entry, "default" included. This section's
     # own hint asks the operator to pass that key to fm-send, and the note is
@@ -514,7 +634,7 @@ print_open_decisions_section() {
     used=$((used + bytes))
     shown=$((shown + 1))
   done <<EOF
-$open
+$waiting$snoozed
 EOF
 
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
@@ -817,9 +937,11 @@ print_status_sections() {
   [ -n "$snapshot" ] || return 0
   acknowledged=$(status_acknowledge_presented_snapshot "$STATE" "$snapshot" "$fully_presented") || return 1
   prepared=$(mktemp "$STATE/.status-presentation.prepared.XXXXXX") || return 1
+  load_hold_counts
   if ! {
     print_unread_status_section "$snapshot" \
       && print_status_outcome_backstop_section "$snapshot" \
+      && print_waiting_for_captain_section \
       && print_open_decisions_section "$snapshot" \
       && print_record_divergence_section \
       && print_board_feedback_section

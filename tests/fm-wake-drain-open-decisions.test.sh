@@ -215,6 +215,122 @@ test_over_long_decision_note_is_capped_with_a_marker() {
   pass "an over-long open decision is cut to its per-item budget with the shared truncation marker"
 }
 
+# backlog_home <case> -> echoes a case directory that is also a firstmate home
+# with an empty tasks-axi markdown backlog, so the drain reads its holds.
+backlog_home() {
+  local dir
+  dir=$(make_case "$1")
+  mkdir -p "$dir/data"
+  fm_test_tasks_toml "$dir/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$dir/data/backlog.md"
+  printf '%s\n' "$dir"
+}
+
+in_home() {  # <dir> <command...>
+  local dir=$1
+  shift
+  (cd "$dir" && FM_HOME="$dir" "$@")
+}
+
+# The captain snoozed two tasks that each have an open review-board decision:
+# one in T3 with no date (a parked hold), one as a captain call put off to a
+# later date. Neither may read as waiting on the captain, but both stay listed,
+# marked, after the decision that is still waiting.
+test_snoozed_task_decision_is_not_shown_as_waiting() {
+  local dir out later
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return; }
+  dir=$(backlog_home snoozed-decisions)
+  out="$dir/drain.out"
+  later=$(date -v+14d +%Y-%m-%d 2>/dev/null || date -d '+14 days' +%Y-%m-%d)
+  in_home "$dir" tasks-axi add board-w "Summary board" --repo s >/dev/null || fail "seeding board-w failed"
+  in_home "$dir" tasks-axi add groove-w "Chords groove" --repo s >/dev/null || fail "seeding groove-w failed"
+  in_home "$dir" tasks-axi add plain-w "Plain worker" --repo s >/dev/null || fail "seeding plain-w failed"
+  in_home "$dir" tasks-axi hold board-w --kind parked --reason "Snoozed in T3" >/dev/null || fail "parking board-w failed"
+  in_home "$dir" "$ROOT/bin/fm-captain-hold.sh" hold groove-w --reason "pick a groove" --until "$later" >/dev/null \
+    || fail "putting groove-w off failed"
+  printf 'needs-decision [key=board-review]: review the summary board\n' > "$dir/state/board-w.status"
+  printf 'needs-decision [key=board-review]: review the groove board\n' > "$dir/state/groove-w.status"
+  printf 'needs-decision [key=api-shape]: pick REST or RPC\n' > "$dir/state/plain-w.status"
+
+  FM_HOME="$dir" "$DRAIN" > "$out" || fail "drain failed over snoozed decisions"
+
+  grep -Fx 'board-w [key=board-review] needs-decision (snoozed, no date, not waiting on the captain): review the summary board' "$out" >/dev/null \
+    || fail "an undated snooze's decision was not marked snoozed with no date: $(cat "$out")"
+  grep -Fx "groove-w [key=board-review] needs-decision (snoozed until $later, not waiting on the captain): review the groove board" "$out" >/dev/null \
+    || fail "a dated snooze's decision was not marked with its return date: $(cat "$out")"
+  grep -Fx 'plain-w [key=api-shape] needs-decision: pick REST or RPC' "$out" >/dev/null \
+    || fail "a decision on a task nobody snoozed gained a mark: $(cat "$out")"
+  [ "$(grep -n 'plain-w \[key=' "$out" | cut -d: -f1)" -lt "$(grep -n 'board-w \[key=' "$out" | cut -d: -f1)" ] \
+    || fail "a snoozed decision was listed ahead of one still waiting: $(cat "$out")"
+  grep -F "close one by answering it: bin/fm-send.sh <task> --resolve-key <key>" "$out" >/dev/null \
+    || fail "the answerer-closes hint went missing: $(cat "$out")"
+  if sed -n '/^WAITING FOR CAPTAIN (/,/^OPEN DECISIONS (/p' "$out" | grep -E '^(board-w|groove-w)( |:)' >/dev/null; then
+    fail "a snoozed task was listed as waiting for the captain: $(cat "$out")"
+  fi
+  grep -Fx "WAITING FOR CAPTAIN: put off by the captain, not waiting: groove-w until $later" "$out" >/dev/null \
+    || fail "the call put off to a date was not named with its date: $(cat "$out")"
+  pass "a snoozed task's decision is marked with its return date and never shown as waiting on the captain"
+}
+
+# A worker's call moved to a captain-held backlog row closes its status key, so
+# OPEN DECISIONS no longer lists it; the call is still waiting on the captain
+# and must be presented, with the worker it was raised for. A captain call whose
+# date has arrived is due again with no other action.
+test_captain_held_call_with_an_open_hold_appears() {
+  local dir out
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return; }
+  dir=$(backlog_home captain-held-calls)
+  out="$dir/drain.out"
+  in_home "$dir" tasks-axi add numbers-w "UI numbers" --repo s >/dev/null || fail "seeding numbers-w failed"
+  in_home "$dir" "$ROOT/bin/fm-captain-hold.sh" hold chart-call --title "Which aspects become charts?" \
+    --reason "which charts" --origin numbers-w >/dev/null || fail "holding chart-call failed"
+  in_home "$dir" tasks-axi add due-call "Due again today" --repo s >/dev/null || fail "seeding due-call failed"
+  in_home "$dir" "$ROOT/bin/fm-captain-hold.sh" hold due-call --reason "revisit" --until "$(date +%Y-%m-%d)" >/dev/null \
+    || fail "holding due-call to today failed"
+  printf 'needs-decision [key=chart-call]: which aspects become charts\n' > "$dir/state/numbers-w.status"
+  printf 'captain-held [key=chart-call]: held for the captain as chart-call\n' >> "$dir/state/numbers-w.status"
+
+  FM_HOME="$dir" "$DRAIN" > "$out" || fail "drain failed over a captain-held call"
+
+  grep -F 'WAITING FOR CAPTAIN (' "$out" >/dev/null || fail "no WAITING FOR CAPTAIN section printed: $(cat "$out")"
+  grep -Fx 'chart-call (for numbers-w): Which aspects become charts?' "$out" >/dev/null \
+    || fail "the captain-held call was not presented with its worker: $(cat "$out")"
+  grep -Fx 'due-call: Due again today' "$out" >/dev/null \
+    || fail "a captain call whose date has arrived was not presented as due: $(cat "$out")"
+  if grep -F 'OPEN DECISIONS (' "$out" >/dev/null; then
+    fail "a key closed by its captain-held transfer still read as an open status decision: $(cat "$out")"
+  fi
+  pass "a captain-held call with an open hold is presented as waiting on the captain"
+}
+
+# A drain whose backlog cannot be read says so rather than presenting no
+# captain calls, and still prints OPEN DECISIONS.
+test_unreadable_backlog_is_disclosed() {
+  local dir out
+  command -v tasks-axi >/dev/null 2>&1 || { pass "skip: tasks-axi not found"; return; }
+  dir=$(backlog_home unreadable-backlog)
+  out="$dir/drain.out"
+  printf 'needs-decision [key=api-shape]: pick REST or RPC\n' > "$dir/state/plain-w.status"
+  chmod 000 "$dir/data/backlog.md"
+  if [ -r "$dir/data/backlog.md" ]; then
+    chmod 644 "$dir/data/backlog.md"
+    pass "skip: this user can read a mode-000 file"
+    return
+  fi
+
+  FM_HOME="$dir" "$DRAIN" > "$out" || fail "drain failed when the backlog could not be read"
+  chmod 644 "$dir/data/backlog.md"
+
+  grep -F 'WAITING FOR CAPTAIN: the backlog could not be read' "$out" >/dev/null \
+    || fail "an unreadable backlog was not disclosed: $(cat "$out")"
+  grep -Fx 'plain-w [key=api-shape] needs-decision: pick REST or RPC' "$out" >/dev/null \
+    || fail "OPEN DECISIONS did not still print when the backlog could not be read: $(cat "$out")"
+  pass "a backlog that cannot be read is disclosed and OPEN DECISIONS still prints"
+}
+
+test_snoozed_task_decision_is_not_shown_as_waiting
+test_captain_held_call_with_an_open_hold_appears
+test_unreadable_backlog_is_disclosed
 test_buried_decision_still_surfaces
 test_over_long_decision_note_is_capped_with_a_marker
 test_explicit_resolution_closes_it

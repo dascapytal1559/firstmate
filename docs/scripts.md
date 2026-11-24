@@ -104,6 +104,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer only the T3 workers whose turn T3 shows as cut off |
 | `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
+| `fm-hold-count-lib.sh`   | Single owner of which open backlog holds count for which task - a due captain call, a snooze, or a deferral - shared by the T3 crew cards and the wake drain |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "☾︎ Scheduled", "Queued", "Waiting", "Failed") in line with who moves next |
 | `fm-t3-bridge.sh`        | Keep T3's Bridge in line with the objectives file and the model routing table |
 | `fm-t3-worker-reply.sh`  | Name the task behind a captain message T3 forwarded from a worker's thread, and the settle, un-settle, snooze, or un-snooze it carries |

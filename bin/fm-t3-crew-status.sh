@@ -9,13 +9,10 @@
 # state, as bin/fm-crew-state.sh reads it; its open decisions, as
 # bin/fm-classify-lib.sh's status_open_decisions folds them; its recorded yolo;
 # its steering inbox; the Lavish boards it owns, as bin/fm-procevent.sh records
-# them; and its thread in T3. A hold counts for a worker while it
-# is open (not Done) and on the worker's own task or raised for it (its
-# hold_origin). A captain hold whose hold_until date has not yet arrived is
-# the snooze a parked hold is: the snapshot's hold_bucket "dated", the one date
-# rule the backlog uses, counts it as dated here rather than captain, so it
-# reads as a parked hold until the date arrives and as a captain call again
-# after, with no other action.
+# them; and its thread in T3. Which holds count for a worker, and as what
+# (captain, dated, parked, future, bedtime), is bin/fm-hold-count-lib.sh's one
+# rule, which bin/fm-wake-drain.sh presents to firstmate too; a parked or dated
+# hold is the worker's snooze.
 #
 # A worker holds an open board while a task-owned process-event registration
 # names it as owner and no captured round of that source is unacknowledged. The
@@ -120,6 +117,8 @@ command -v jq >/dev/null 2>&1 || { echo "t3-crew-status: jq is required"; exit 1
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-hold-count-lib.sh
+. "$SCRIPT_DIR/fm-hold-count-lib.sh"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-crew-status.XXXXXX") || { echo "t3-crew-status: no temporary directory"; exit 1; }
 trap 'rm -rf -- "$WORK"' EXIT
@@ -135,16 +134,14 @@ worker_thread() {  # <task-id>
   fm_backend_target_of_meta "$meta"
 }
 
-# Whether a hold of <kind> counts for <worker>. Kinds are captain (live),
-# dated (a captain hold not yet due), parked, future, and bedtime (a future
-# hold whose reason starts "At bedtime", which also counts as future).
+# Whether a hold of <kind> counts for <worker> (bin/fm-hold-count-lib.sh).
 has_hold() {  # <kind> <worker>
-  grep -Fqx -- "$1"$'\t'"$2" "$WORK/holds"
+  awk -F '\t' -v kind="$1" -v task="$2" '$1 == kind && $2 == task { found = 1; exit } END { exit !found }' "$WORK/holds"
 }
 
-# Whether the captain snoozed <worker>: a parked hold, or a captain hold not yet due.
+# Whether the captain snoozed <worker> (bin/fm-hold-count-lib.sh).
 snoozed() {  # <worker>
-  has_hold parked "$1" || has_hold dated "$1"
+  fm_hold_snoozed "$1" < "$WORK/holds" >/dev/null
 }
 
 # List in $WORK/boards each task that holds an open board. One read of the
@@ -311,11 +308,7 @@ sync_pass() {
     return 0
   fi
   if ! { "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input > "$WORK/snapshot.json" 2>"$WORK/snapshot.err" \
-    && jq -r '.backlog.records[]
-      | select(.structured and .state != "done" and (.hold_kind == "captain" or .hold_kind == "parked" or .hold_kind == "future"))
-      | (if .hold_bucket == "dated" then "dated" else .hold_kind end) as $kind
-      | ($kind, (if $kind == "future" and ((.hold_reason // "") | startswith("At bedtime")) then "bedtime" else empty end)) as $counted
-      | (.id, (.hold_origin // empty)) | [$counted, .] | @tsv' "$WORK/snapshot.json" > "$WORK/holds"; }; then
+    && fm_hold_counts < "$WORK/snapshot.json" > "$WORK/holds"; }; then
     # shellcheck disable=SC2086  # one pid per word
     wait $pids
     echo "t3-crew-status: the backlog could not be read: $(head -n 1 "$WORK/snapshot.err" | grep . || echo unreadable); the next pass retries"

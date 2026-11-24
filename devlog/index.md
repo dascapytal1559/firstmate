@@ -2211,3 +2211,39 @@ The choices made:
 - Anything cleanup cannot recognise counts as running, so a wrong guess costs one question and never a killed command.
 
 The evidence is the cleanup and park test suites, plus a read-only pass over the live fleet: idle workers counted nothing, while a real dev server and running test jobs were named.
+
+## 82. Firstmate reads out the calls that are really waiting (24 November 2026)
+
+At the start of a session, Firstmate told the captain two items were waiting on him that he had snoozed in T3, and missed the two that T3 showed as "Waiting for captain".
+
+> Snoozed ones should not be read out, but the ones T3 shows as "Waiting for captain" should be.
+
+The cause was two lists that disagreed.
+The digest's prominent open-decisions list is folded from the workers' status logs, so it still showed two review-board decisions whose tasks the captain had snoozed.
+The two real calls had been moved onto held backlog items, which closes them in the status log, so they showed only as rows in the long backlog listing, and Firstmate trusted the prominent list.
+
+What was built:
+
+- **One rule, shared.** The rule that decides a T3 card reads "Waiting for captain", and which holds are a snooze, moved into one small library that the cards and Firstmate's wake digest both read, so the two can no longer drift.
+- **A list of what waits on the captain.** Every digest now opens its decisions with a WAITING FOR CAPTAIN list: each captain call held in the backlog and due, with the worker it was raised for and anything it still waits behind. Calls the captain put off to a later date are named on one closing line with their dates.
+- **Snoozed decisions are marked, not hidden.** An open decision on a snoozed task now says so, with the date it comes back or "no date", and sits after every decision that is still live, so Firstmate keeps the context without mistaking it for a waiting call.
+
+How it reads, on a test home with one snoozed board, one board put off to a date, and one call moved to the backlog:
+
+```
+WAITING FOR CAPTAIN (captain calls held in the backlog and due, by the rule T3 labels Waiting for captain; a standing list, not new events, and a snoozed OPEN DECISIONS entry is never one of them):
+chart-pick (for worker-n): Pick the chart
+WAITING FOR CAPTAIN: put off by the captain, not waiting: groove until 2026-12-07
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+live-w [key=api] needs-decision: REST or RPC
+board-a [key=board-review] needs-decision (snoozed, no date, not waiting on the captain): review board A
+groove [key=board-review] needs-decision (snoozed until 2026-12-07, not waiting on the captain): review groove
+```
+
+The choices made:
+
+- The list covers every due captain call in the backlog, not only those with a live T3 card, because a call outlives the worker that raised it.
+- A call blocked behind other work still counts as waiting, as it does on the card, and says what it is blocked by.
+- If the backlog cannot be read, the digest says so instead of showing an empty list, and the open decisions still print.
+
+The evidence is the open-decisions suite, with new cases for a snoozed task's decision, a call moved to the backlog, a call whose date has arrived, and an unreadable backlog, plus the card status suite unchanged.
