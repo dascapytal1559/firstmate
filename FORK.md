@@ -236,7 +236,7 @@ So when a notification would wake a session that has sat idle past the cache lif
 Any failure falls back to upstream's wake, and outside a T3 Code thread nothing changes.
 Approved by the captain on 2026-11-15.
 Only a session over 100k tokens is rung this way, since a small one reloads for about the price of a fresh start.
-The message carries no notification itself: the notification stays queued, and the fresh session's start digest presents it.
+The message carries no notification itself: the notification stays queued, and the message sends the fresh session to read the queue.
 It travels as Firstmate operational input, a doorbell naming a record in this home's inbox, so the away-mode return rule, the dialog mirror, and the nightly clear check never take it for the captain's words.
 Upstream's Stop hook is unchanged; the fork wraps it, and its StopFailure registration still runs it directly.
 It needs the T3 Code fork's rule that starts a cold FirstMate thread fresh; without that rule the message only reaches the old session.
@@ -244,6 +244,25 @@ Details: [`fm-claude-stop-cold-reroute.sh`](bin/fm-claude-stop-cold-reroute.sh).
 
 Upstream: none; it compacts an idle session instead ([#7807](https://github.com/kunchenguid/firstmate/pull/7807)).
 T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#auto-clearing-cold-clear).
+
+### Quiet session starts
+
+A new FirstMate session no longer costs an empty follow-up turn, and nothing its startup summary showed counts as seen until FirstMate has read the queue itself.
+Upstream's session start reads the notification queue inside the startup hook, and the first turn is meant to handle and acknowledge what that read presented.
+Two things break that on a Claude primary.
+Claude passes on only the first 2,000 characters of a long hook output, so most of the summary never reaches FirstMate, yet that read had already marked its show-once items as shown: unread status notes, the line for a finished worker that no supervision outcome covers, and routine supervision outcomes.
+And when the previous session's process is ended, its watcher dies without releasing its lock, so the first watcher after the new session's first turn announces a recovery whatever is queued, which was an empty turn in 30 of 32 measured session rotations.
+So the fork's session start previews the queue instead: it prints the same thing and takes no receipt, and the first line of its `WAKE QUEUE` section says whether anything is waiting.
+It takes over a dead watcher's lock itself, and when the preview proves nothing is waiting it runs the acknowledgement that retires that downtime, so the next watcher starts quietly.
+When anything is waiting it settles nothing, and FirstMate's own drain, in that turn or on the watcher's follow-up notification, presents it with nothing already marked.
+A turn that drains and ends without acknowledging is replayed at once by the Stop wrapper, instead of waiting for the next unrelated notification.
+Upstream treats the empty recovery turn as the one notice of a supervision gap and expects a drain and acknowledgement to retire it; here session start reports the gap in its summary and makes that acknowledgement when there is provably nothing else to do.
+The fork departs because an investigation of every recorded session start found the turn was almost always empty and found routine outcomes that were listed at startup and never seen.
+Asked for by the captain on 2026-11-25.
+Details: [session start](docs/watcher-continuity.md#session-start).
+
+Upstream: none; it treats the empty recovery turn as intended ([#8092](https://github.com/kunchenguid/firstmate/issues/8092)).
+T3 Code fork half: [Auto clearing (cold clear)](https://github.com/dascapytal1559/t3code/blob/main/fork/README.md#auto-clearing-cold-clear), whose opening message starts the fresh session.
 
 ### Nightly clear check
 

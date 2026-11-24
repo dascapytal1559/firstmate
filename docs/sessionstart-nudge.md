@@ -247,6 +247,7 @@ Native stdout context injection is supported.
 Claude caps one hook output string at 10,000 characters.
 Above the cap the model receives a preview of the first 2,000 characters plus the path of a saved file, and is not asked to read that file.
 A context re-emit therefore prints a short `RE-EMIT CUE` first, which tells the model to read the saved file.
+For the same reason the digest's read of the wake queue takes no receipt and leads with its verdict ([watcher-continuity.md](watcher-continuity.md#session-start)).
 
 ### Codex exec
 

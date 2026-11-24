@@ -585,6 +585,39 @@ test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair() {
   pass "drain: an outcome the host drain presented but main never acknowledged survives an outcome index repair"
 }
 
+
+# Session start's read is a preview (bin/fm-wake-drain.sh --preview): it lists
+# the outcomes and leaves the store's read cursor where it was, so the routine
+# listing a drain shows once is still owed to the drain main runs in a turn.
+test_preview_lists_outcomes_and_leaves_them_unread() {
+  local home previewed drained summary
+  home="$TMP_ROOT/drain-preview"
+  summary="$home/summary"
+  mkdir -p "$home/state" "$home/config"
+  : > "$home/config/supervision-host"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict routine --summary 'restarted the stuck test run' >/dev/null \
+    || fail "fixture: could not record the routine outcome"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task demo --verdict captain --summary 'PR ready for review' >/dev/null \
+    || fail "fixture: could not record the captain outcome"
+
+  previewed=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" --preview "$1" 2>&1' "$ROOT/bin/fm-wake-drain.sh" "$summary")
+  assert_contains "$previewed" "[seq 1] demo: restarted the stuck test run" "the preview must list the routine outcome"
+  assert_contains "$previewed" "[seq 2, recorded 0m ago] demo: PR ready for review" "the preview must present the captain outcome"
+  assert_absent "$home/state/.branch-outcomes-cursor" "a preview must leave the store's read cursor untouched"
+  assert_re '^captain=1$' "$summary" "the preview summary must count the task with a captain outcome"
+  assert_re '^routine=1$' "$summary" "the preview summary must count the routine outcome"
+  assert_re '^complete=1$' "$summary" "the preview summary must report a complete read"
+
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_contains "$drained" "[seq 1] demo: restarted the stuck test run" \
+    "the preview consumed the routine listing before any drain presented it"
+  assert_contains "$drained" "[seq 2, recorded 0m ago] demo: PR ready for review" "the drain after a preview must present the captain outcome"
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_not_contains "$drained" "[seq 1]" "the drain must take its own read receipt after a preview"
+  assert_contains "$drained" "[seq 2, recorded" "an unacknowledged captain outcome must keep presenting"
+  pass "drain: a preview lists branch outcomes and leaves every one unread for the next drain"
+}
+
 fm_test_run \
   test_report_surface_enforces_actor_turn_and_scope \
   test_report_after_the_return_is_queued_for_main \
@@ -602,4 +635,5 @@ fm_test_run \
   test_branch_outcomes_date_an_outcome_carried_across_a_switch_off_pi \
   test_branch_outcomes_keep_an_unshown_outcome_until_acknowledged \
   test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_pi \
-  test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair
+  test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair \
+  test_preview_lists_outcomes_and_leaves_them_unread

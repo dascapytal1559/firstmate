@@ -20,6 +20,7 @@ Upstream can run workers in T3 Code as an experimental backend; with the T3 Code
 - [Long commands survive restarts](FORK.md#long-commands-survive-restarts): a worker's long test run or build survives a T3 restart.
 - [Fresh sessions take over](FORK.md#fresh-sessions-take-over): after `/clear`, the new FirstMate session takes over the same thread.
 - [Auto clearing on a notification](FORK.md#auto-clearing-on-a-notification): a worker's notification starts FirstMate fresh instead of reloading a cold, expensive session.
+- [Quiet session starts](FORK.md#quiet-session-starts): a new FirstMate session costs no empty follow-up turn, and nothing shown at startup counts as seen until FirstMate reads the queue itself.
 - [Nightly clear check](FORK.md#nightly-clear-check): a nightly check lists every clear of FirstMate's session and flags one that may have lost the thread.
 - [Nightly usage-labels check](FORK.md#nightly-usage-labels-check): a nightly check raises one backlog item when any of the day's T3 Code usage has no phone or computer label.
 - [Pointer to the previous dialog](FORK.md#pointer-to-the-previous-dialog): a fresh FirstMate session is told where the previous conversation is saved.

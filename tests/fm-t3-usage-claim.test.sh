@@ -59,7 +59,7 @@ w.origins = { "t-tk": "phone", "t-lost": null };'
 # thread coord started now (its parent bash stands for the agent).
 # shellcheck disable=SC2016  # $@ belongs to the bash -c snippet.
 as_agent() {
-  OUT=$(env T3CODE_THREAD_ID=coord bash -c '"$@"; rc=$?; exit "$rc"' _ "$@" 2>"$TMP_ROOT/stderr")
+  env T3CODE_THREAD_ID=coord bash -c '"$@"; rc=$?; exit "$rc"' _ "$@" >/dev/null 2>"$TMP_ROOT/stderr"
   RC=$?
   ERR=$(cat "$TMP_ROOT/stderr")
 }
@@ -148,6 +148,7 @@ test_origin_records() {
     . "$ROOT/bin/fm-merge-outcome-lib.sh"
     fm_merge_outcome_report "$TMP_ROOT" "$state" pr-task https://github.com/o/r/pull/7 self >/dev/null 2>&1
   ) || fail "the PR merge outcome was not recorded"
+  # shellcheck disable=SC2031 # The subshell only isolated the sourced library; $state is unchanged here.
   out=$(lib "$state" 'fm_t3_origin_landed "$state"')
   assert_equals '{"threadId":"t-pr"}' "$out" "a PR merge keeps its task's thread as the latest landed origin"
   pass "fm-t3-origin-lib: this thread now, queued, task, and latest landed references are recorded, read, and dropped, a PR merge included"

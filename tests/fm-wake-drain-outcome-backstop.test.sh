@@ -513,6 +513,36 @@ test_backstop_output_is_bounded() {
   pass "the outcome backstop caps each item and its total task output deterministically"
 }
 
+# A preview (bin/fm-wake-drain.sh --preview) presents the backstop line and
+# takes no receipt for it, so the drain firstmate runs still presents it once.
+test_preview_presents_the_backstop_and_leaves_it_for_the_drain() {
+  local dir state old summary
+  dir=$(make_case preview-keeps-backstop)
+  state="$dir/state"
+  summary="$dir/summary"
+  old=$(( $(date +%s) - 20 ))
+  printf 'done: PR https://example.test/4242 checks green\n' > "$state/done-task.status"
+  set_mtime "$old" "$state/done-task.status"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  case "$(backstop_body "$dir/preview.out")" in
+    *'done-task done: PR https://example.test/4242 checks green'*) ;;
+    *) fail "the preview did not present the uncovered outcome: $(cat "$dir/preview.out")" ;;
+  esac
+  grep -qx 'backstop=1' "$summary" || fail "the preview summary did not count the backstop line: $(cat "$summary")"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null || fail "the drain after the preview failed"
+  case "$(backstop_body "$dir/drain.out")" in
+    *'done-task done: PR https://example.test/4242 checks green'*) ;;
+    *) fail "the preview consumed the backstop line before any drain presented it: $(cat "$dir/drain.out")" ;;
+  esac
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/later.out" 2>/dev/null || fail "the later drain failed"
+  ! grep -F 'STATUS OUTCOME BACKSTOP (' "$dir/later.out" >/dev/null \
+    || fail "the drain did not take its own backstop receipt after the preview: $(cat "$dir/later.out")"
+  pass "a preview presents the outcome backstop and leaves its receipt to the next drain"
+}
+
 test_uncovered_keyless_captain_events_surface_on_the_next_main_drain
 test_newer_task_outcome_and_routine_latest_events_stay_silent
 test_older_or_other_task_outcome_cannot_hide_a_new_captain_event
@@ -531,3 +561,4 @@ test_held_lock_mode_accepts_a_lock_owner_descendant
 test_index_self_heal_runs_under_the_outcome_lock
 test_overbound_routine_event_stays_silent
 test_backstop_output_is_bounded
+test_preview_presents_the_backstop_and_leaves_it_for_the_drain

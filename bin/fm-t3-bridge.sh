@@ -55,6 +55,7 @@ for tool in jq node; do
 done
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fm-t3-bridge.XXXXXX") || { echo "t3-bridge: no temporary directory"; exit 1; }
 LOCK_HELD=0
+# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
 cleanup() {
   [ "$LOCK_HELD" = 0 ] || fm_lock_release "$SYNCS/.lock" || true
   rm -rf -- "$WORK"

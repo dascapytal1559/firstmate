@@ -449,6 +449,56 @@ test_routine_working_and_covered_done_stay_silent_on_the_empty_queue() {
   pass "routine working and branch-covered done lines print nothing on an empty-queue drain"
 }
 
+# Session start's read is a preview (bin/fm-wake-drain.sh --preview): a harness
+# may deliver its output only in part, so it must present an unread note and
+# leave it unread for the drain firstmate runs in a turn.
+test_preview_presents_an_unread_note_and_leaves_it_for_the_drain() {
+  local dir state status summary
+  dir=$(make_case preview-keeps-note)
+  state="$dir/state"
+  status="$state/task1.status"
+  summary="$dir/summary"
+  prime_cursor "$state" "$status"
+  printf 'note: the answer nobody has read yet\n' >> "$status"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  grep -F 'task1 note: the answer nobody has read yet' "$dir/preview.out" >/dev/null \
+    || fail "the preview did not present the unread note: $(cat "$dir/preview.out")"
+  grep -qx 'unread=1' "$summary" || fail "the preview summary did not count the unread note: $(cat "$summary")"
+  grep -qx 'complete=1' "$summary" || fail "the preview summary did not report a complete read: $(cat "$summary")"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null || fail "the drain after the preview failed"
+  grep -F 'task1 note: the answer nobody has read yet' "$dir/drain.out" >/dev/null \
+    || fail "the preview consumed the unread note before any drain presented it: $(cat "$dir/drain.out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/later.out" 2>/dev/null || fail "the later drain failed"
+  ! grep -F 'the answer nobody has read yet' "$dir/later.out" >/dev/null \
+    || fail "the drain did not take its own receipt after the preview: $(cat "$dir/later.out")"
+  pass "a preview presents an unread note and leaves it unread for the next drain"
+}
+
+# A home with no cursor manifest reads each offset from the legacy per-task
+# cursor the OPEN DECISIONS fold advances. The preview runs that fold, so it
+# must pin the offsets first or the next drain would read the note as shown.
+test_preview_keeps_a_note_unread_on_a_home_with_only_legacy_cursors() {
+  local dir state status
+  dir=$(make_case preview-legacy-cursor)
+  state="$dir/state"
+  status="$state/task1.status"
+  prime_cursor "$state" "$status"
+  rm -f "$state/.status-presentation-cursor"
+  printf 'note: written before the manifest existed\n' >> "$status"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$dir/summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed on a legacy-cursor home: $(cat "$dir/preview.out")"
+  grep -F 'task1 note: written before the manifest existed' "$dir/preview.out" >/dev/null \
+    || fail "the preview did not present the note on a legacy-cursor home: $(cat "$dir/preview.out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>/dev/null || fail "the drain after the preview failed"
+  grep -F 'task1 note: written before the manifest existed' "$dir/drain.out" >/dev/null \
+    || fail "the preview's fold moved the legacy cursor past a note no drain had presented: $(cat "$dir/drain.out")"
+  pass "a preview keeps a note unread on a home that has only legacy per-task cursors"
+}
+
 test_incident_note_answer_buried_under_routine_note_surfaces_both
 test_already_presented_notes_are_not_replayed
 test_brand_new_note_after_presentation_is_surfaced
@@ -463,3 +513,5 @@ test_snapshot_failure_is_visible
 test_open_decisions_fold_is_unchanged
 test_empty_queue_does_not_swallow_later_signal_annotation
 test_routine_working_and_covered_done_stay_silent_on_the_empty_queue
+test_preview_presents_an_unread_note_and_leaves_it_for_the_drain
+test_preview_keeps_a_note_unread_on_a_home_with_only_legacy_cursors

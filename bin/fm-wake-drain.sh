@@ -3,7 +3,8 @@
 # optionally acknowledge handled records,
 # annotate every unread line for validated signal status keys, surface unread
 # informational status lines, latest captain-facing statuses not covered by a
-# newer branch outcome, OPEN DECISIONS, captain-call record divergence, unread
+# newer branch outcome, the captain calls waiting on the captain (WAITING FOR
+# CAPTAIN), OPEN DECISIONS, captain-call record divergence, unread
 # review-board feedback (BOARD FEEDBACK), and on
 # a supervision-host home the supervision session's new and unprocessed
 # outcomes (BRANCH OUTCOMES), then, in a T3 turn, claim that turn's usage for
@@ -18,6 +19,32 @@
 # locked drain rotates such leftovers away before doing anything else.
 # FM_STATUS_PRESENTATION_LOCK_TIMEOUT sets the positive whole-second wait for
 # presentation-path locks (default 10); queue mutation locks remain blocking.
+#
+# Usage: fm-wake-drain.sh
+#        fm-wake-drain.sh --ack-through SEQUENCE --recovery-generation GENERATION
+#        fm-wake-drain.sh --preview SUMMARY_FILE
+#
+# --preview is session start's read (bin/fm-session-start.sh), whose output a
+# harness may deliver only in part. It presents exactly what a drain presents
+# and takes no receipt for it: no row is claimed for main, the recovery episode
+# is neither opened for handling nor created, the status and backstop cursors
+# and the outcome store's read cursor stay where they were, unusable rows are
+# left for a drain to retire and report, no turn usage is claimed, and no
+# WAKE_ACK_REQUIRED command is printed. So everything it shows is shown again
+# by the next drain firstmate runs in a turn, which is the read that counts.
+# Main only. It writes SUMMARY_FILE by atomic rename, one `key=value` per line:
+#   rows        queued wake rows main would be presented (after deduplication)
+#   unusable    queued rows too malformed to present, which a drain retires
+#               and reports
+#   unread      UNREAD STATUS lines
+#   backstop    STATUS OUTCOME BACKSTOP lines, omitted ones included
+#   captain     tasks with unprocessed captain outcomes, held-back rows included
+#   routine     unread visible routine outcomes
+#   complete    1 when every section could be read, else 0
+#   recovery    the recovery marker's `<status>:<kind>`, or `none`
+#   generation  that marker's generation, empty when there is none
+# A preview that could not take the queue lock, or died, writes no file; a
+# caller reads a missing file as "could not tell".
 set -u
 
 SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
@@ -35,6 +62,8 @@ SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-hold-count-lib.sh
+. "$SCRIPT_DIR/fm-hold-count-lib.sh"
 
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
@@ -50,8 +79,23 @@ ACK_REMOVED=0
 PRESENTED_MAX=0
 ACK_FINGERPRINTS=
 ACK_NOTICE_FINGERPRINTS=
+# --preview state (header): the summary path, its staging file, and the counts
+# only the main shell can see. Section printers that run in the status
+# presentation's subshell append theirs to the staging file through
+# preview_count.
+PREVIEW=false
+PREVIEW_SUMMARY=
+PREVIEW_STAGING=
+PREVIEW_ROWS=0
+PREVIEW_UNUSABLE=0
+PREVIEW_CAPTAIN=0
+PREVIEW_ROUTINE=0
+PREVIEW_COMPLETE=1
 PRESENTATION_LOCK_TIMEOUT=${FM_STATUS_PRESENTATION_LOCK_TIMEOUT:-10}
 BRANCH_OUTCOMES_RC=0
+# This presentation's backlog hold counts (load_hold_counts).
+HOLD_COUNTS=
+HOLD_COUNTS_STATE=skipped
 # The tasks BRANCH OUTCOMES presented, oldest first, for claim_wake_usage.
 BRANCH_OUTCOME_TASKS=
 case "$PRESENTATION_LOCK_TIMEOUT" in ''|*[!0-9]*|0) PRESENTATION_LOCK_TIMEOUT=10 ;; esac
@@ -167,11 +211,10 @@ write_rows_file_locked() { # <target> <source>
   _fm_atomic_replace "$source" "$target"
 }
 
-# claim_main_rows_locked [<cutoff>]: claim every unreserved queued row for main,
-# or with a cutoff only the unreserved rows at or below it. Rows main already
-# owns stay owned either way.
-claim_main_rows_locked() {
-  DRAIN_TMP=$(mktemp "$STATE/.main-eligible-rows.tmp.XXXXXX") || return 1
+# main_rows_locked [<cutoff>]: print, in order, the sequence of every queued row
+# main owns or may claim: each row a live branch grant does not reserve, or
+# with a cutoff only those at or below it, plus the rows main already owns.
+main_rows_locked() {
   awk -F '\t' -v branch="$ELIGIBLE_ROWS_FILE" -v main="$MAIN_ROWS_FILE" -v cutoff="${1:-}" '
     BEGIN {
       while ((getline line < branch) > 0) reserved[line]=1
@@ -182,9 +225,61 @@ claim_main_rows_locked() {
       if (!($2 in reserved) && (cutoff == "" || $2 + 0 <= cutoff + 0)) owned[$2]=1
     }
     END { for (seq in owned) if (seq in present) print seq }
-  ' "$FM_WAKE_QUEUE" | LC_ALL=C sort -n > "$DRAIN_TMP" || return 1
+  ' "$FM_WAKE_QUEUE" | LC_ALL=C sort -n
+}
+
+# claim_main_rows_locked [<cutoff>]: claim main_rows_locked's rows for main.
+claim_main_rows_locked() {
+  DRAIN_TMP=$(mktemp "$STATE/.main-eligible-rows.tmp.XXXXXX") || return 1
+  main_rows_locked "${1:-}" > "$DRAIN_TMP" || return 1
   write_rows_file_locked "$MAIN_ROWS_FILE" "$DRAIN_TMP" || return 1
   DRAIN_TMP=
+}
+
+# preview_count <key> <count>: record one section's count for --preview's
+# summary. A no-op outside a preview.
+preview_count() {
+  [ "$PREVIEW" = true ] || return 0
+  printf '%s=%s\n' "$1" "$2" >> "$PREVIEW_STAGING"
+}
+
+# write_preview_summary: publish --preview's summary (header) from the staged
+# section counts and the main shell's own.
+write_preview_summary() {
+  local token=$RECOVERY_MARKER_TOKEN recovery=none generation=
+  case "$token" in
+    pending:*|announced:*|acked:*)
+      recovery=${token%:*}
+      generation=${token##*:}
+      ;;
+  esac
+  grep -q '^unread=' "$PREVIEW_STAGING" || printf 'unread=0\n' >> "$PREVIEW_STAGING" || return 1
+  grep -q '^backstop=' "$PREVIEW_STAGING" || printf 'backstop=0\n' >> "$PREVIEW_STAGING" || return 1
+  {
+    printf 'rows=%s\n' "$PREVIEW_ROWS"
+    printf 'unusable=%s\n' "$PREVIEW_UNUSABLE"
+    printf 'captain=%s\n' "$PREVIEW_CAPTAIN"
+    printf 'routine=%s\n' "$PREVIEW_ROUTINE"
+    printf 'complete=%s\n' "$PREVIEW_COMPLETE"
+    printf 'recovery=%s\n' "$recovery"
+    printf 'generation=%s\n' "$generation"
+  } >> "$PREVIEW_STAGING" || return 1
+  _fm_atomic_replace "$PREVIEW_STAGING" "$PREVIEW_SUMMARY" || return 1
+  PREVIEW_STAGING=
+}
+
+# finish_preview [<deduped-raw-rows>]: the tail every --preview path shares once
+# the queue lock is released: the status sections and outcomes without their
+# receipts, the summary, then the liveness assertion a drain ends on.
+finish_preview() {
+  (print_status_presentation "${1:-}") || PREVIEW_COMPLETE=0
+  print_branch_outcomes_section || { BRANCH_OUTCOMES_RC=1; PREVIEW_COMPLETE=0; }
+  write_preview_summary || {
+    echo "wake drain: preview summary could not be written to $PREVIEW_SUMMARY" >&2
+    exit 1
+  }
+  assert_watcher_liveness
+  exit "$BRANCH_OUTCOMES_RC"
 }
 
 consume_actor_rows_locked() { # <rows-file> <cutoff>
@@ -240,7 +335,15 @@ case "${1:-}" in
     case "$ACK_GENERATION" in ''|*[!A-Za-z0-9._-]*) echo "wake drain: invalid recovery generation" >&2; exit 2 ;; esac
     [ "$#" -eq 4 ] || { echo "wake drain: unexpected acknowledgement arguments" >&2; exit 2; }
     ;;
-  *) echo "usage: fm-wake-drain.sh [--ack-through SEQUENCE --recovery-generation GENERATION]" >&2; exit 2 ;;
+  --preview)
+    [ "$#" -eq 2 ] && [ -n "$2" ] \
+      || { echo "wake drain: --preview requires one summary file path" >&2; exit 2; }
+    [ "$ACTOR" = main ] \
+      || { echo "wake drain: --preview is session start's read and runs as main only" >&2; exit 2; }
+    PREVIEW=true
+    PREVIEW_SUMMARY=$2
+    ;;
+  *) echo "usage: fm-wake-drain.sh [--ack-through SEQUENCE --recovery-generation GENERATION | --preview SUMMARY_FILE]" >&2; exit 2 ;;
 esac
 
 [ "$ACTOR" != branch ] || require_branch_eligible_rows || exit 1
@@ -423,6 +526,7 @@ EOF
     return 0
   fi
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
+  preview_count backstop $((shown + omitted))
   printf 'STATUS OUTCOME BACKSTOP (newest captain-facing task event has no covering branch outcome):\n' || return 1
   printf '%s' "$output" || return 1
   if [ "$omitted" -gt 0 ]; then
@@ -459,7 +563,99 @@ print_unread_status_section() {
 $unread
 EOF
 
+  preview_count unread "$shown"
   [ "$shown" -gt 0 ] || return 0
+}
+
+# Read this home's backlog holds once per presentation, by the one rule
+# bin/fm-hold-count-lib.sh owns, for WAITING FOR CAPTAIN and the snooze marks on
+# OPEN DECISIONS. Sets HOLD_COUNTS to its lines and HOLD_COUNTS_STATE to ok, to
+# unreadable when the backlog could not be read in time (FM_HOLD_COUNT_TIMEOUT
+# seconds, default 20), or to skipped when the status logs are not this home's
+# own (state is not $FM_HOME/state), since another home's backlog says nothing
+# about them. Never fails the drain.
+load_hold_counts() {
+  local bound snapshot
+  HOLD_COUNTS=
+  HOLD_COUNTS_STATE=skipped
+  [ "$STATE" = "$FM_HOME/state" ] || return 0
+  bound=${FM_HOLD_COUNT_TIMEOUT:-20}
+  case "$bound" in ''|*[!0-9]*|0) bound=20 ;; esac
+  HOLD_COUNTS_STATE=unreadable
+  snapshot=$(fm_run_timed "$bound" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-fleet-snapshot.sh" --contribution-input 2>/dev/null) || return 0
+  HOLD_COUNTS=$(printf '%s\n' "$snapshot" | fm_hold_counts) || { HOLD_COUNTS=; return 0; }
+  HOLD_COUNTS_STATE=ok
+}
+
+# The words for a snooze running to <until>: its date, no date, or a date that
+# has passed (a parked hold stays a snooze after its date until it is lifted).
+snooze_mark() {  # <until-or-empty>
+  if [ -z "$1" ]; then
+    printf 'snoozed, no date'
+  elif [[ "$1" > "$(date +%Y-%m-%d)" ]]; then
+    printf 'snoozed until %s' "$1"
+  else
+    printf 'snoozed, its date %s has passed' "$1"
+  fi
+}
+
+# Print the WAITING FOR CAPTAIN section: every captain call held in this home's
+# backlog that is due, by bin/fm-hold-count-lib.sh's rule - the same rule that
+# labels a live T3 worker's card "Waiting for captain" - with the task it was
+# raised for and any blocker it still waits behind. A call the captain put off
+# to a later date is not listed as waiting; one closing line names those with
+# their dates, so they stay in sight. Bounded and silent: nothing prints when no
+# captain call is held. A backlog that could not be read is said so, since the
+# snooze marks on OPEN DECISIONS are then missing too.
+print_waiting_for_captain_section() {
+  local kind task row origin until blockers title line output='' used=0 shown=0 omitted=0 bytes
+  local later='' item_bytes=220 global_bytes=3000 tab
+  if [ "$HOLD_COUNTS_STATE" = unreadable ]; then
+    printf 'WAITING FOR CAPTAIN: the backlog could not be read, so the captain calls are not listed here and OPEN DECISIONS carries no snooze marks; read them with bin/fm-tasks-axi.sh list.\n'
+    return
+  fi
+  [ "$HOLD_COUNTS_STATE" = ok ] && [ -n "$HOLD_COUNTS" ] || return 0
+  tab=$(printf '\t')
+  while IFS=$tab read -r kind task row origin until blockers title; do
+    [ "$task" = "$row" ] || continue
+    case "$kind" in
+      dated)
+        later="$later${later:+, }$row until $until"
+        continue
+        ;;
+      captain) ;;
+      *) continue ;;
+    esac
+    line=$row
+    [ "$origin" = - ] || line="$line (for $origin)"
+    [ "$blockers" = - ] || line="$line (blocked by $blockers)"
+    line="$line: $title"
+    fm_cap_line_var "$line" $((item_bytes - 1))
+    line=$FM_LINE_CAP_LINE
+    bytes=$(( ${#line} + 1 ))
+    if [ $((used + bytes)) -gt "$global_bytes" ]; then
+      omitted=$((omitted + 1))
+      continue
+    fi
+    output="$output$line
+"
+    used=$((used + bytes))
+    shown=$((shown + 1))
+  done <<EOF
+$HOLD_COUNTS
+EOF
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || [ -n "$later" ] || return 0
+  printf 'WAITING FOR CAPTAIN (captain calls held in the backlog and due, by the rule T3 labels Waiting for captain; a standing list, not new events, and a snoozed OPEN DECISIONS entry is never one of them):\n' || return 1
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || printf '(none due)\n' || return 1
+  printf '%s' "$output" || return 1
+  if [ "$omitted" -gt 0 ]; then
+    printf 'WAITING FOR CAPTAIN: %d more omitted (byte cap)\n' "$omitted" || return 1
+  fi
+  if [ -n "$later" ]; then
+    fm_cap_line_var "WAITING FOR CAPTAIN: put off by the captain, not waiting: $later" $((item_bytes * 3 - 1))
+    printf '%s\n' "$FM_LINE_CAP_LINE" || return 1
+  fi
 }
 
 # Print the consolidated OPEN DECISIONS section: every still-open
@@ -477,9 +673,15 @@ EOF
 # fm-classify-lib.sh's "incremental (cursor-backed) open-decisions fold").
 # Bounded and silent: prints nothing when no decision is open, which is the
 # common case.
+#
+# An entry whose task the captain snoozed (load_hold_counts below) is marked
+# with the date the snooze runs to, or as snoozed with no date, and listed after
+# every unmarked entry, so firstmate still sees it as context but never reads it
+# as a call waiting on the captain and the byte cap drops it first. The
+# captain's waiting calls are WAITING FOR CAPTAIN's.
 print_open_decisions_section() {
   local snapshot=${1:-} open task key verb note line item_bytes=220 global_bytes=4000
-  local output='' used=0 shown=0 omitted=0 bytes
+  local output='' used=0 shown=0 omitted=0 bytes until waiting='' snoozed='' tab
 
   if [ -n "$snapshot" ]; then
     open=$(scan_open_decisions_snapshot "$STATE" "$snapshot") || return 1
@@ -488,7 +690,24 @@ print_open_decisions_section() {
   fi
   [ -n "$open" ] || return 0
 
-  while IFS=$(printf '\t') read -r task key verb note; do
+  # Order the entries: every unmarked one first, then the snoozed ones with
+  # their mark on the verb.
+  tab=$(printf '\t')
+  while IFS=$tab read -r task key verb note; do
+    [ -n "$task" ] || continue
+    if [ "$HOLD_COUNTS_STATE" = ok ] \
+      && until=$(printf '%s\n' "$HOLD_COUNTS" | fm_hold_snoozed "$task"); then
+      snoozed="$snoozed$task$tab$key$tab$verb ($(snooze_mark "$until"), not waiting on the captain)$tab$note
+"
+    else
+      waiting="$waiting$task$tab$key$tab$verb$tab$note
+"
+    fi
+  done <<EOF
+$open
+EOF
+
+  while IFS=$tab read -r task key verb note; do
     [ -n "$task" ] || continue
     # State the folded key on EVERY entry, "default" included. This section's
     # own hint asks the operator to pass that key to fm-send, and the note is
@@ -514,7 +733,7 @@ print_open_decisions_section() {
     used=$((used + bytes))
     shown=$((shown + 1))
   done <<EOF
-$open
+$waiting$snoozed
 EOF
 
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
@@ -776,7 +995,11 @@ ROWS
   if [ -n "$text" ]; then
     printf '%s' "$text" || return 1
   fi
+  PREVIEW_CAPTAIN=$((shown + held))
+  PREVIEW_ROUTINE=$routine_count
   [ "$through" -gt 0 ] || return 0
+  # A preview leaves every row unread (header).
+  [ "$PREVIEW" != true ] || return 0
   if ! "$SCRIPT_DIR/fm-branch-outcome.sh" mark-read --through "$through" >/dev/null 2>&1; then
     printf 'BRANCH OUTCOMES: the store could not record this presentation, so these outcomes are presented again on the next drain and an acknowledgement above is refused until then.\n' >&2
     return 1
@@ -811,15 +1034,37 @@ cap_outcome_line() {  # <line> <max-bytes>
   OUTCOME_LINE_BYTES=${#OUTCOME_LINE}
 }
 
+# preview_unchanged_cursor <snapshot>: the presentation snapshot with every
+# task's endpoint replaced by the offset its cursor already holds, so
+# committing it presents nothing as read.
+preview_unchanged_cursor() {
+  local snapshot=$1 task endpoint ident offset
+  while IFS=$(printf '\t') read -r task endpoint ident; do
+    [ -n "$task" ] || continue
+    offset=$(status_presentation_cursor_offset "$STATE/$task.status") || return 1
+    printf '%s\t%s\t%s\n' "$task" "$offset" "$ident" || return 1
+  done <<EOF
+$snapshot
+EOF
+}
+
 print_status_sections() {
   local snapshot=${1:-} fully_presented=${2:-} acknowledged prepared
   if [ -z "$snapshot" ]; then snapshot=$(status_presentation_snapshot "$STATE") || return 1; fi
   [ -n "$snapshot" ] || return 0
-  acknowledged=$(status_acknowledge_presented_snapshot "$STATE" "$snapshot" "$fully_presented") || return 1
+  if [ "$PREVIEW" = true ]; then
+    # Read before the sections run: the OPEN DECISIONS fold below advances the
+    # legacy per-task cursor that seeds an absent manifest.
+    acknowledged=$(preview_unchanged_cursor "$snapshot") || return 1
+  else
+    acknowledged=$(status_acknowledge_presented_snapshot "$STATE" "$snapshot" "$fully_presented") || return 1
+  fi
   prepared=$(mktemp "$STATE/.status-presentation.prepared.XXXXXX") || return 1
+  load_hold_counts
   if ! {
     print_unread_status_section "$snapshot" \
       && print_status_outcome_backstop_section "$snapshot" \
+      && print_waiting_for_captain_section \
       && print_open_decisions_section "$snapshot" \
       && print_record_divergence_section \
       && print_board_feedback_section
@@ -834,7 +1079,17 @@ print_status_sections() {
     rm -f -- "$prepared"
     return 1
   fi
-  if ! status_commit_presentation_snapshot "$STATE" "$acknowledged"; then
+  if [ "$PREVIEW" = true ]; then
+    # A preview takes no receipt (header). With no manifest yet, the offsets
+    # are pinned where they were, because that fold just moved the legacy
+    # cursor a later drain would otherwise read them from.
+    STATUS_OUTCOME_BACKSTOP_ACKNOWLEDGED=
+    if [ ! -e "$STATE/.status-presentation-cursor" ] && [ ! -L "$STATE/.status-presentation-cursor" ] \
+      && ! status_commit_presentation_snapshot "$STATE" "$acknowledged"; then
+      rm -f -- "$prepared"
+      return 1
+    fi
+  elif ! status_commit_presentation_snapshot "$STATE" "$acknowledged"; then
     rm -f -- "$prepared"
     return 1
   fi
@@ -957,6 +1212,7 @@ cleanup() {
   local status=$?
   [ -z "$DRAIN_TMP" ] || rm -f -- "$DRAIN_TMP" 2>/dev/null || true
   [ -z "$DRAIN_VIEW_TMP" ] || rm -f -- "$DRAIN_VIEW_TMP" 2>/dev/null || true
+  [ -z "$PREVIEW_STAGING" ] || rm -f -- "$PREVIEW_STAGING" 2>/dev/null || true
   if [ "$DRAIN_LOCK_HELD" = true ]; then
     fm_lock_release "$FM_WAKE_QUEUE_LOCK"
   fi
@@ -984,7 +1240,7 @@ fi
 DRAIN_LOCK_HELD=true
 rotate_scratch_locked
 [ "$ACTOR" = branch ] || reclaim_stale_branch_grant_locked || exit 1
-[ "$ACTOR" != main ] || retire_unconsumable_rows_locked
+[ "$ACTOR" != main ] || [ "$PREVIEW" = true ] || retire_unconsumable_rows_locked
 [ "$ACTOR" != branch ] || require_branch_eligible_rows || exit 1
 
 if [ -n "$ACK_THROUGH" ]; then
@@ -1122,6 +1378,50 @@ if [ -n "$ACK_THROUGH" ]; then
       "$ACK_THROUGH" "$ACK_REMOVED" >&2
   fi
   exit 0
+fi
+
+if [ "$PREVIEW" = true ]; then
+  # The whole preview: read the marker and main's rows under the queue lock,
+  # change neither, then present.
+  PREVIEW_STAGING=$(mktemp "$PREVIEW_SUMMARY.staging.XXXXXX") || {
+    echo "wake drain: preview summary could not be staged beside $PREVIEW_SUMMARY" >&2
+    exit 1
+  }
+  fm_recovery_marker_snapshot "$RECOVERY_MARKER" || true
+  RECOVERY_MARKER_TOKEN=$FM_RECOVERY_MARKER_TOKEN
+  if [ -s "$FM_WAKE_QUEUE" ]; then
+    if [ -e "$ELIGIBLE_ROWS_FILE" ] || [ -L "$ELIGIBLE_ROWS_FILE" ]; then
+      require_branch_eligible_rows || exit 1
+    fi
+    PREVIEW_UNUSABLE=$(awk -F '\t' '!(NF >= 5 && $2 ~ /^[0-9]+$/) { n++ } END { print n + 0 }' "$FM_WAKE_QUEUE") || exit 1
+    DRAIN_TMP=$(mktemp "$STATE/.main-eligible-rows.tmp.XXXXXX") || exit 1
+    main_rows_locked > "$DRAIN_TMP" || exit 1
+    if [ -s "$DRAIN_TMP" ]; then
+      DRAIN_VIEW_TMP=$(mktemp "$STATE/.wake-queue.actor-view.XXXXXX") || exit 1
+      awk -F '\t' -v seqs="$DRAIN_TMP" '
+        BEGIN { while ((getline line < seqs) > 0) keep[line]=1 }
+        NF >= 5 && ($2 in keep)
+      ' "$FM_WAKE_QUEUE" > "$DRAIN_VIEW_TMP" || exit 1
+      RAW_ROWS=$(fm_wake_print_deduped "$DRAIN_VIEW_TMP") || exit "$?"
+      rm -f -- "$DRAIN_VIEW_TMP" || exit 1
+      DRAIN_VIEW_TMP=
+    else
+      print_branch_held_notice
+    fi
+    rm -f -- "$DRAIN_TMP" || exit 1
+    DRAIN_TMP=
+  else
+    # As a drain does, leave an empty queue file: the acknowledgement that
+    # settles an empty start reads it.
+    : > "$FM_WAKE_QUEUE"
+  fi
+  fm_lock_release "$FM_WAKE_QUEUE_LOCK"
+  DRAIN_LOCK_HELD=false
+  if [ -n "$RAW_ROWS" ]; then
+    printf '%s\n' "$RAW_ROWS" || exit "$?"
+    PREVIEW_ROWS=$(printf '%s\n' "$RAW_ROWS" | awk 'END { print NR }') || exit 1
+  fi
+  finish_preview "$RAW_ROWS"
 fi
 
 if [ ! -s "$FM_WAKE_QUEUE" ]; then

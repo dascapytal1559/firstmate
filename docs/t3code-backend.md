@@ -286,6 +286,7 @@ A worker holds an open board while its task-owned registration in [`bin/fm-proce
 A round the captain sent or a session the captain ended is the worker's to handle, a concluded or retired board has no registration, and a registry that cannot be read counts no board.
 A captain hold with an `--until` date still ahead counts as snoozed by the backlog's own date rule; on the date, the same hold reads `Waiting for captain` again with no other action, within a minute of the date arriving.
 A hold on a task with no live T3 ship or scout has no card and changes nothing, and the hold itself stays open until firstmate records the captain's answer.
+Which holds count for a worker, and which of them are its snooze, is [`bin/fm-hold-count-lib.sh`](../bin/fm-hold-count-lib.sh)'s one rule, which `bin/fm-wake-drain.sh` also uses to list the captain calls waiting on the captain and to mark a snoozed task's open decisions, so firstmate and the cards agree on what is waiting.
 A run left only watching a PR with green checks reads as done, so the card then reads `Queued`, or `Waiting for captain` when landing needs the captain's approval.
 
 The label is a projection with no record of its own: [`bin/fm-t3-crew-status.sh`](../bin/fm-t3-crew-status.sh) computes every live card's label afresh from the backlog's holds, each worker's current state, open decisions, open boards, recorded merge posture, and steering inbox, and its live thread, then changes only the cards whose live label differs, in one T3 session.

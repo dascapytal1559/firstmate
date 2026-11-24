@@ -7,7 +7,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 
 | Script                   | Purpose                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------ |
-| `fm-session-start.sh`    | Compose lock, bootstrap, and wake drain into the single ordered session-start digest |
+| `fm-session-start.sh`    | Compose lock, bootstrap, and a wake-queue preview into the single ordered session-start digest, and settle a provably empty start |
 | `fm-sessionstart-nudge.sh` | Print the native session-start hook nudge when the primary has not already run the digest |
 | `fm-sessionstart-run.sh` | Route a native session-open hook to the full digest, a context re-emit, or the nudge |
 | `fm-operational-input.sh` | Construct and parse the canonical cross-language operational-input protocol |
@@ -51,6 +51,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-rex-marks.sh`        | Opt-in: turn each Rex task's latest status into one badge and notification on its pane, plus validation progress and an optional tint (`plan`, `sync`, `clear`); the watcher runs `sync` each poll while the option or a cached record exists, and cleanup runs `clear` |
 | `fm-osc7501.sh`          | Launch-driven [OSC 7501 worker status bridge](configuration.md#osc-7501-worker-status-reporting); its header owns commands and reporting rules |
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, bounded concurrency, budgets, coverage guard, timing/JSON; refuses to execute in the repository primary checkout when `FM_TASK_ID` marks a task worker |
+| `fm-ci-budget-warn.sh`   | Emit a warning-only annotation when a CI lane's measured command time crosses twenty minutes |
 | `fm-test-isolation-proof.sh` | Concurrent isolation harness and portable candidate set owner |
 | `fm-ensure-agents-md.sh` | Manually initialize project agent-memory files (see the helper's header and help) |
 | `fm-capacity.sh`         | Report of open lanes against the optional `config/lane-capacity` target, or a measured `auto` budget, and host headroom for queued-work dispatch; `--publish` writes this home's `state/lane-capacity.json`, and `--spawn-gate` is the opt-in spawn check |
@@ -104,6 +105,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-t3-approve.sh`       | Allow or deny a recorded T3 worker's pending permission approval                     |
 | `fm-t3-restart.sh`       | After a T3 server restart, steer only the T3 workers whose turn T3 shows as cut off |
 | `fm-t3-restart-request.sh` | Before restarting T3, request the restart through its registry and wait until every turn has finished; cancel on a timeout or stop |
+| `fm-hold-count-lib.sh`   | Single owner of which open backlog holds count for which task - a due captain call, a snooze, or a deferral - shared by the T3 crew cards and the wake drain |
 | `fm-t3-crew-status.sh` | Keep each live T3 worker's card status label ("Waiting for captain", "Testing", "☾︎ Scheduled", "Queued", "Waiting", "Failed") in line with who moves next |
 | `fm-t3-bridge.sh`        | Keep T3's Bridge in line with the objectives file and the model routing table |
 | `fm-t3-worker-reply.sh`  | Name the task behind a captain message T3 forwarded from a worker's thread, and the settle, un-settle, snooze, or un-snooze it carries |
@@ -146,7 +148,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-credential-source-lib.sh` | Single owner of the declared credential-source schema and its adapters, read by `fm-dispatch-resolve.sh` and checked by `fm-bootstrap.sh` |
 | `fm-quota-choose.sh`     | Choose the first candidate with known positive quota from an ordered harness:model list |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |
-| `fm-wake-drain.sh`       | Present and acknowledge the current actor's claimed wake rows alongside status, outcome-backstop, decision, divergence, board-feedback, supervision-host outcome, recovery, and supervision checks |
+| `fm-wake-drain.sh`       | Present and acknowledge, or for session start only preview, the current actor's claimed wake rows alongside status, outcome-backstop, decision, divergence, board-feedback, supervision-host outcome, recovery, and supervision checks |
 | `fm-wake-grant.sh`       | Serialize Pi supervision-branch wake-row claim activation, publication, release, and deactivation |
 | `fm-wake-lib.sh`         | Shared durable wake queue, recovery generations, portable locks, and watcher identity/health helpers |
 | `fm-path-lib.sh`         | Fork-free `dirname`/`basename` equivalents with no source-time side effects             |

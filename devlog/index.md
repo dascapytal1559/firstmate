@@ -2211,3 +2211,85 @@ The choices made:
 - Anything cleanup cannot recognise counts as running, so a wrong guess costs one question and never a killed command.
 
 The evidence is the cleanup and park test suites, plus a read-only pass over the live fleet: idle workers counted nothing, while a real dev server and running test jobs were named.
+
+## 82. Firstmate reads out the calls that are really waiting (24 November 2026)
+
+At the start of a session, Firstmate told the captain two items were waiting on him that he had snoozed in T3, and missed the two that T3 showed as "Waiting for captain".
+
+> Snoozed ones should not be read out, but the ones T3 shows as "Waiting for captain" should be.
+
+The cause was two lists that disagreed.
+The digest's prominent open-decisions list is folded from the workers' status logs, so it still showed two review-board decisions whose tasks the captain had snoozed.
+The two real calls had been moved onto held backlog items, which closes them in the status log, so they showed only as rows in the long backlog listing, and Firstmate trusted the prominent list.
+
+What was built:
+
+- **One rule, shared.** The rule that decides a T3 card reads "Waiting for captain", and which holds are a snooze, moved into one small library that the cards and Firstmate's wake digest both read, so the two can no longer drift.
+- **A list of what waits on the captain.** Every digest now opens its decisions with a WAITING FOR CAPTAIN list: each captain call held in the backlog and due, with the worker it was raised for and anything it still waits behind. Calls the captain put off to a later date are named on one closing line with their dates.
+- **Snoozed decisions are marked, not hidden.** An open decision on a snoozed task now says so, with the date it comes back or "no date", and sits after every decision that is still live, so Firstmate keeps the context without mistaking it for a waiting call.
+
+How it reads, on a test home with one snoozed board, one board put off to a date, and one call moved to the backlog:
+
+```
+WAITING FOR CAPTAIN (captain calls held in the backlog and due, by the rule T3 labels Waiting for captain; a standing list, not new events, and a snoozed OPEN DECISIONS entry is never one of them):
+chart-pick (for worker-n): Pick the chart
+WAITING FOR CAPTAIN: put off by the captain, not waiting: groove until 2026-12-07
+OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):
+live-w [key=api] needs-decision: REST or RPC
+board-a [key=board-review] needs-decision (snoozed, no date, not waiting on the captain): review board A
+groove [key=board-review] needs-decision (snoozed until 2026-12-07, not waiting on the captain): review groove
+```
+
+The choices made:
+
+- The list covers every due captain call in the backlog, not only those with a live T3 card, because a call outlives the worker that raised it.
+- A call blocked behind other work still counts as waiting, as it does on the card, and says what it is blocked by.
+- If the backlog cannot be read, the digest says so instead of showing an empty list, and the open decisions still print.
+
+The evidence is the open-decisions suite, with new cases for a snoozed task's decision, a call moved to the backlog, a call whose date has arrived, and an unreadable backlog, plus the card status suite unchanged.
+
+## 83. A new session stops costing an empty second turn (25 November 2026)
+
+![Before: session start read the queue inside the startup hook and marked it shown while Firstmate received 2,000 of 62,000 characters, turn 1 answered in one line, and the next watcher announced a recovery that was empty 30 times in 32; after: session start previews and marks nothing, takes the dead watcher's lock over and acknowledges an empty start itself, and the next watcher starts quietly](media/session-start-settles.svg)
+
+Starting a new Firstmate session produced two turns that said nothing: a one-line reply to the note that opened the session, then a "recovery" notification a few seconds later whose read of the queue was empty.
+The captain asked what happens when something is waiting, and then:
+
+> Yeah, let's deeply investigate this. We definitely want to be careful to map out every scenario so that we don't have any risk of like losing an action or regress.
+
+The investigation read every recorded session start, 167 of them, and reproduced each case on made-up state.
+
+- **The startup summary mostly never arrives.** It is about 62,000 characters; the harness passes on the first 2,000 and a file path. That happened at every one of the 167 starts.
+- **Session start had already marked what it showed.** Its read of the queue ran inside the startup hook and took the receipt for three show-once kinds: unread status notes, the line for a finished worker no outcome covers, and routine supervision outcomes. Twice a routine outcome was listed at startup and never seen.
+- **The second turn had nothing to do with the queue.** The old session's watcher dies with its lock still held, so the first watcher after turn 1 announces a recovery whatever is queued. It was empty in 30 of 32 rotations.
+- **A worker finishing during a restart took three turns to be heard**, after one ignored summary and one empty turn.
+
+After the report he named the weak point himself:
+
+> I don't see T3s new, like... Like empty message turn has any real meaning.
+
+What was built, in Firstmate:
+
+- **Session start looks without marking.** Its read is a preview that prints the same lines and takes no receipt: no cursor moves, no queue entry is claimed, no acknowledgement is printed. The read that counts is the one Firstmate runs in a turn.
+- **One line says what to do.** The `WAKE QUEUE` section now opens with a verdict that fits in what the harness passes on.
+- **An empty start settles itself.** Session start takes a dead watcher's lock over the way a starting watcher would and, when the preview proves nothing is waiting, runs the existing acknowledgement that retires that downtime. The next watcher starts quietly.
+- **A turn that reads the queue and never acknowledges is replayed** at that turn's end, instead of waiting for the next unrelated notification.
+
+How the first line reads, on test homes:
+
+```
+Nothing is waiting. The previous watcher (pid 39842) had died without releasing its lock; session start took the lock over. Session start acknowledged the open recovery episode, so no follow-up wake is owed for it.
+```
+
+```
+3 waiting (1 queued wake, 1 unread status line, 1 uncovered task outcome): run bin/fm-wake-drain.sh now, handle them, then run the acknowledgement it prints. The lines below are a preview that marks nothing as presented.
+```
+
+The choices made:
+
+- Upstream was asked to skip the empty recovery in the watcher and declined, because the gap itself is news and a read and acknowledgement should retire it. So the watcher is untouched: session start reports the gap in its first line and makes that acknowledgement, and only when it can prove there is nothing else to do.
+- Any doubt settles nothing: something waiting, a read that could not finish, a watcher still alive, an away session, a session without the lock. The notification then comes exactly as before.
+- That acknowledgement can remove no queue entry and retires nothing while one is queued, so a notification that lands at any moment still gets its turn.
+- The note that opens a rotated session still says to reply in one line. Changing it so that turn handles what is waiting is the T3 fork's half and follows separately.
+
+The evidence is a regression test that fails on the old code (a startup nobody reads, then a drain that must still show the note), the session-start, queue, watcher and Stop-wrapper suites with new cases for each scenario, and a mutation check that the legacy-cursor case really bites.
