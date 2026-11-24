@@ -24,6 +24,12 @@
 #   - composition: the script invokes the real fm-lock.sh/fm-bootstrap.sh/
 #     fm-wake-drain.sh (their real, distinctive output appears verbatim), it
 #     does not reimplement their logic
+#   - the wake-queue stage: its read of the queue is a preview that leaves
+#     every show-once item for the drain firstmate runs, its verdict leads the
+#     section inside a harness preview's reach, it takes a dead watcher's lock
+#     over and settles a provably empty start so the next watcher stays quiet,
+#     and it settles nothing when anything waits, a watcher is alive, the home
+#     is away, the preview could not finish, or the session is read-only
 #   - the deferred startup stage: slow network and inactive current-state reads
 #     do not delay the digest, the work still runs and lands durable findings, a
 #     network result surfaces exactly once (inline or as a wake, never both), a
@@ -2627,7 +2633,7 @@ FIXTURE
 }
 
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain() {
-  local rec root home fakebin network_report reemit sequence generation
+  local rec root home fakebin network_report reemit drained sequence generation
   rec=$(new_world reemit)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -2653,12 +2659,16 @@ EOF
 
   assert_contains "$reemit" "SESSION START (CONTEXT RE-EMIT) - $home" "--reemit did not label itself"
   assert_not_contains "$reemit" "SECONDMATE_LIVENESS" "--reemit repeated a mutating sweep startup already ran"
-  assert_contains "$reemit" "done: queued after the re-emit too" "--reemit did not drain the wake queue"
+  assert_contains "$reemit" "done: queued after the re-emit too" "--reemit did not preview the wake queue"
+  assert_contains "$(wake_queue_verdict "$reemit")" "1 waiting (1 queued wake): run bin/fm-wake-drain.sh now" \
+    "--reemit did not lead its wake queue with the waiting verdict"
   [ -s "$home/state/.wake-queue" ] || fail "--reemit removed the wake before its handling acknowledgement"
-  sequence=$(printf '%s\n' "$reemit" | sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' | tail -1)
-  generation=$(printf '%s\n' "$reemit" | sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' | tail -1)
+  drained=$(FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-wake-drain.sh" 2>&1) \
+    || fail "the drain after --reemit failed"
+  sequence=$(printf '%s\n' "$drained" | sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' | tail -1)
+  generation=$(printf '%s\n' "$drained" | sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' | tail -1)
   [ -n "$sequence" ] && [ -n "$generation" ] \
-    || fail "--reemit omitted the generation-bound wake acknowledgement"
+    || fail "the drain after --reemit omitted the generation-bound wake acknowledgement"
   FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-wake-drain.sh" --ack-through "$sequence" \
     --recovery-generation "$generation" || fail "--reemit wake acknowledgement failed"
   [ ! -s "$home/state/.wake-queue" ] || fail "--reemit acknowledgement left queued wakes behind"
@@ -2666,7 +2676,7 @@ EOF
   assert_contains "$reemit" "FLEET STATE" "--reemit dropped the fleet-state digest"
   assert_contains "$reemit" "NEXT STEP" "--reemit dropped the closing reminder"
 
-  pass "--reemit reprints the digest without repeating startup's mutating sweeps and still drains queued wakes"
+  pass "--reemit reprints the digest without repeating startup's mutating sweeps and still previews queued wakes for the drain"
 }
 
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
@@ -3292,6 +3302,256 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+# --- wake queue: preview, verdict, and settling an empty start ---------------
+
+# The first line under the WAKE QUEUE heading and its rule.
+wake_queue_verdict() {  # <digest>
+  printf '%s\n' "$1" | awk 'before == "WAKE QUEUE" { print; exit } { before = previous; previous = $0 }'
+}
+
+# Everything the WAKE QUEUE section printed, up to the next top-level section.
+wake_queue_section() {  # <digest>
+  printf '%s\n' "$1" | awk '
+    on && /^==========/ { exit }
+    on { print }
+    before == "WAKE QUEUE" { on = 1; print }
+    { before = previous; previous = $0 }
+  '
+}
+
+# A watcher singleton whose recorded holder is gone. Echoes the dead pid.
+make_dead_watcher_lock() {  # <state-dir>
+  local state=$1 pid
+  sleep 0 &
+  pid=$!
+  wait "$pid" 2>/dev/null || true
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$pid" > "$state/.watch.lock/pid"
+  printf '%s\n' "$pid"
+}
+
+# The drain firstmate runs in a turn, in the same fixture world as the digest.
+run_turn_drain() {  # <home> <root> <path> [fm-wake-drain args...]
+  local home=$1 root=$2 path=$3
+  shift 3
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$path" \
+    "$ROOT/bin/fm-wake-drain.sh" "$@" 2>&1
+}
+
+# One real watcher cycle for <home>: prints its reason line, or `quiet` when it
+# is still polling after <polls> tenths of a second, and stops it either way.
+# It runs on the host's real ps, because the suite's fake ps answers only the
+# harness-ancestry questions and a watcher must prove its own identity.
+watcher_cycle_after_start() {  # <home> <root> <polls>
+  local home=$1 root=$2 polls=$3 out pid i=0
+  out="$home/watcher-cycle.out"
+  mkdir -p "$home/watcher-bin"
+  fm_fake_exit0 "$home/watcher-bin" tmux
+  fm_test_track_watcher_state "$home/state"
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$home/watcher-bin:$BASE_PATH" \
+    FM_POLL=1 FM_SIGNAL_GRACE=0 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    "$ROOT/bin/fm-watch.sh" > "$out" 2>/dev/null &
+  pid=$!
+  while [ "$i" -lt "$polls" ] && is_live_non_zombie "$pid"; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    printf 'quiet\n'
+    return 0
+  fi
+  wait "$pid" 2>/dev/null || true
+  head -n 1 "$out"
+}
+
+test_wake_queue_settles_an_empty_start_over_a_dead_watcher() {
+  local rec root home fakebin out dead verdict cycle
+  rec=$(new_world wake-settle-empty)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  dead=$(make_dead_watcher_lock "$home/state")
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  verdict=$(wake_queue_verdict "$out")
+  assert_contains "$verdict" "Nothing is waiting." "an empty start did not lead its wake queue with the nothing-waiting verdict"
+  assert_contains "$verdict" "previous watcher (pid $dead) had died without releasing its lock" \
+    "the verdict hid the watcher downtime session start took over"
+  assert_contains "$verdict" "Session start acknowledged the open recovery episode" \
+    "the verdict did not say the empty recovery was settled"
+  assert_contains "${out:0:2000}" "$verdict" \
+    "the verdict fell outside the 2,000 characters a harness preview keeps"
+  assert_not_contains "$(wake_queue_section "$out")" "WAKE_ACK_REQUIRED" \
+    "session start printed an acknowledgement for a queue only a drain may acknowledge"
+  [ ! -e "$home/state/.watch.lock" ] || fail "session start left the dead watcher's lock for the next watcher to steal"
+  case "$(cat "$home/state/.watcher-down" 2>/dev/null)" in
+    acked:*) ;;
+    *) fail "session start did not retire the empty recovery episode: $(cat "$home/state/.watcher-down" 2>/dev/null)" ;;
+  esac
+
+  # The first watcher after the turn then has nothing to announce.
+  cycle=$(watcher_cycle_after_start "$home" "$root" 50)
+  [ "$cycle" = quiet ] || fail "the first watcher after a settled empty start raised a wake: $cycle"
+
+  # A wake appended afterwards is its own episode and still surfaces.
+  append_wake "$home/state" check inbox:after-start 'check: captain inbox note after-start' \
+    || fail "seed wake failed"
+  cycle=$(watcher_cycle_after_start "$home" "$root" 150)
+  [ "$cycle" = 'check: rearm-resurface' ] \
+    || fail "a wake queued after a settled start did not surface: $cycle"
+  pass "session start takes a dead watcher's lock over, settles a provably empty start, and leaves later wakes to the watcher"
+}
+
+test_wake_queue_preview_leaves_everything_for_the_drain() {
+  local rec root home fakebin out verdict drained cycle
+  rec=$(new_world wake-preview-waiting)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  # A home that has drained before, so "unread" means new since that drain.
+  printf 'working: baseline\n' > "$home/state/task-a.status"
+  printf 'working: baseline\n' > "$home/state/task-b.status"
+  run_turn_drain "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null || fail "baseline drain failed"
+  printf 'note: the answer you asked for is 42\n' >> "$home/state/task-a.status"
+  printf 'done: finished while nothing was watching\n' >> "$home/state/task-b.status"
+  append_wake "$home/state" check inbox:fixture 'check: captain inbox note fixture' || fail "seed wake failed"
+  make_dead_watcher_lock "$home/state" >/dev/null
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  verdict=$(wake_queue_verdict "$out")
+  assert_contains "$verdict" "3 waiting (1 queued wake, 1 unread status line, 1 uncovered task outcome): run bin/fm-wake-drain.sh now, handle them, then run the acknowledgement it prints." \
+    "the verdict did not count what is waiting and name the drain"
+  assert_contains "${out:0:2000}" "3 waiting (1 queued wake" \
+    "the waiting verdict fell outside the 2,000 characters a harness preview keeps"
+  assert_contains "$out" "task-a note: the answer you asked for is 42" "the preview did not present the unread status line"
+  assert_not_contains "$(wake_queue_section "$out")" "WAKE_ACK_REQUIRED" \
+    "session start printed an acknowledgement for rows only a drain may acknowledge"
+  [ ! -e "$home/state/.main-eligible-rows" ] || fail "session start claimed queued rows for main"
+  case "$(cat "$home/state/.watcher-down" 2>/dev/null)" in
+    pending:downtime:*) ;;
+    *) fail "session start settled or opened a recovery episode with work waiting: $(cat "$home/state/.watcher-down" 2>/dev/null)" ;;
+  esac
+
+  # Unsettled, so the first watcher announces instead of waiting silently.
+  cycle=$(watcher_cycle_after_start "$home" "$root" 150)
+  [ "$cycle" = 'check: rearm-resurface' ] \
+    || fail "a start with work waiting did not leave the recovery for the watcher to announce: $cycle"
+
+  # The regression this pins: nobody read that digest, and the drain firstmate
+  # then runs must still present every show-once item.
+  drained=$(run_turn_drain "$home" "$root" "$fakebin:$BASE_PATH") || fail "the turn's drain failed"
+  assert_contains "$drained" "task-a note: the answer you asked for is 42" \
+    "session start consumed the unread status line before any drain presented it"
+  assert_contains "$drained" "task-b done: finished while nothing was watching" \
+    "session start consumed the uncovered task outcome before any drain presented it"
+  assert_contains "$drained" "$(printf 'check\tinbox:fixture\t')" "the queued wake did not reach the turn's drain"
+  assert_contains "$drained" "WAKE_ACK_REQUIRED" "the turn's drain printed no acknowledgement"
+  pass "session start previews the wake queue without consuming a show-once item, a row claim, or the recovery episode"
+}
+
+test_wake_queue_leaves_a_live_watcher_alone() {
+  local rec root home fakebin out verdict holder
+  rec=$(new_world wake-live-watcher)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  sleep 300 &
+  holder=$!
+  mkdir "$home/state/.watch.lock"
+  printf '%s\n' "$holder" > "$home/state/.watch.lock/pid"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  verdict=$(wake_queue_verdict "$out")
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$(cat "$home/state/.watch.lock/pid" 2>/dev/null)" = "$holder" ] \
+    || fail "session start took the singleton from a live watcher"
+  assert_contains "$verdict" "Nothing is waiting." "a start beside a live watcher lost its verdict"
+  assert_not_contains "$verdict" "previous watcher" "session start reported downtime for a watcher that is alive"
+  pass "session start never touches a live watcher's lock"
+}
+
+test_wake_queue_settles_nothing_it_cannot_prove_empty() {
+  local rec root home fakebin out verdict posture token holder
+  for posture in away daemon-flag incomplete read-only; do
+    rec=$(new_world "wake-unsettled-$posture")
+    IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+    make_fake_toolchain "$fakebin"
+    make_fake_ps_claude "$fakebin"
+    token="pending:downtime:fixture.1.$posture"
+    printf '%s\n' "$token" > "$home/state/.watcher-down"
+    holder=
+    case "$posture" in
+      away)
+        FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter --words 'away for the afternoon' >/dev/null \
+          || fail "could not record the away posture"
+        ;;
+      daemon-flag) : > "$home/state/.afk" ;;
+      incomplete)
+        # A cursor manifest that cannot be read makes the status sections fail.
+        printf 'working: baseline\n' > "$home/state/task-a.status"
+        mkdir "$home/state/.status-presentation-cursor"
+        ;;
+      read-only)
+        make_dead_watcher_lock "$home/state" >/dev/null
+        sleep 300 &
+        holder=$!
+        printf '%s\n' "$holder" > "$home/state/.lock"
+        ;;
+    esac
+
+    out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+    verdict=$(wake_queue_verdict "$out")
+    if [ -n "$holder" ]; then
+      kill "$holder" 2>/dev/null || true
+      wait "$holder" 2>/dev/null || true
+    fi
+    [ "$(cat "$home/state/.watcher-down" 2>/dev/null)" = "$token" ] \
+      || fail "$posture: session start changed a recovery episode it must leave alone: $(cat "$home/state/.watcher-down" 2>/dev/null)"
+    case "$posture" in
+      away|daemon-flag)
+        assert_contains "$verdict" "Nothing is waiting. The open recovery episode is left to the away or quiet supervision that owns the watcher here." \
+          "$posture: the verdict did not say the recovery was left alone"
+        ;;
+      incomplete)
+        assert_contains "$verdict" "The wake queue could not be checked completely: run bin/fm-wake-drain.sh now" \
+          "$posture: an unfinished preview did not fall toward the drain"
+        ;;
+      read-only)
+        assert_contains "$verdict" "skipped (read-only session)" "$posture: a read-only session ran the wake-queue stage"
+        [ -e "$home/state/.watch.lock" ] || fail "$posture: a read-only session took a watcher lock over"
+        ;;
+    esac
+  done
+
+  # A quiet record is a present captain, so an empty start is settled there.
+  rec=$(new_world wake-settled-quiet)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf 'pending:downtime:fixture.1.quiet\n' > "$home/state/.watcher-down"
+  FM_AFK_MODE=quiet FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter >/dev/null 2>&1 || fail "quiet entry failed"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  [ "$(cat "$home/state/.watcher-down" 2>/dev/null)" = 'acked:downtime:fixture.1.quiet' ] \
+    || fail "a quiet record kept an empty start from being settled: $(cat "$home/state/.watcher-down" 2>/dev/null)"
+  pass "session start settles nothing while away, under the daemon flag, after an unfinished preview, or read-only, and settles under a quiet record"
+}
+
 test_context_digest_absent_empty_present
 test_previous_dialog_points_at_the_saved_dialog
 test_lock_refusal_read_only_path
@@ -3361,5 +3621,9 @@ test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
 test_agents_baseline_requires_sha256_and_successful_completion
 test_reemit_keeps_repair_ownership_with_the_lock_holder
+test_wake_queue_settles_an_empty_start_over_a_dead_watcher
+test_wake_queue_preview_leaves_everything_for_the_drain
+test_wake_queue_leaves_a_live_watcher_alone
+test_wake_queue_settles_nothing_it_cannot_prove_empty
 
 echo "# fm-session-start.test.sh: all assertions passed"

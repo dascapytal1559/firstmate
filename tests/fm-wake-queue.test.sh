@@ -3818,6 +3818,108 @@ SH
   pass "watch liveness: an unreachable remote secondmate is probed, preserved, and never failed over"
 }
 
+# --- preview (session start's read) -----------------------------------------
+# bin/fm-wake-drain.sh --preview presents what a drain presents and takes no
+# receipt: no row claim, no recovery transition, no repair report.
+
+test_preview_claims_no_row_and_leaves_the_recovery_episode() {
+  local dir state summary marker generation
+  dir=$(make_case preview-no-receipt)
+  state="$dir/state"
+  summary="$dir/summary"
+  append_wake "$state" check inbox:one 'check: captain inbox note one' || fail "seed wake failed"
+  marker=$(cat "$state/.watcher-down")
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  grep "$(printf '\tcheck\tinbox:one\t')" "$dir/preview.out" >/dev/null \
+    || fail "the preview did not present the queued row: $(cat "$dir/preview.out")"
+  ! grep -F 'WAKE_ACK_REQUIRED' "$dir/preview.out" >/dev/null \
+    || fail "the preview printed an acknowledgement for rows only a drain may acknowledge"
+  [ "$(cat "$state/.watcher-down")" = "$marker" ] \
+    || fail "the preview moved the recovery episode: $marker became $(cat "$state/.watcher-down")"
+  grep -qx 'rows=1' "$summary" || fail "the preview summary did not count the row: $(cat "$summary")"
+  grep -qx 'recovery=pending:downtime' "$summary" || fail "the preview summary did not name the episode: $(cat "$summary")"
+  generation=$(sed -n 's/^generation=//p' "$summary")
+  [ "pending:downtime:$generation" = "$marker" ] || fail "the preview summary named another generation: $generation"
+
+  # Unclaimed, so a live branch grant can still take the row. A drain's claim
+  # would refuse this publication.
+  FM_STATE_OVERRIDE="$state" bash "$GRANT" activate "$$" preview-grant || fail "could not activate a grant owner"
+  FM_STATE_OVERRIDE="$state" bash "$GRANT" publish preview-grant 1 \
+    || fail "the preview claimed the row for main, so the branch grant was refused"
+  FM_STATE_OVERRIDE="$state" bash "$GRANT" release preview-grant || fail "could not release the grant"
+  FM_STATE_OVERRIDE="$state" bash "$GRANT" deactivate "$$" preview-grant || fail "could not deactivate the grant owner"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>&1 || fail "the drain after the preview failed"
+  grep "$(printf '\tcheck\tinbox:one\t')" "$dir/drain.out" >/dev/null \
+    || fail "the row did not reach the drain after the preview"
+  grep -F 'WAKE_ACK_REQUIRED' "$dir/drain.out" >/dev/null || fail "the drain after the preview printed no acknowledgement"
+  pass "a preview presents queued rows without claiming them, acknowledging them, or moving the recovery episode"
+}
+
+# Session start settles an empty start by acknowledging through sequence 0 with
+# the generation its preview reported. A row that arrives in between must
+# survive that acknowledgement and keep the episode open.
+test_empty_acknowledgement_after_a_preview_keeps_a_row_that_arrived_since() {
+  local dir state summary generation
+  dir=$(make_case preview-then-late-row)
+  state="$dir/state"
+  summary="$dir/summary"
+  printf 'pending:downtime:preview-late.fixture\n' > "$state/.watcher-down"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  grep -qx 'rows=0' "$summary" || fail "an empty queue was not previewed as empty: $(cat "$summary")"
+  generation=$(sed -n 's/^generation=//p' "$summary")
+  [ "$generation" = preview-late.fixture ] || fail "the preview summary lost the open generation: $generation"
+
+  append_wake "$state" check inbox:late 'check: captain inbox note late' || fail "seed wake failed"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through 0 --recovery-generation "$generation" \
+    > "$dir/ack.out" 2>&1 || fail "the empty acknowledgement failed: $(cat "$dir/ack.out")"
+  grep "$(printf '\tcheck\tinbox:late\t')" "$state/.wake-queue" >/dev/null \
+    || fail "the empty acknowledgement removed a row that arrived after the preview"
+  case "$(cat "$state/.watcher-down")" in
+    pending:*|announced:*) ;;
+    *) fail "the empty acknowledgement retired the episode over a queued row: $(cat "$state/.watcher-down")" ;;
+  esac
+  pass "an empty acknowledgement after a preview keeps a row that arrived since, and its episode"
+}
+
+test_preview_leaves_unusable_rows_for_the_drain_to_retire() {
+  local dir state before
+  dir=$(make_case preview-unusable-row)
+  state="$dir/state"
+  append_wake "$state" check inbox:good 'check: captain inbox note good' || fail "seed wake failed"
+  printf 'a row with no sequence\n' >> "$state/.wake-queue"
+  before=$(cat "$state/.wake-queue")
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$dir/summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  [ "$(cat "$state/.wake-queue")" = "$before" ] || fail "the preview rewrote the queue"
+  ! grep -F 'retired' "$dir/preview.out" >/dev/null \
+    || fail "the preview spent the one report of an unusable row: $(cat "$dir/preview.out")"
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2>&1 || fail "the drain after the preview failed"
+  grep -F 'retired 1 unusable queue row(s)' "$dir/drain.out" >/dev/null \
+    || fail "the drain after a preview did not retire and report the unusable row: $(cat "$dir/drain.out")"
+  pass "a preview leaves an unusable row for the drain to retire and report"
+}
+
+test_preview_is_main_only_and_needs_a_summary_path() {
+  local dir state status
+  dir=$(make_case preview-usage)
+  state="$dir/state"
+  status=0
+  FM_STATE_OVERRIDE="$state" "$DRAIN" --preview > "$dir/no-path.out" 2>&1 || status=$?
+  expect_code 2 "$status" "a preview with no summary path must be a usage error"
+  status=0
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --preview "$dir/summary" > "$dir/branch.out" 2>&1 || status=$?
+  expect_code 2 "$status" "the branch actor must not run a preview"
+  [ ! -e "$dir/summary" ] || fail "a refused preview wrote a summary"
+  pass "a preview is refused without a summary path and for the branch actor"
+}
+
 test_branch_grant_requires_lock_acquisition
 test_self_held_lock_reclaims_instead_of_deadlocking
 test_lock_wait_returns_when_its_directory_is_removed
@@ -3893,3 +3995,7 @@ test_secondmate_liveness_tick_error_keeps_scanning_and_wakes
 test_secondmate_liveness_tick_unqueued_outcome_is_an_error_not_a_wake
 test_secondmate_liveness_tick_skips_mate_whose_lock_is_held
 test_secondmate_liveness_tick_preserves_unreachable_remote
+test_preview_claims_no_row_and_leaves_the_recovery_episode
+test_empty_acknowledgement_after_a_preview_keeps_a_row_that_arrived_since
+test_preview_leaves_unusable_rows_for_the_drain_to_retire
+test_preview_is_main_only_and_needs_a_summary_path

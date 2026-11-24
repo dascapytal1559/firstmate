@@ -277,6 +277,30 @@ A concurrently appended wake has a higher sequence, remains queued, and keeps th
 Consequently, a watcher close during handling republishes the same generation as pending and forces one recovery turn even when no queue row remains, while the outstanding generation-bound acknowledgement stays valid.
 An acknowledged episode does not freeze the generation, because the next downtime after it opens an episode of its own.
 
+### Session start
+
+A session start retires the downtime it can prove empty and leaves everything else to the drain firstmate runs in a turn.
+Its own read of the queue is `bin/fm-wake-drain.sh --preview`, which presents what a drain presents and takes no receipt, because a harness may deliver the startup digest only in part ([`sessionstart-nudge.md`](sessionstart-nudge.md#claude)).
+So a preview claims no row, moves no cursor, and neither opens nor creates a recovery episode.
+
+Before that read, a locked session start takes over a watcher singleton whose recorded holder is dead, through the same acquire a starting watcher uses, and releases it at once.
+That publishes the downtime while the digest can still report it, and leaves the first watcher after the turn no stale lock to announce over.
+A live holder is never touched.
+
+The session start then runs the generation-bound acknowledgement itself, with sequence 0, only when all of these hold:
+
+- The preview read every section.
+- It found no queued wake, unread status line, backstop line, or unprocessed captain outcome.
+- Neither an away record nor the daemon flag exists.
+
+That acknowledgement can consume no row and retires the episode only while the queue is still empty, so a wake appended at any point keeps or opens an episode the next watcher announces.
+Every other start settles nothing, and the first watcher announces the episode exactly as before.
+`bin/fm-session-start.sh` owns the stage and the verdict line that leads its `WAKE QUEUE` section.
+
+On a Claude primary, the fork's Stop wrapper (`bin/fm-claude-stop-cold-reroute.sh`) covers the turn that drains and never acknowledges.
+Mid-session the next park's take-over of the handling successor republishes that open episode as pending downtime, and the fresh cycle announces it.
+A session's first turn end has no successor to take over, so the wrapper republishes an episode still open for handling before the arm starts, when no watcher is alive.
+
 ## Per-actor acknowledgement
 
 `bin/fm-wake-drain.sh` consumes the queue per actor, not per whole-queue cutoff.
@@ -516,6 +540,7 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 - The disposable-checkout arm refusal.
 - The home-gone and state-gone watcher exits.
 - The test reaper that stops a watcher armed for a temporary home.
+- A previewed and acknowledged empty session start that keeps the next watcher quiet until real work arrives, and a previewed start with work waiting that the next watcher still announces.
 
 `tests/fm-watch-recovery-loop.test.sh` covers:
 
@@ -527,6 +552,10 @@ They also prove that a legacy or handoff-phase watcher marker from an absent rep
 It also exercises a single TERM with a live foreign downtime-marker lock holder, retained stale singleton and subsequent arm-style recovery, including decimal `08` and zero `00` cleanup bounds.
 It checks that a newly appended keyed decision is classified without rereading earlier status bytes, so signal handling can return to the watcher's beacon refresh even when the status history is long.
 `tests/fm-wake-queue.test.sh` proves TERM likewise stops a watcher blocked in the drain-ring idle check's pane capture.
+The same suite proves a preview claims no row, moves no recovery episode, and leaves an unusable row for the drain, and that the empty acknowledgement after a preview keeps a row that arrived since.
+
+`tests/fm-session-start.test.sh` covers the [session-start](#session-start) stage end to end: the regression that a digest nobody read leaves every show-once item for the next drain, the dead-watcher take-over and settled empty start followed by a real watcher that stays quiet, the untouched live watcher, and the starts that settle nothing.
+`tests/fm-claude-stop-cold-reroute.test.sh` covers the Stop wrapper's replay of an unacknowledged turn and every case it must leave alone.
 
 `tests/fm-watcher-lock.test.sh` covers:
 

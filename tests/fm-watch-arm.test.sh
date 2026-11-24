@@ -1957,6 +1957,71 @@ EOF
   pass "watch-arm: the OpenCode arm plugin decides with the shared supervision predicate"
 }
 
+# Session start previews the queue and, when nothing waits, acknowledges the
+# open episode itself (docs/watcher-continuity.md "Session start"). The watcher
+# that starts after that turn then has nothing to announce, and a wake appended
+# later still opens its own episode.
+test_settled_empty_start_keeps_the_next_watcher_quiet() {
+  local dir home state fakebin summary generation
+  dir=$(make_case settled-empty-start)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  summary="$dir/summary"
+  mkdir -p "$home/data"
+  printf 'pending:downtime:settled-empty-start.fixture\n' > "$state/.watcher-down"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  grep -qx 'rows=0' "$summary" || fail "an empty start was not previewed as empty: $(cat "$summary")"
+  generation=$(sed -n 's/^generation=//p' "$summary")
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through 0 --recovery-generation "$generation" \
+    || fail "the empty start's acknowledgement failed"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/quiet-arm.out"
+  is_live_non_zombie "$ARM_PID" \
+    || fail "the watcher after a settled empty start raised a wake: $(cat "$dir/quiet-arm.out")"
+  ! grep -F 'check: rearm-resurface' "$dir/quiet-arm.out" >/dev/null \
+    || fail "the watcher after a settled empty start announced a recovery"
+
+  append_wake "$state" check inbox:after-start 'check: captain inbox note after-start' \
+    || fail "the generic producer could not append its wake"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" \
+    || fail "a wake appended after a settled start was stranded"
+  grep -F 'check: rearm-resurface' "$dir/quiet-arm.out" >/dev/null \
+    || fail "a wake appended after a settled start did not surface: $(cat "$dir/quiet-arm.out")"
+  pass "watch-arm: a previewed and acknowledged empty start keeps the next watcher quiet until real work arrives"
+}
+
+# With work waiting session start settles nothing, so the preview alone must
+# leave the episode for the first watcher to announce exactly as before.
+test_previewed_start_with_work_waiting_is_still_announced() {
+  local dir home state fakebin
+  dir=$(make_case previewed-start-with-work)
+  home="$dir/home"
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  mkdir -p "$home/data"
+  append_wake "$state" check inbox:waiting 'check: captain inbox note waiting' || fail "seed wake failed"
+
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" --preview "$dir/summary" > "$dir/preview.out" 2>&1 \
+    || fail "the preview failed: $(cat "$dir/preview.out")"
+  grep -qx 'rows=1' "$dir/summary" || fail "the waiting row was not previewed: $(cat "$dir/summary")"
+
+  start_rearm_arm "$home" "$state" "$fakebin" "$dir/arm.out"
+  wait_for_exit "$ARM_PID" "$REARM_EXIT_POLLS" \
+    || fail "the watcher after a previewed start waited instead of announcing the queued work"
+  grep -F 'check: rearm-resurface' "$dir/arm.out" >/dev/null \
+    || fail "the watcher after a previewed start did not announce the recovery: $(cat "$dir/arm.out")"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$dir/drain.out" 2> "$dir/drain.err" \
+    || fail "the drain after the announcement failed"
+  grep "$(printf '\tcheck\tinbox:waiting\t')" "$dir/drain.out" >/dev/null \
+    || fail "the previewed row did not reach the drain: $(cat "$dir/drain.out")"
+  drain_ack_pair "$dir/drain.err" >/dev/null \
+    || fail "the drain after the announcement printed no acknowledgement"
+  pass "watch-arm: a previewed start with work waiting is announced by the next watcher"
+}
+
 test_append_wakes_handling_successor after-ack
 test_append_wakes_handling_successor before-ack
 test_append_wakes_handling_successor after-ack missing
@@ -1987,6 +2052,8 @@ test_restart_preserves_recovery_across_reused_pid_lock
 test_markerless_legacy_queue_is_recovered_on_arm
 test_idle_lavish_source_stays_quiet_until_result
 test_append_wakes_live_announced_watcher
+test_settled_empty_start_keeps_the_next_watcher_quiet
+test_previewed_start_with_work_waiting_is_still_announced
 test_handling_window_close_keeps_the_acknowledgement_valid
 test_moved_generation_acknowledgement_is_self_healing
 test_downtime_marker_does_not_follow_symlink

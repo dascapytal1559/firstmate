@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="400" viewBox="0 0 960 400" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect width="960" height="400" fill="#ffffff"/>
+  <text x="24" y="34" font-size="20" font-weight="600" fill="#1f2328">A new session: who reads the queue, and who closes the gap</text>
+  <text x="24" y="58" font-size="14" fill="#57606a">What happens between the old session ending and the first quiet wait, before and after this change.</text>
+
+  <g font-size="13" fill="#1f2328">
+    <text x="24" y="98" font-weight="600">Before: two turns, and a read nobody saw</text>
+    <rect x="24" y="108" width="290" height="96" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="40" y="132">Session start reads the queue inside the</text>
+    <text x="40" y="152">startup hook and marks what it prints as</text>
+    <text x="40" y="172">shown. Firstmate receives the first 2,000</text>
+    <text x="40" y="192">characters of about 62,000.</text>
+    <rect x="335" y="108" width="290" height="96" rx="8" fill="#fff8c5" stroke="#d4a72c"/>
+    <text x="351" y="132">Turn 1 answers in one line. The old</text>
+    <text x="351" y="152">watcher died with its lock still held, so</text>
+    <text x="351" y="172">its downtime is not even on record yet.</text>
+    <rect x="646" y="108" width="290" height="96" rx="8" fill="#fff1f0" stroke="#ff8182"/>
+    <text x="662" y="132">The next watcher finds the dead lock</text>
+    <text x="662" y="152">and announces a recovery whatever is</text>
+    <text x="662" y="172">queued: turn 2, empty 30 times in 32.</text>
+
+    <text x="24" y="248" font-weight="600">After: one turn, and the read that counts is Firstmate's own</text>
+    <rect x="24" y="258" width="290" height="96" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="40" y="282">Session start previews the queue and</text>
+    <text x="40" y="302">marks nothing. Its first line says nothing</text>
+    <text x="40" y="322">is waiting, or how many are and to run</text>
+    <text x="40" y="342">the drain.</text>
+    <rect x="335" y="258" width="290" height="96" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="351" y="282">It takes the dead watcher's lock over and,</text>
+    <text x="351" y="302">when nothing is waiting, acknowledges that</text>
+    <text x="351" y="322">downtime itself. Anything waiting: it</text>
+    <text x="351" y="342">settles nothing.</text>
+    <rect x="646" y="258" width="290" height="96" rx="8" fill="#ddf4ff" stroke="#54aeff"/>
+    <text x="662" y="282">The next watcher starts quietly. A wake</text>
+    <text x="662" y="302">that is waiting or arrives later still gets</text>
+    <text x="662" y="322">its notification, with nothing already</text>
+    <text x="662" y="342">marked as shown.</text>
+  </g>
+  <text x="24" y="384" font-size="12" fill="#57606a">Counts are from 38 recorded session rotations, 18 to 24 November 2026.</text>
+</svg>

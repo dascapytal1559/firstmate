@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Behavior tests for the fork's Claude Stop hook wrapper
-# (bin/fm-claude-stop-cold-reroute.sh, FORK.md "A notification never reloads a
-# cold session").
+# (bin/fm-claude-stop-cold-reroute.sh, FORK.md "Auto clearing on a notification").
 #
 # The wrapper runs as a child of a fake harness (a bash symlink named "claude")
 # that holds the fixture home's session lock. Most cases replace the upstream
@@ -9,6 +8,8 @@
 # tested against every upstream outcome; one case runs the real upstream hook
 # with an actionable arm fixture, to prove the ledger interaction. Transcripts
 # are made up, and the T3 Code send goes to tests/t3-fake-server.mjs.
+# The stub also records the recovery marker it found, which is how the replay
+# cases prove an unacknowledged turn is republished before the arm starts.
 # shellcheck disable=SC2016 # single-quoted scripts expand inside the fake harness
 set -u
 
@@ -44,6 +45,7 @@ WRAPPER="$STUB_ROOT/bin/fm-claude-stop-cold-reroute.sh"
 cat > "$STUB_ROOT/bin/fm-claude-stop-autoarm.sh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$PPID" > "$FM_HOME/state/wrapper-pid"
+cp "$FM_HOME/state/.watcher-down" "$FM_HOME/state/upstream-saw-marker" 2>/dev/null || true
 if [ "$#" -gt 0 ]; then
   printf 'upstream args: %s\n' "$*" >&2
   exit 5
@@ -158,7 +160,8 @@ test_cold_large_wake_is_rung_through_t3() {
   [ -n "$record" ] || fail "the doorbell names no record: $message"
   body=$(FM_HOME="$HOME_DIR" "$ROOT/bin/fm-operational-input.sh" open "$record") \
     || fail "the doorbell's record must sit in this home's own operational inbox: $record"
-  assert_contains "$body" "bin/fm-wake-drain.sh" "the message must point at the durable queue"
+  assert_contains "$body" "Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED" \
+    "the message must send firstmate to the drain, in a fresh session as in a warm one"
   assert_not_contains "$body" "signal: fixture" "the message must carry no notification"
   pass "cold-reroute: a wake of a cold session over 100k is one T3 operational doorbell and no wake"
 }
@@ -368,6 +371,82 @@ SH
   pass "cold-reroute: the real upstream hook's recorded wake is rerouted when cold and passed through when warm"
 }
 
+# A turn that drained and never acknowledged leaves the recovery episode open
+# for handling. The wrapper republishes it before the arm runs, so the watcher
+# that turn end starts announces it instead of waiting on it.
+test_unacknowledged_turn_is_republished_before_the_arm() {
+  local status
+  for status in pending announced; do
+    make_case "replay-$status" quiet 60 50000
+    printf '%s:handling:fixture.1.%s\n' "$status" "$status" > "$HOME_DIR/state/.watcher-down"
+    run_wrapper "$HOME_DIR" "$WRAPPER"
+    expect_code 0 "$RC" "the replay must not change the upstream outcome"
+    [ "$(cat "$HOME_DIR/out")" = 'upstream stdout' ] || fail "the replay changed what passes through: $(cat "$HOME_DIR/out")"
+    [ ! -s "$HOME_DIR/err" ] || fail "the replay printed to stderr: $(cat "$HOME_DIR/err")"
+    [ "$(cat "$HOME_DIR/state/upstream-saw-marker")" = "pending:downtime:fixture.1.$status" ] \
+      || fail "an episode left $status:handling was not republished as pending downtime, on the same generation, before the arm ran: $(cat "$HOME_DIR/state/upstream-saw-marker")"
+  done
+  pass "cold-reroute: an unacknowledged turn's open episode is republished as downtime before the arm starts"
+}
+
+test_replay_leaves_every_other_episode_alone() {
+  local token other watcher label
+  for token in acked:handling:g1 pending:downtime:g1 announced:downtime:g1; do
+    make_case "replay-skip-${token%%:g1}" quiet 60 50000
+    printf '%s\n' "$token" > "$HOME_DIR/state/.watcher-down"
+    run_wrapper "$HOME_DIR" "$WRAPPER"
+    [ "$(cat "$HOME_DIR/state/.watcher-down")" = "$token" ] \
+      || fail "the replay rewrote an episode that is not open for handling: $token became $(cat "$HOME_DIR/state/.watcher-down")"
+  done
+
+  token=pending:handling:fixture.1.held
+  for label in live-watcher foreign-lock away daemon-flag; do
+    make_case "replay-skip-$label" quiet 60 50000
+    printf '%s\n' "$token" > "$HOME_DIR/state/.watcher-down"
+    other=
+    watcher=
+    case "$label" in
+      live-watcher)
+        sleep 30 &
+        watcher=$!
+        mkdir "$HOME_DIR/state/.watch.lock"
+        printf '%s\n' "$watcher" > "$HOME_DIR/state/.watch.lock/pid"
+        run_wrapper "$HOME_DIR" "$WRAPPER"
+        ;;
+      foreign-lock)
+        sleep 30 &
+        other=$!
+        printf '%s\n' "$other" > "$HOME_DIR/state/.lock"
+        run_wrapper "$HOME_DIR" "$WRAPPER" FM_TEST_KEEP_LOCK=1
+        ;;
+      away)
+        FM_HOME="$HOME_DIR" "$ROOT/bin/fm-afk-contract.sh" enter --words 'away for the afternoon' >/dev/null \
+          || fail "could not record the away posture"
+        run_wrapper "$HOME_DIR" "$WRAPPER"
+        ;;
+      daemon-flag)
+        : > "$HOME_DIR/state/.afk"
+        run_wrapper "$HOME_DIR" "$WRAPPER"
+        ;;
+    esac
+    for other in $other $watcher; do
+      kill "$other" 2>/dev/null || true
+      wait "$other" 2>/dev/null || true
+    done
+    [ "$(cat "$HOME_DIR/state/.watcher-down")" = "$token" ] \
+      || fail "$label: the replay republished an episode it must leave alone: $(cat "$HOME_DIR/state/.watcher-down")"
+  done
+
+  # A quiet record is a present captain, so the replay still runs there.
+  make_case replay-quiet quiet 60 50000
+  printf '%s\n' "$token" > "$HOME_DIR/state/.watcher-down"
+  FM_AFK_MODE=quiet FM_HOME="$HOME_DIR" "$ROOT/bin/fm-afk-contract.sh" enter >/dev/null 2>&1 || fail "quiet entry failed"
+  run_wrapper "$HOME_DIR" "$WRAPPER"
+  [ "$(cat "$HOME_DIR/state/.watcher-down")" = 'pending:downtime:fixture.1.held' ] \
+    || fail "a quiet record kept an unacknowledged turn from being replayed: $(cat "$HOME_DIR/state/.watcher-down")"
+  pass "cold-reroute: the replay touches only an open handling episode of the lock-holding session with no live watcher and no away posture"
+}
+
 fm_test_run \
   test_cold_large_wake_is_rung_through_t3 \
   test_warm_session_passes_through \
@@ -382,4 +461,6 @@ fm_test_run \
   test_unwritable_record_falls_back_to_the_wake \
   test_signalled_wrapper_waits_and_passes_through \
   test_arguments_go_to_upstream_and_help_is_its_own \
-  test_real_upstream_wake_is_rerouted
+  test_real_upstream_wake_is_rerouted \
+  test_unacknowledged_turn_is_republished_before_the_arm \
+  test_replay_leaves_every_other_episode_alone

@@ -6,13 +6,16 @@
 # that upstream hook unchanged, on the same payload, and looks only at its
 # result. The StopFailure registration still runs the upstream hook directly.
 #
+# Before the upstream hook runs, a turn that ended without acknowledging what
+# it drained is replayed (see "an unacknowledged turn is replayed" below).
+#
 # Every outcome passes through byte for byte - the upstream hook's exit status
 # and its stderr - except one: the upstream hook is about to wake this session
 # for a supervision event, and waking it would re-send a context whose prompt
 # cache has expired. Then this wrapper sends one message to FirstMate's own T3
 # Code thread instead and exits 0, so the session is not woken in place. The
 # T3 Code fork starts that message's turn in a fresh session when the thread is
-# cold (FORK.md "A notification never reloads a cold session").
+# cold (FORK.md "Auto clearing on a notification").
 #
 # The message is Firstmate operational input of the watcher kind, carried as
 # the record-backed doorbell of bin/fm-operational-input.sh (Claude strips the
@@ -39,10 +42,10 @@
 #     fm_warm_compact_context_tokens reads it from the same transcript.
 #
 # The message carries no notification and asks for no fresh context: the
-# notification stays in the durable wake queue, which a fresh session's start
-# digest presents, and the T3 Code fork alone decides whether the turn starts
-# fresh. If his message and this one race, the first starts the fresh session
-# and the second continues it.
+# notification stays in the durable wake queue, where the drain the message
+# asks for presents it in a fresh session as in a warm one, and the T3 Code
+# fork alone decides whether the turn starts fresh. If his message and this one
+# race, the first starts the fresh session and the second continues it.
 #
 # Any failure of the send - no credential, a record that cannot be written, T3
 # unreachable, a refused or expired credential, an unconfirmed delivery - falls
@@ -85,10 +88,56 @@ if [ "$#" -gt 0 ]; then
   esac
 fi
 
+# --- an unacknowledged turn is replayed ----------------------------------------
+# A drain opens the recovery episode for handling, and the acknowledgement after
+# handling retires it, so a turn that ends with the episode still open never
+# acknowledged what it drained. Mid-session the next park takes the handling
+# successor's cycle over, that stop republishes the episode as downtime, and the
+# fresh cycle announces it. A session's first turn end has no successor to take
+# over: the upstream hook would start a watcher that waits on the open episode
+# while the turn's rows stay queued. So republish it here, exactly as that stop
+# does, and the watcher this turn end starts announces it once. The generation
+# is kept, so the acknowledgement the turn was given stays valid
+# (docs/watcher-continuity.md "Session start").
+# Only for the session that holds the lock, never under an away record or the
+# daemon flag, and never while a watcher is alive: a live successor is the
+# take-over's to stop, and one the supervision host started may belong to an
+# engine turn still handling the episode.
+# It runs in a subshell and resolves the home there, so nothing it sources,
+# sets, or prints can change what the upstream hook sees or what passes through.
+replay_unacknowledged_turn() {
+  local FM_ROOT FM_HOME=${FM_HOME:-} STATE marker pid
+  FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+  FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+  STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+  marker="$STATE/.watcher-down"
+  grep -q '^[a-z]*:handling:' "$marker" 2>/dev/null || return 0
+  [ ! -e "$STATE/.afk" ] || return 0
+  if [ -f "$STATE/.afk-contract" ]; then
+    [ "$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = quiet ] \
+      || return 0
+  fi
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+  fm_session_lock_owned_by_self "$STATE" || return 0
+  pid=$(cat "$STATE/.watch.lock/pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && fm_lock_holder_alive "$STATE/.watch.lock" "$pid"; then
+    return 0
+  fi
+  fm_recovery_marker_snapshot "$marker" || return 0
+  case "$FM_RECOVERY_MARKER_TOKEN" in
+    pending:handling:*|announced:handling:*) fm_recovery_marker_publish "$marker" downtime ;;
+  esac
+}
+
 # Without scratch files nothing can be judged, so be the upstream hook itself.
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-cold-reroute.XXXXXX" 2>/dev/null) || exec "$UPSTREAM"
 trap 'rm -rf "$SCRATCH"' EXIT
 cat > "$SCRATCH/payload" 2>/dev/null || true
+
+( replay_unacknowledged_turn ) >/dev/null 2>&1 || true
 
 # The upstream hook runs in the foreground, never as a background job: a
 # non-interactive shell starts a background job with SIGINT ignored, which the
@@ -156,7 +205,7 @@ case "$TOKENS" in ''|*[!0-9]*) pass_through ;; esac
 fm_backend_source t3code >/dev/null 2>&1 || pass_through
 unset FM_T3_FROM_THREAD FM_T3CODE_CLIENT_REQUEST_ID
 BODY='A firstmate supervision wake is waiting in the durable wake queue. It was rung through T3 Code instead of waking the session in place, because the session sat idle past its prompt-cache lifetime.
-In a session that has just started, the session-start digest already presents the queue. Otherwise run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command.
+Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command.
 The Stop hook owns watcher continuity: the next turn end arms supervision, so do NOT run bin/fm-watch-arm.sh.'
 DOORBELL=
 fm_operational_record_write "$STATE" watcher "$BODY" DOORBELL || pass_through

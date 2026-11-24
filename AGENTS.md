@@ -72,10 +72,10 @@ Treat `data/captain.md` as the domain-local record of captain preferences, optio
 - Run `bin/fm-session-start.sh` exactly once at session start.
 - Its header is the single owner of composed commands, ordering, and digest contents.
 - `bin/fm-supervision-instructions.sh` renders the emitted supervision block from `docs/supervision-protocols/`.
-- Do not reimplement it by separately running its lock, bootstrap, initial wake-drain, or deferred-network components.
+- Do not reimplement it by separately running its lock, bootstrap, wake-queue preview, or deferred-network components.
 - Run-tier harness surfaces run this command for you at session open while the rest only nudge it, so confirm the digest is present in this session and run it yourself when it is not; `docs/sessionstart-nudge.md` owns adapter tiers, source routing, and compatibility.
 
-Read the complete digest once and trust it as this turn's startup and recovery input.
+Read the complete digest once and trust it as this turn's startup and recovery input; its `WAKE QUEUE` section only previews the queue, and section 8 owns how to act on it.
 If the harness shows only a preview and persists the full output to a file, read that file before acting.
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
 An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
@@ -269,7 +269,7 @@ For every actionable wake, follow the ordinary-wake continuation in the emitted 
 No turn ends blind while work is under way, including turns described as holding or waiting.
 
 - At the start of every wake-handling turn, drain the durable wake queue before peeking, reading beyond the reason line, steering, or starting work.
-- Session start is the only exception because its one-shot digest already presented the queue while locked or deliberately left it untouched in lock-refused read-only mode.
+- Session start is no exception: its digest previews the queue without marking anything presented, and the first line of its `WAKE QUEUE` section says whether anything is waiting, so when it is, drain before acting and take the acknowledgement from that drain, while a lock-refused read-only session drains nothing.
 - Treat any `OPEN DECISIONS` section from the drain as actionable reconciliation input even when no wake record was queued.
 - Treat the drain's `WAITING FOR CAPTAIN` section as the standing list of calls waiting on the captain; an `OPEN DECISIONS` entry marked snoozed is context, never a waiting call.
 - Treat any `UNREAD STATUS` section as newly surfaced status that must be read this turn; those lines are not re-printed after this presentation.

@@ -38,8 +38,9 @@
 #                       handoff retry, X-mode artifact writes, fleet sync) also run only when
 #                       locked; the four network sweeps run in the deferred
 #                       stage rather than this synchronous bootstrap section.
-#   3. wake-drain     - presents durable wakes and advances recovery handling
-#                       state, so it only runs when locked. The local bounded
+#   3. wake-queue     - previews the durable wake queue and settles a start
+#                       that is provably empty, so it only runs when locked
+#                       (WAKE QUEUE below owns the rule). The local bounded
 #                       inactive-outcome startup scan runs in the deferred worker.
 #                       First, on every harness and away posture, it seeds the
 #                       outcome store's display tail copy when that is absent
@@ -150,6 +151,30 @@
 # The context and fleet-state digests
 # below are always read-only, so they run unconditionally in both modes.
 #
+# WAKE QUEUE: this digest is delivered through a harness that may show the
+# model only its head (Claude: about 2,000 characters), so its read of the queue
+# must neither count as presenting anything nor be the only thing that retires a
+# watcher-downtime episode. The drain firstmate runs in a turn is the read that
+# counts (bin/fm-wake-drain.sh owns --preview; docs/watcher-continuity.md
+# "Session start" owns the recovery contract). On the locked path this stage:
+#   - takes over the watcher singleton when its recorded holder is dead, through
+#     the same guarded acquire a starting watcher uses, which publishes that
+#     downtime, and releases it at once. A live holder is never touched. Without
+#     this the episode would not exist until the first watcher after this turn
+#     stole the lock, and that watcher would announce it whatever is queued.
+#   - previews the queue, which takes no receipt.
+#   - prints one verdict as the section's first line: that nothing is waiting,
+#     or how many items are and to run bin/fm-wake-drain.sh, handle them, and
+#     run the acknowledgement it prints. AGENTS.md section 8 and the T3 Code
+#     fork's session note rely on that line's two meanings.
+#   - acknowledges the open recovery episode itself (--ack-through 0) only when
+#     the preview read every section and found no queued wake, unread status
+#     line, backstop line, or unprocessed captain outcome, and neither an away
+#     record nor the daemon flag exists. That acknowledgement can remove no row
+#     and retires the episode only while the queue is still empty. Every other
+#     case settles nothing, so the first watcher announces as before.
+# The read-only path runs none of it.
+#
 # BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
 # surface, so it carries what this turn can act on and nothing else.
 #   - `done` rows are never listed. Retained completion history belongs to the
@@ -227,10 +252,10 @@
 #             sync, same-home backlog reconciliation, secondmate convergence and
 #             liveness, pending remote handoff retry, X-mode
 #             artifact writes) - and
-#             re-emit the rest. Wake-queue presentation is NOT skipped: queued
-#             records are this turn's work queue, they arrived after startup,
-#             and a session that owns the lock is exactly the session that must
-#             handle and acknowledge them. Lock acquisition still runs, because
+#             re-emit the rest. The wake-queue stage is NOT skipped: queued
+#             records arrived after startup, and a session that owns the lock
+#             is exactly the session that must drain, handle, and acknowledge
+#             them. Lock acquisition still runs, because
 #             ownership must be re-verified rather than assumed: fm-lock.sh
 #             already treats a lock owned through shared ancestry or a trusted
 #             same-session Claude id as its own, so the re-emit proceeds, while
@@ -820,20 +845,45 @@ else
   printf '(silent - all good)\n'
 fi
 
-# --- 3. wake-drain ---------------------------------------------------------
+# --- 3. wake-queue ---------------------------------------------------------
 # The inactive-outcome startup scan runs in the deferred worker launched above,
 # where its potentially slow current-state reads cannot block this digest. It
-# publishes findings through the same durable queue drained here; the watcher's
-# separate 900-second cadence remains unchanged.
-# Presented records are this turn's first work queue and remain durable until
-# post-handling acknowledgement. The drain's separate OPEN DECISIONS section
-# remains actionable even when that queue is empty (AGENTS.md sections 3 and 8).
-# The drain also runs fm-guard.sh internally on the locked path, so the
+# publishes findings through the same durable queue previewed here; the
+# watcher's separate 900-second cadence remains unchanged.
+# The header's WAKE QUEUE note owns what this stage does and why. The preview's
+# OPEN DECISIONS section remains actionable even when the queue is empty
+# (AGENTS.md sections 3 and 8).
+# The preview also runs fm-guard.sh internally on the locked path, so the
 # tangle/watcher-liveness alarms land right here too, ahead of the bulk digest
 # below. The read-only path never touches the queue because it lacks mutation
 # authority, and another session may be actively handling it. It still runs
 # fm-guard.sh directly with non-mutating advisory text, so the same alarms
 # surface without repair commands.
+
+# Sets WAKE_DEAD_WATCHER to the dead holder's pid when this start took the
+# watcher singleton over. The bound is the watcher's own startup bound, so a
+# held marker lock costs this digest no more than it costs a watcher start.
+WAKE_DEAD_WATCHER=
+take_over_dead_watcher_lock() {
+  local lock="$STATE/.watch.lock" pid bound=${FM_WATCHER_STARTUP_LOCK_BOUND:-60}
+  [ -e "$lock" ] || [ -L "$lock" ] || return 0
+  pid=$(cat "$lock/pid" 2>/dev/null || true)
+  ! fm_lock_holder_alive "$lock" "$pid" || return 0
+  case "$bound" in ''|*[!0-9]*) bound=60 ;; *) bound=$((10#$bound)) ;; esac
+  fm_lock_try_acquire "$lock" "$bound" || return 0
+  WAKE_DEAD_WATCHER=${FM_LOCK_RECOVERED_PID:-}
+  fm_lock_release "$lock"
+}
+
+wake_summary_value() {  # <summary-file> <key>
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1
+}
+
+# Words for "<n> <thing>", plural when it is not one.
+wake_count_words() {  # <n> <singular> <plural>
+  if [ "$1" -eq 1 ]; then printf '1 %s' "$2"; else printf '%s %s' "$1" "$3"; fi
+}
+
 stage wake-queue
 subsection "WAKE QUEUE"
 if [ "$READ_ONLY" -eq 1 ]; then
@@ -844,6 +894,7 @@ if [ "$READ_ONLY" -eq 1 ]; then
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
   FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-branch-outcome.sh" seed-tail >/dev/null 2>&1 || true
+  BRANCH_REPLAY_OUT=
   # Pi supervision-branch recovery, locked path only: clear leases whose
   # supervising session died, and surface outcomes the branch stored durably
   # that never reached main (docs/pi-supervision-branch.md). Gated to the
@@ -853,16 +904,68 @@ else
     FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-lease.sh" sweep 2>/dev/null || true
     BRANCH_REPLAY_OUT=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
       "$SCRIPT_DIR/fm-branch-outcome.sh" startup-replay 2>&1) || BRANCH_REPLAY_OUT=
-    if [ -n "$BRANCH_REPLAY_OUT" ]; then
-      printf '%s\n' "$BRANCH_REPLAY_OUT"
-    fi
   fi
-  DRAIN_OUT=$("$SCRIPT_DIR/fm-wake-drain.sh" 2>&1)
-  if [ -n "$DRAIN_OUT" ]; then
-    printf '%s\n' "$DRAIN_OUT"
+  take_over_dead_watcher_lock
+  WAKE_SUMMARY=$(mktemp "${TMPDIR:-/tmp}/fm-wake-preview.XXXXXX" 2>/dev/null) || WAKE_SUMMARY=
+  DRAIN_OUT=
+  if [ -n "$WAKE_SUMMARY" ]; then
+    DRAIN_OUT=$("$SCRIPT_DIR/fm-wake-drain.sh" --preview "$WAKE_SUMMARY" 2>&1) || true
+  fi
+  WAKE_ROWS=$(wake_summary_value "$WAKE_SUMMARY" rows)
+  WAKE_UNREAD=$(wake_summary_value "$WAKE_SUMMARY" unread)
+  WAKE_BACKSTOP=$(wake_summary_value "$WAKE_SUMMARY" backstop)
+  WAKE_CAPTAIN=$(wake_summary_value "$WAKE_SUMMARY" captain)
+  WAKE_COMPLETE=$(wake_summary_value "$WAKE_SUMMARY" complete)
+  WAKE_RECOVERY=$(wake_summary_value "$WAKE_SUMMARY" recovery)
+  WAKE_GENERATION=$(wake_summary_value "$WAKE_SUMMARY" generation)
+  [ -z "$WAKE_SUMMARY" ] || rm -f "$WAKE_SUMMARY" 2>/dev/null || true
+  WAKE_DOWNTIME_NOTE=
+  [ -z "$WAKE_DEAD_WATCHER" ] \
+    || WAKE_DOWNTIME_NOTE=" The previous watcher (pid $WAKE_DEAD_WATCHER) had died without releasing its lock; session start took the lock over."
+  case "$WAKE_ROWS:$WAKE_UNREAD:$WAKE_BACKSTOP:$WAKE_CAPTAIN" in
+    *[!0-9:]*|:*|*::*|*:) WAKE_WAITING= ;;
+    *) WAKE_WAITING=$((WAKE_ROWS + WAKE_UNREAD + WAKE_BACKSTOP + WAKE_CAPTAIN)) ;;
+  esac
+  if [ -z "$WAKE_WAITING" ] || [ "$WAKE_COMPLETE" != 1 ]; then
+    printf 'The wake queue could not be checked completely: run bin/fm-wake-drain.sh now, handle what it presents, then run the acknowledgement it prints.%s\n' \
+      "$WAKE_DOWNTIME_NOTE"
+  elif [ "$WAKE_WAITING" -gt 0 ]; then
+    WAKE_PARTS=
+    [ "$WAKE_ROWS" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_ROWS" 'queued wake' 'queued wakes')"
+    [ "$WAKE_UNREAD" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_UNREAD" 'unread status line' 'unread status lines')"
+    [ "$WAKE_BACKSTOP" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_BACKSTOP" 'uncovered task outcome' 'uncovered task outcomes')"
+    [ "$WAKE_CAPTAIN" -eq 0 ] || WAKE_PARTS="$WAKE_PARTS, $(wake_count_words "$WAKE_CAPTAIN" 'task with captain outcomes' 'tasks with captain outcomes')"
+    printf '%s waiting (%s): run bin/fm-wake-drain.sh now, handle them, then run the acknowledgement it prints. The lines below are a preview that marks nothing as presented.%s\n' \
+      "$WAKE_WAITING" "${WAKE_PARTS#, }" "$WAKE_DOWNTIME_NOTE"
   else
-    printf '(no queued wakes)\n'
+    WAKE_SETTLED=none
+    case "$WAKE_RECOVERY" in
+      pending:*|announced:*)
+        if [ -e "$STATE/.afk" ] \
+          || { [ -f "$STATE/.afk-contract" ] && [ "$("$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; }; then
+          WAKE_SETTLED=away
+        else
+          WAKE_SETTLED=no
+          case "$WAKE_GENERATION" in
+            ''|*[!A-Za-z0-9._-]*) ;;
+            *)
+              "$SCRIPT_DIR/fm-wake-drain.sh" --ack-through 0 --recovery-generation "$WAKE_GENERATION" >/dev/null 2>&1 || true
+              fm_recovery_marker_snapshot "$STATE/.watcher-down" || true
+              [ "${FM_RECOVERY_MARKER_TOKEN%%:*}" != acked ] || WAKE_SETTLED=yes
+              ;;
+          esac
+        fi
+        ;;
+    esac
+    case "$WAKE_SETTLED" in
+      yes) printf 'Nothing is waiting.%s Session start acknowledged the open recovery episode, so no follow-up wake is owed for it.\n' "$WAKE_DOWNTIME_NOTE" ;;
+      away) printf 'Nothing is waiting.%s The open recovery episode is left to the away or quiet supervision that owns the watcher here.\n' "$WAKE_DOWNTIME_NOTE" ;;
+      no) printf 'Nothing is waiting.%s The open recovery episode could not be acknowledged, so the watcher will raise it: run bin/fm-wake-drain.sh then, handle what it presents, and run the acknowledgement it prints.\n' "$WAKE_DOWNTIME_NOTE" ;;
+      *) printf 'Nothing is waiting.%s\n' "$WAKE_DOWNTIME_NOTE" ;;
+    esac
   fi
+  [ -z "$BRANCH_REPLAY_OUT" ] || printf '%s\n' "$BRANCH_REPLAY_OUT"
+  [ -z "$DRAIN_OUT" ] || printf '%s\n' "$DRAIN_OUT"
   # A home signed in to T3 Code recovers the T3 workers a server restart ended
   # (bin/fm-t3-restart.sh owns detection and recovery); silent unless the
   # server restarted since this home last recorded it. Other homes run nothing.
