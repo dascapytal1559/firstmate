@@ -892,7 +892,7 @@ The flag is home-local, is not inherited by secondmate homes, and takes effect o
 ## Treehouse pool report (config/treehouse-pool-report)
 
 The optional local, gitignored `config/treehouse-pool-report` presence flag opts this home into a read-only Treehouse pool hygiene report at bootstrap.
-With the flag present and the Treehouse state directory and `jq` available, bootstrap prints `TREEHOUSE_POOL_REPORT:` findings for pools with unavailable project paths, unowned slots older than `FM_POOL_ORPHAN_DAYS`, duplicate-origin project clones, and `project-*` or `scratch-project-*` pools without an active owner or lease; the `treehouse` executable is not required.
+With the flag present and the Treehouse state directory and `jq` available, bootstrap prints `TREEHOUSE_POOL_REPORT:` findings for pools with unavailable project paths, unowned slots older than `FM_POOL_ORPHAN_DAYS`, duplicate-origin project clones (a local secondmate's own pools under `fm-secondmate/` are scanned but never counted as duplicates, because they are deliberately separate clones), and `project-*` or `scratch-project-*` pools without an active owner or lease; the `treehouse` executable is not required.
 The report never changes a pool or slot; pruning or other pool cleanup remains an explicit operator action.
 With the file absent, bootstrap reads no Treehouse state and prints no pool report.
 Only the file's presence is read, at each bootstrap run.
@@ -2508,7 +2508,7 @@ Backend tool availability uses the adapter's own executable resolver, so bootstr
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
 
 Orca provides both the task worktree and terminal endpoint (see "Runtime backend" above), so `backend=orca` requires only `orca` on top of the universal toolchain and skips both `treehouse` and every other backend's session CLI.
-A herdr, zellij, cmux, paseo, rex, t3code, or tern home is therefore never told `tmux` is missing, and the `treehouse` durable-lease upgrade check runs only for the backends that actually use treehouse.
+A herdr, zellij, cmux, paseo, rex, t3code, or tern home is therefore never told `tmux` is missing, and the `treehouse` durable-lease and pool-root upgrade check runs only for the backends that actually use treehouse.
 
 **Feature-specific requirements**
 
