@@ -738,6 +738,27 @@ test_codex_account_list_refusals() {
   pass "a Codex list refuses a missing, undeclared, newline, signed-out, raw-override, or malformed choice"
 }
 
+test_codex_account_effort_reads_the_chosen_catalog() {
+  local out rc id=codex-list-effort
+  new_case codex-list-effort codex
+  signed_in_codex_home "$CASE/first"
+  signed_in_codex_home "$CASE/second"
+  signed_in_codex_home "$CASE/ambient-codex"
+  fm_test_write_codex_catalog "$CASE/second" || fail "could not write the chosen account's catalog"
+  declare_codex_accounts "$CASE/first" "$CASE/second"
+  out=$(CODEX_HOME="$CASE/ambient-codex" spawn_ship "$id-chosen" --account "$CASE/second" --model gpt-6.1-sol --effort max); rc=$?
+  expect_code 0 "$rc" "max should launch when the chosen account's catalog lists it, whatever the invoking home holds: $out"
+  assert_contains "$out" "account=$CASE/second" "the spawn line should name the chosen account"
+  fm_test_write_codex_catalog "$CASE/ambient-codex" || fail "could not write the invoking home's catalog"
+  out=$(CODEX_HOME="$CASE/ambient-codex" spawn_ship "$id-other" --account "$CASE/first" --model gpt-6.1-sol --effort max); rc=$?
+  expect_code 1 "$rc" "the invoking home's catalog must not vouch for max on an account whose own catalog is absent"
+  assert_refused_before_launch "$id-other" "$out" "name a model that $CASE/first/models_cache.json lists with max"
+  out=$(CODEX_HOME="$CASE/ambient-codex" spawn_ship "$id-lacking" --account "$CASE/second" --model gpt-5 --effort max); rc=$?
+  expect_code 1 "$rc" "an effort the chosen account's catalog lists the model without must refuse"
+  assert_refused_before_launch "$id-lacking" "$out" "does not offer effort max in its model catalog ($CASE/second/models_cache.json)"
+  pass "a Codex launch on a declared account checks its effort against that account's own model catalog"
+}
+
 test_codex_account_list_leaves_secondmates_alone() {
   local out rc id=codex-list-sm
   new_case codex-list-secondmate codex
@@ -781,6 +802,7 @@ test_account_list_secondmate_needs_its_own_pin
 test_no_codex_account_list_keeps_today
 test_codex_account_list_launches_the_named_entry
 test_codex_account_list_refusals
+test_codex_account_effort_reads_the_chosen_catalog
 test_codex_account_list_leaves_secondmates_alone
 
 echo "# all fm-worker-account tests passed"

@@ -3714,27 +3714,6 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
 fi
-# A pane-backed Codex worker forwards its effort only as a model_reasoning_effort
-# override, so an effort the model does not offer must be refused here rather than
-# dropped from the launch. The Codex model catalog is the one source of what each
-# model offers; T3 Code validates the same request against T3's own catalog.
-if [ "$HARNESS" = codex ] && [ "$RAW_LAUNCH" = 0 ] && [ "$BACKEND" != t3code ] && [ -n "$EFFORT" ] && [ "$EFFORT" != default ]; then
-  case "$("$SCRIPT_DIR/fm-harness.sh" codex-effort-check "$MODEL" "$EFFORT")" in
-  supported) ;;
-  unsupported)
-    echo "error: Codex model ${MODEL:-default} does not offer effort $EFFORT in its model catalog; pick an effort it lists or another model" >&2
-    exit 1
-    ;;
-  *)
-    # No catalog evidence: the four long-standing levels keep their forwarding,
-    # but max is only ever sent on evidence, so it is refused rather than guessed.
-    if [ "$EFFORT" = max ]; then
-      echo "error: cannot confirm Codex model ${MODEL:-default} offers effort max: name a model that ${CODEX_HOME:-~/.codex}/models_cache.json lists with max" >&2
-      exit 1
-    fi
-    ;;
-  esac
-fi
 # Per-secondmate omp profile pin (header above): resolved before any endpoint,
 # worktree, or record exists, and before the catalog check that must read the
 # same profile. A ship or scout passes no mate, so it never reads a pin.
@@ -3862,6 +3841,41 @@ if [ "$BACKEND" = t3code ]; then
     echo "error: backend=t3code cannot apply the $HARNESS worker account pin because T3's provider instance owns the account; select that instance in config/t3code-instances instead" >&2
     exit 1
   fi
+fi
+# A pane-backed Codex worker forwards its effort only as a model_reasoning_effort
+# override, so an effort the model does not offer must be refused here rather than
+# dropped from the launch. The Codex model catalog is the one source of what each
+# model offers; T3 Code validates the same request against T3's own catalog.
+# The catalog read is the one under the Codex home this launch will run on: a
+# declared config/codex-accounts entry's CODEX_HOME (unset for `ordinary`), else
+# the invoking process's own, since each account's plan keeps its own catalog.
+if [ "$HARNESS" = codex ] && [ "$RAW_LAUNCH" = 0 ] && [ "$BACKEND" != t3code ] && [ -n "$EFFORT" ] && [ "$EFFORT" != default ]; then
+  codex_catalog_env=(env)
+  codex_catalog_home=${CODEX_HOME:-$HOME/.codex}
+  if [ -n "$WORKER_ACCOUNT" ]; then
+    if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
+      codex_catalog_env=(env CODEX_HOME="$WORKER_ACCOUNT_ROOT")
+      codex_catalog_home=$WORKER_ACCOUNT_ROOT
+    else
+      codex_catalog_env=(env -u CODEX_HOME)
+      codex_catalog_home=$HOME/.codex
+    fi
+  fi
+  case "$("${codex_catalog_env[@]}" "$SCRIPT_DIR/fm-harness.sh" codex-effort-check "$MODEL" "$EFFORT")" in
+  supported) ;;
+  unsupported)
+    echo "error: Codex model ${MODEL:-default} does not offer effort $EFFORT in its model catalog ($codex_catalog_home/models_cache.json); pick an effort it lists or another model" >&2
+    exit 1
+    ;;
+  *)
+    # No catalog evidence: the four long-standing levels keep their forwarding,
+    # but max is only ever sent on evidence, so it is refused rather than guessed.
+    if [ "$EFFORT" = max ]; then
+      echo "error: cannot confirm Codex model ${MODEL:-default} offers effort max: name a model that $codex_catalog_home/models_cache.json lists with max" >&2
+      exit 1
+    fi
+    ;;
+  esac
 fi
 # Fable quota floor (header above): the account is known here and nothing is
 # leased or launched yet. On a pane backend the launch exports the pinned or
