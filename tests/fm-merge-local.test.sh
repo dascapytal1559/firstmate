@@ -478,8 +478,8 @@ test_a_long_lived_owner_lands_every_stage() {
     while [ -n "$rest" ]; do
       op=${rest%%;*}
       case "$rest" in *';'*) rest=${rest#*;} ;; *) rest='' ;; esac
-      op=${op#"${op%%[![:space:]]*}"}
-      op=${op%"${op##*[![:space:]]}"}
+      [[ $op =~ ^[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]]
+      op=${BASH_REMATCH[1]}
       [ -z "$op" ] || owner_step "$op"
     done
   done 3<<EOF

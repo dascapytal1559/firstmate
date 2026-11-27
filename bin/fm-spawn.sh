@@ -75,8 +75,8 @@
 #   backend, kind, project or home, worktree, endpoint - comes from the task's
 #   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
 #   positional, and batch pairs are all refused alongside it; only harness,
-#   model, effort, and a declared Claude account may change, which is what
-#   makes a harness switch one ordinary relaunch. It refuses unless the
+#   model, effort, and a declared Claude or Codex account may change, which
+#   is what makes a harness switch one ordinary relaunch. It refuses unless the
 #   recorded endpoint is positively agent-free on a backend with both a
 #   recovery-grade agent-state classifier and replacement-agent support
 #   (tmux or herdr), and clears the previous harness's per-task wiring
@@ -187,10 +187,11 @@
 #   metadata are unchanged.
 #   A clean projected create and an exact resume both hold the one
 #   session-scoped presentation-order lock (keyed by named session plus
-#   canonical socket, outside any home's state/) through launch handoff.
-#   On contention a create makes one bounded attempt and falls back to the
-#   ordinary flat layout before any projection mutation. A resume refuses by
-#   default on the same contention (it does not degrade flat; a concurrent
+#   canonical socket, outside any home's state/) through the projected layout
+#   mutation, releasing it before worktree allocation, remaining spawn setup,
+#   and agent launch. On contention a create makes one bounded attempt and falls back
+#   to the ordinary flat layout before any projection mutation. A resume refuses
+#   by default on the same contention (it does not degrade flat; a concurrent
 #   resume is a hard failure). Pass --herdr-resume-lock-wait to opt that
 #   resume into waiting for the lock instead, so two concurrent recoveries
 #   can serialize and each still replace its own exact husk. The flag acts
@@ -523,13 +524,15 @@
 #   Pins are never inherited; remote per-mate overrides refuse locally.
 #   T3 Code refuses a pin because its provider instance owns the account.
 #   bin/fm-worker-account-lib.sh owns parsing, the check, and the shed list.
-# Claude account list (config/claude-accounts, --account <entry>):
-#   Opt-in and Claude-only. When the list is present, a Claude ship or scout
-#   spawn must name one declared entry with --account, chosen at intake, and
-#   that entry is checked, launched, and recorded exactly like a pin; a
-#   relaunch reuses the recorded entry unless --account moves it. Without the
-#   list, --account refuses and nothing else changes. docs/configuration.md
-#   "Several Claude accounts" owns the contract.
+# Declared account lists (config/claude-accounts, config/codex-accounts,
+# --account <entry>):
+#   Opt-in, per runner. When a runner's list is present, a ship or scout spawn
+#   of that runner must name one declared entry with --account, chosen at
+#   intake, and that entry is checked, launched, and recorded exactly like a
+#   pin (a Codex entry selects CODEX_HOME); a relaunch reuses the recorded entry
+#   unless --account moves it. Without the list, --account refuses and nothing
+#   else changes. docs/configuration.md "Several Claude accounts" and "Several
+#   Codex accounts" own the contract.
 # Fable quota floor (config/fable-quota-floor, --fable-floor-override <reason>):
 #   Opt-in. A Claude ship or scout launch with --model claude-fable-* runs
 #   bin/fm-fable-floor.sh on the account it will use, after the account is
@@ -1325,10 +1328,10 @@ if [ "$FABLE_FLOOR_OVERRIDE_SET" -eq 1 ]; then
     exit 1
   }
 fi
-# A secondmate, local or remote, launches on its own per-mate pin, so --account
-# is refused here, before the remote route could ignore it.
+# A secondmate, local or remote, never launches on a declared account list, so
+# --account is refused here, before the remote route could ignore it.
 [ "$ACCOUNT_SET" -eq 0 ] || [ "$KIND" != secondmate ] || {
-  echo "error: --account applies to ships and scouts; secondmate ${POS[0]:-} launches on its own config/secondmate-accounts/<id>/claude-account pin" >&2
+  echo "error: --account applies to ships and scouts; secondmate ${POS[0]:-} never launches on a declared account list (a Claude secondmate uses its own config/secondmate-accounts/<id>/claude-account pin)" >&2
   exit 1
 }
 # --t3-instance picks the T3 provider instance for this one ship or scout
@@ -3711,27 +3714,6 @@ if [ "$EFFORT" = ultra ]; then
     exit 1
   }
 fi
-# A pane-backed Codex worker forwards its effort only as a model_reasoning_effort
-# override, so an effort the model does not offer must be refused here rather than
-# dropped from the launch. The Codex model catalog is the one source of what each
-# model offers; T3 Code validates the same request against T3's own catalog.
-if [ "$HARNESS" = codex ] && [ "$RAW_LAUNCH" = 0 ] && [ "$BACKEND" != t3code ] && [ -n "$EFFORT" ] && [ "$EFFORT" != default ]; then
-  case "$("$SCRIPT_DIR/fm-harness.sh" codex-effort-check "$MODEL" "$EFFORT")" in
-  supported) ;;
-  unsupported)
-    echo "error: Codex model ${MODEL:-default} does not offer effort $EFFORT in its model catalog; pick an effort it lists or another model" >&2
-    exit 1
-    ;;
-  *)
-    # No catalog evidence: the four long-standing levels keep their forwarding,
-    # but max is only ever sent on evidence, so it is refused rather than guessed.
-    if [ "$EFFORT" = max ]; then
-      echo "error: cannot confirm Codex model ${MODEL:-default} offers effort max: name a model that ${CODEX_HOME:-~/.codex}/models_cache.json lists with max" >&2
-      exit 1
-    fi
-    ;;
-  esac
-fi
 # Per-secondmate omp profile pin (header above): resolved before any endpoint,
 # worktree, or record exists, and before the catalog check that must read the
 # same profile. A ship or scout passes no mate, so it never reads a pin.
@@ -3771,9 +3753,6 @@ RAW_COMMAND=
 [ "$RAW_LAUNCH" = 0 ] || RAW_COMMAND=$ARG3
 WORKER_ACCOUNT_MATE=
 [ "$KIND" != secondmate ] || WORKER_ACCOUNT_MATE=$ID
-# A declared Claude account list (config/claude-accounts) needs the entry this
-# launch spends: --account on a fresh spawn, and on a relaunch that flag or
-# else the account the task already records.
 if [ "$T3_INSTANCE_SET" -eq 1 ]; then
   [ "$BACKEND" = t3code ] || { echo "error: --t3-instance applies only to backend=t3code, not $BACKEND; on a pane backend name the account with --account" >&2; exit 1; }
   [ "$RELAUNCH" -eq 0 ] || { echo "error: --t3-instance applies to a fresh start; a relaunch keeps its thread's instance" >&2; exit 1; }
@@ -3812,6 +3791,9 @@ fi
 # One start's T3 instance rides the backend's instance lookup
 # (fm_backend_t3code_instance_id) without touching config/t3code-instances.
 [ "$T3_INSTANCE_SET" -eq 0 ] || export FM_T3CODE_SPAWN_INSTANCE="$HARNESS=$T3_INSTANCE_ARG"
+# A declared account list (config/claude-accounts, config/codex-accounts)
+# needs the entry this launch spends: --account on a fresh spawn, and on a
+# relaunch that flag or else the account the task already records.
 WORKER_ACCOUNT_REQUEST=$ACCOUNT_ARG
 if [ "$RELAUNCH" -eq 1 ]; then
   WORKER_ACCOUNT_REQUEST=$(fm_worker_account_relaunch_request "$HARNESS" "$CONFIG" "$RELAUNCH_PRIOR_HARNESS" \
@@ -3859,6 +3841,41 @@ if [ "$BACKEND" = t3code ]; then
     echo "error: backend=t3code cannot apply the $HARNESS worker account pin because T3's provider instance owns the account; select that instance in config/t3code-instances instead" >&2
     exit 1
   fi
+fi
+# A pane-backed Codex worker forwards its effort only as a model_reasoning_effort
+# override, so an effort the model does not offer must be refused here rather than
+# dropped from the launch. The Codex model catalog is the one source of what each
+# model offers; T3 Code validates the same request against T3's own catalog.
+# The catalog read is the one under the Codex home this launch will run on: a
+# declared config/codex-accounts entry's CODEX_HOME (unset for `ordinary`), else
+# the invoking process's own, since each account's plan keeps its own catalog.
+if [ "$HARNESS" = codex ] && [ "$RAW_LAUNCH" = 0 ] && [ "$BACKEND" != t3code ] && [ -n "$EFFORT" ] && [ "$EFFORT" != default ]; then
+  codex_catalog_env=(env)
+  codex_catalog_home=${CODEX_HOME:-$HOME/.codex}
+  if [ -n "$WORKER_ACCOUNT" ]; then
+    if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
+      codex_catalog_env=(env CODEX_HOME="$WORKER_ACCOUNT_ROOT")
+      codex_catalog_home=$WORKER_ACCOUNT_ROOT
+    else
+      codex_catalog_env=(env -u CODEX_HOME)
+      codex_catalog_home=$HOME/.codex
+    fi
+  fi
+  case "$("${codex_catalog_env[@]}" "$SCRIPT_DIR/fm-harness.sh" codex-effort-check "$MODEL" "$EFFORT")" in
+  supported) ;;
+  unsupported)
+    echo "error: Codex model ${MODEL:-default} does not offer effort $EFFORT in its model catalog ($codex_catalog_home/models_cache.json); pick an effort it lists or another model" >&2
+    exit 1
+    ;;
+  *)
+    # No catalog evidence: the four long-standing levels keep their forwarding,
+    # but max is only ever sent on evidence, so it is refused rather than guessed.
+    if [ "$EFFORT" = max ]; then
+      echo "error: cannot confirm Codex model ${MODEL:-default} offers effort max: name a model that $codex_catalog_home/models_cache.json lists with max" >&2
+      exit 1
+    fi
+    ;;
+  esac
 fi
 # Fable quota floor (header above): the account is known here and nothing is
 # leased or launched yet. On a pane backend the launch exports the pinned or
@@ -5589,6 +5606,9 @@ else
           echo "warning: herdr presentation focus lock unavailable; using the ordinary flat layout without projection" >&2
         fi
       fi
+    fi
+    if [ "$HERDR_PROJECTED" -eq 1 ]; then
+      spawn_herdr_presentation_order_lock_release
     fi
     if [ "$HERDR_PROJECTED" -ne 1 ]; then
       HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$PROJ_ABS" "$HERDR_LAUNCHER_RELATIONSHIP") || exit 1
@@ -8014,16 +8034,18 @@ esac
 # Forward firstmate's own resolved store onto the claude launch so the crewmate
 # uses the same credential/config firstmate is authenticated with. Only when set;
 # an unset value is the single-store default and needs no prefix.
-# A home's worker account pin replaces that forwarding: the launch names the
-# pinned root (or unsets the variable for the ordinary Claude account) and
-# sheds the environment credentials Claude ranks above the root's login.
+# A home's worker account pin or declared account replaces that forwarding:
+# the launch names the selected root (or unsets the variable for the ordinary
+# account) and sheds the environment credentials the runner would spend
+# instead of the root's login.
 if [ -n "$WORKER_ACCOUNT" ]; then
   case "$HARNESS" in
-  claude)
+  claude | codex)
+    WORKER_ACCOUNT_VAR=$(fm_worker_account_root_var "$HARNESS")
     if [ -n "$WORKER_ACCOUNT_ROOT" ]; then
-      LAUNCH="$(fm_worker_account_claude_shed) CLAUDE_CONFIG_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
+      LAUNCH="$(fm_worker_account_shed "$HARNESS") $WORKER_ACCOUNT_VAR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
     else
-      LAUNCH="$(fm_worker_account_claude_shed) -u CLAUDE_CONFIG_DIR $LAUNCH"
+      LAUNCH="$(fm_worker_account_shed "$HARNESS") -u $WORKER_ACCOUNT_VAR $LAUNCH"
     fi
     ;;
   pi | pi-signed)
@@ -8381,7 +8403,6 @@ else
   sleep 0.3
   if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
     HERDR_PROJECTION_ABORT_CLEANUP=0
-    spawn_herdr_presentation_order_lock_release
   fi
   if ! spawn_send_key "$T" Enter; then
     [ "$ORCA_LAUNCH_ENV_ENABLED" != 1 ] || spawn_orca_launch_send_fail

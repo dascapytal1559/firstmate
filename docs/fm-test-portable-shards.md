@@ -30,6 +30,9 @@ This fork's own suites have no upstream CI sample, so their rows in the table ar
 and `tests/fm-t3-usage-claim.test.sh` 14000 ms, `tests/fm-nm-agent-env.test.sh` 611 ms, and `tests/fm-watch-signal-grace.test.sh` 75000 ms.
 The worker-event scenarios the fork added to `tests/fm-procevent-when.test.sh` (a 44592 ms local run) are not in its upstream CI hint, which measures that suite without them.
 
+The 2026-11-13 `tests/fm-pi-bash-timeout.test.sh` serial hint is a provisional local measurement of 1486 ms, the slowest of five successful `bin/fm-test-run.sh tests/fm-pi-bash-timeout.test.sh` samples (1288-1486 ms) on a macOS arm64 host, collected separately from coverage and lint checks.
+Replace it with an Ubuntu timing-artifact maximum at the next CI refresh; this is not whole-shard CI timing evidence.
+
 ## Parallel lanes
 
 The two parallel lanes use longest-processing-time assignment over the committed hints.
